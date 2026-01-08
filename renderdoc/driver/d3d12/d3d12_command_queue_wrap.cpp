@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -101,10 +101,6 @@ void STDMETHODCALLTYPE WrappedID3D12CommandQueue::UpdateTileMappings(
 
     // register this heap as having been used for sparse binding
     m_pDevice->AddSparseHeap(GetResID(pHeap));
-
-    // mark the heap as dirty if this is a buffer resource
-    if(pResource->GetDesc().Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
-      GetResourceManager()->MarkDirtyResource(GetResID(pHeap));
 
 // define macros to help provide the defaults for NULL arrays
 #define REGION_START(i)                                                 \
@@ -475,7 +471,8 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
     if(m_PrevQueueId != GetResID(pQueue))
     {
       RDCDEBUG("Previous queue execution was on queue %s, now executing %s, syncing GPU",
-               ToStr(m_PrevQueueId).c_str(), ToStr(GetResID(pQueue)).c_str());
+               ToStr(GetResourceManager()->GetOriginalID(m_PrevQueueId)).c_str(),
+               ToStr(GetResourceManager()->GetOriginalID(GetResID(pQueue))).c_str());
       if(m_PrevQueueId != ResourceId())
         m_pDevice->DeviceWaitForIdle();
 
@@ -491,7 +488,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
 
       for(uint32_t i = 0; i < NumCommandLists; i++)
       {
-        ResourceId cmd = GetResID(ppCommandLists[i]);
+        ResourceId cmd = GetResourceManager()->GetOriginalID(GetResID(ppCommandLists[i]));
 
         ID3D12CommandList *list = Unwrap(ppCommandLists[i]);
         real->ExecuteCommandLists(1, &list);
@@ -510,7 +507,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
               if(it->second.destinationAS != ResourceId())
               {
                 D3D12AccelerationStructure *as =
-                    (D3D12AccelerationStructure *)GetResourceManager()->GetResource(
+                    (D3D12AccelerationStructure *)GetResourceManager()->GetLiveResource(
                         it->second.destinationAS);
                 as->seenReplayBuild = true;
               }
@@ -539,7 +536,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
                                               blasOffs);
 
               WrappedID3D12Resource *blas =
-                  GetResourceManager()->GetResAs<WrappedID3D12Resource>(blasId);
+                  GetResourceManager()->GetLiveAs<WrappedID3D12Resource>(blasId);
 
               D3D12AccelerationStructure *blasCheck = NULL;
               rdcstr invalid;
@@ -557,7 +554,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
                 continue;
               }
 
-              if(id < blasCheck->GetResourceID())
+              if(id < GetResourceManager()->GetOriginalID(blasCheck->GetResourceID()))
               {
                 RDCERR("%s[%u]: BLAS referenced by TLAS is newer than TLAS", ToStr(id).c_str(), desc);
                 continue;
@@ -606,7 +603,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
 
       for(uint32_t c = 0; c < NumCommandLists; c++)
       {
-        ResourceId cmd = GetResID(ppCommandLists[c]);
+        ResourceId cmd = GetResourceManager()->GetOriginalID(GetResID(ppCommandLists[c]));
 
         BakedCmdListInfo &cmdListInfo = m_Cmd.m_BakedCmdListInfo[cmd];
 
@@ -699,7 +696,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
       // advance m_CurEventID to match the events added when reading
       for(uint32_t c = 0; c < NumCommandLists; c++)
       {
-        ResourceId cmd = GetResID(ppCommandLists[c]);
+        ResourceId cmd = GetResourceManager()->GetOriginalID(GetResID(ppCommandLists[c]));
 
         m_Cmd.m_RootEventID += m_Cmd.m_BakedCmdListInfo[cmd].eventCount;
         m_Cmd.m_RootActionID += m_Cmd.m_BakedCmdListInfo[cmd].actionCount;
@@ -736,7 +733,7 @@ bool WrappedID3D12CommandQueue::Serialise_ExecuteCommandLists(SerialiserType &se
 
         for(uint32_t c = 0; c < NumCommandLists; c++)
         {
-          ResourceId cmdId = GetResID(ppCommandLists[c]);
+          ResourceId cmdId = GetResourceManager()->GetOriginalID(GetResID(ppCommandLists[c]));
 
           // account for the virtual label at the start of the events here
           // so it matches up to baseEvent
@@ -1082,7 +1079,6 @@ void WrappedID3D12CommandQueue::ExecuteCommandListsInternal(UINT NumCommandLists
           res->GetHeapProperties(&heapProps, NULL);
 
           if(heapProps.Type == D3D12_HEAP_TYPE_UPLOAD ||
-             heapProps.Type == D3D12_HEAP_TYPE_GPU_UPLOAD ||
              heapProps.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE)
           {
             RDCLOG("Doing GPU readback of mapped memory");
@@ -1092,8 +1088,7 @@ void WrappedID3D12CommandQueue::ExecuteCommandListsInternal(UINT NumCommandLists
             queueReadback.Resize(size);
 
             queueReadback.list->Reset(queueReadback.alloc, NULL);
-            Unwrap(queueReadback.list)
-                ->CopyBufferRegion(queueReadback.unwrappedReadbackBuf, 0, res->GetReal(), 0, size);
+            queueReadback.list->CopyBufferRegion(queueReadback.readbackBuf, 0, res, 0, size);
             queueReadback.list->Close();
             ID3D12CommandList *listptr = Unwrap(queueReadback.list);
             queueReadback.unwrappedQueue->ExecuteCommandLists(1, &listptr);
@@ -1253,7 +1248,7 @@ bool WrappedID3D12CommandQueue::Serialise_SetMarker(SerialiserType &ser, UINT Me
     if(IsLoading(m_State))
     {
       ActionDescription action;
-      action.customName = MarkerText.empty() ? "<empty>" : MarkerText;
+      action.customName = MarkerText;
       if(Color != 0)
       {
         action.markerColor = DecodePIXColor(Color);
@@ -1311,7 +1306,7 @@ bool WrappedID3D12CommandQueue::Serialise_BeginEvent(SerialiserType &ser, UINT M
     if(IsLoading(m_State))
     {
       ActionDescription action;
-      action.customName = MarkerText.empty() ? "<empty>" : MarkerText;
+      action.customName = MarkerText;
       if(Color != 0)
       {
         action.markerColor = DecodePIXColor(Color);

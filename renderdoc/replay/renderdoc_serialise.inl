@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2017-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1059,9 +1059,8 @@ void DoSerialise(SerialiserType &ser, DescriptorRange &el)
   SERIALISE_MEMBER(offset);
   SERIALISE_MEMBER(descriptorSize);
   SERIALISE_MEMBER(count);
-  SERIALISE_MEMBER(type);
 
-  SIZE_CHECK(16);
+  SIZE_CHECK(12);
 }
 
 template <typename SerialiserType>
@@ -1617,7 +1616,7 @@ void DoSerialise(SerialiserType &ser, D3D12Pipe::RootParam &el)
   SERIALISE_MEMBER(heapByteOffset);
   SERIALISE_MEMBER(tableRanges);
 
-  SIZE_CHECK(160);
+  SIZE_CHECK(152);
 }
 
 template <typename SerialiserType>
@@ -1925,21 +1924,6 @@ void DoSerialise(SerialiserType &ser, VKPipe::DynamicOffset &el)
 }
 
 template <typename SerialiserType>
-void DoSerialise(SerialiserType &ser, VKPipe::DescriptorBuffer &el)
-{
-  SERIALISE_MEMBER(buffer);
-  SERIALISE_MEMBER(offset);
-
-  SERIALISE_MEMBER(pushDescriptor);
-  SERIALISE_MEMBER(pushBuffer);
-
-  SERIALISE_MEMBER(resourceBuffer);
-  SERIALISE_MEMBER(samplerBuffer);
-
-  SIZE_CHECK(40);
-}
-
-template <typename SerialiserType>
 void DoSerialise(SerialiserType &ser, VKPipe::DescriptorSet &el)
 {
   SERIALISE_MEMBER(layoutResourceId);
@@ -1948,11 +1932,7 @@ void DoSerialise(SerialiserType &ser, VKPipe::DescriptorSet &el)
 
   SERIALISE_MEMBER(dynamicOffsets);
 
-  SERIALISE_MEMBER(descriptorBufferIndex);
-  SERIALISE_MEMBER(descriptorBufferByteOffset);
-  SERIALISE_MEMBER(descriptorBufferEmbeddedSamplers);
-
-  SIZE_CHECK(72);
+  SIZE_CHECK(48);
 }
 
 template <typename SerialiserType>
@@ -1965,9 +1945,8 @@ void DoSerialise(SerialiserType &ser, VKPipe::Pipeline &el)
   SERIALISE_MEMBER(flags);
 
   SERIALISE_MEMBER(descriptorSets);
-  SERIALISE_MEMBER(descriptorBuffers);
 
-  SIZE_CHECK(88);
+  SIZE_CHECK(64);
 }
 
 template <typename SerialiserType>
@@ -1975,10 +1954,9 @@ void DoSerialise(SerialiserType &ser, VKPipe::IndexBuffer &el)
 {
   SERIALISE_MEMBER(resourceId);
   SERIALISE_MEMBER(byteOffset);
-  SERIALISE_MEMBER(byteSize);
   SERIALISE_MEMBER(byteStride);
 
-  SIZE_CHECK(32);
+  SIZE_CHECK(24);
 }
 
 template <typename SerialiserType>
@@ -1988,7 +1966,7 @@ void DoSerialise(SerialiserType &ser, VKPipe::InputAssembly &el)
   SERIALISE_MEMBER(indexBuffer);
   SERIALISE_MEMBER(topology);
 
-  SIZE_CHECK(48);
+  SIZE_CHECK(40);
 }
 
 template <typename SerialiserType>
@@ -2317,7 +2295,7 @@ void DoSerialise(SerialiserType &ser, VKPipe::State &el)
 
   SERIALISE_MEMBER(conditionalRendering);
 
-  SIZE_CHECK(1928);
+  SIZE_CHECK(1872);
 }
 
 #pragma endregion Vulkan pipeline state

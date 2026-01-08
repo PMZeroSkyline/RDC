@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -226,10 +226,9 @@ private:
   static uint32_t GetVarSizeAndTrail(const ShaderConstant &var);
 
   static void EstimatePackingRules(Packing::Rules &pack, ResourceId shader,
-                                   const ShaderConstant &constant, uint32_t knownVecAlignment);
+                                   const ShaderConstant &constant);
   static void EstimatePackingRules(Packing::Rules &pack, ResourceId shader,
-                                   const rdcarray<ShaderConstant> &members,
-                                   uint32_t knownVecAlignment);
+                                   const rdcarray<ShaderConstant> &members);
   static QString DeclarePacking(Packing::Rules pack);
 
 public:
@@ -268,14 +267,9 @@ QString TypeString(const SigParameter &sig);
 QString D3DSemanticString(const SigParameter &sig);
 QString GetComponentString(byte mask);
 
-QIcon MakeSwatchIcon(QWidget *parentWidget, QColor swatchColor);
-float ConvertLinearToSRGB(float linear);
 void CombineUsageEvents(
-    ICaptureContext &ctx, const rdcarray<EventUsage> &usage, bool splitByMarker,
+    ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
     std::function<void(uint32_t startEID, uint32_t endEID, ResourceUsage use)> callback);
-uint32_t GetParentMarkerEventId(ICaptureContext &ctx, uint32_t eventId);
-QString GetParentMarkerName(ICaptureContext &ctx, uint32_t eventId);
-QString GetParentMarkerPath(ICaptureContext &ctx, uint32_t eventId, bool &hasParent);
 
 class RDTreeWidgetItem;
 
@@ -1049,8 +1043,6 @@ QString GetSystemUsername();
 void BringToForeground(QWidget *window);
 
 bool IsDarkTheme();
-
-void TruncateStringFromEnd(QString &name);
 
 float getLuminance(const QColor &col);
 QColor contrastingColor(const QColor &col, const QColor &defaultCol);

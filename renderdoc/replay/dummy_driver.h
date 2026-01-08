@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2021-2026 Baldur Karlsson
+ * Copyright (c) 2021-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -33,8 +33,7 @@
 class DummyDriver : public IReplayDriver
 {
 public:
-  DummyDriver(IReplayDriver *original, const rdcarray<const ShaderReflection *> &shaders,
-              SDFile *sdfile);
+  DummyDriver(IReplayDriver *original, const rdcarray<ShaderReflection *> &shaders, SDFile *sdfile);
 
   void Shutdown();
 
@@ -81,6 +80,8 @@ public:
 
   void InitPostVSBuffers(uint32_t eventId);
   void InitPostVSBuffers(const rdcarray<uint32_t> &passEvents);
+
+  ResourceId GetLiveID(ResourceId id);
 
   MeshFormat GetPostVSBuffers(uint32_t eventId, uint32_t instID, uint32_t viewID,
                               MeshDataStage stage);
@@ -191,7 +192,7 @@ public:
 private:
   virtual ~DummyDriver();
 
-  rdcarray<const ShaderReflection *> m_Shaders;
+  rdcarray<ShaderReflection *> m_Shaders;
   SDFile *m_SDFile;
 
   APIProperties m_Props;

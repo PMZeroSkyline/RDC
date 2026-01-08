@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -60,11 +60,12 @@ bool WrappedVulkan::Serialise_vkGetDeviceQueue(SerialiserType &ser, VkDevice dev
       ResourceId live = GetResourceManager()->GetDispWrapper(queue)->id;
 
       // whenever the new ID is requested, return the old ID, via replacements.
-      GetResourceManager()->ReplaceResource(Queue, live);
+      GetResourceManager()->ReplaceResource(Queue, GetResourceManager()->GetOriginalID(live));
     }
     else
     {
-      GetResourceManager()->WrapResource(Queue, Unwrap(device), queue);
+      GetResourceManager()->WrapResource(Unwrap(device), queue);
+      GetResourceManager()->AddLiveResource(Queue, queue);
     }
 
     if(remapFamily == m_QueueFamilyIdx && m_Queue == VK_NULL_HANDLE)
@@ -118,7 +119,7 @@ void WrappedVulkan::vkGetDeviceQueue(VkDevice device, uint32_t queueFamilyIndex,
     }
     else
     {
-      ResourceId id = GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), *pQueue);
+      ResourceId id = GetResourceManager()->WrapResource(Unwrap(device), *pQueue);
 
       {
         Chunk *chunk = NULL;
@@ -280,6 +281,8 @@ void WrappedVulkan::ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2 submitInfo, r
 {
   if(IsLoading(m_State))
   {
+    DoSubmit(queue, submitInfo);
+
     AddEvent();
 
     // we're adding multiple events, need to increment ourselves
@@ -287,8 +290,6 @@ void WrappedVulkan::ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2 submitInfo, r
 
     if(submitInfo.commandBufferInfoCount == 0)
     {
-      DoSubmit(queue, submitInfo);
-
       rdcstr name = StringFormat::Fmt("=> %s: No Command Buffers", basename.c_str());
 
       ActionDescription action;
@@ -303,17 +304,10 @@ void WrappedVulkan::ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2 submitInfo, r
       m_RootEventID++;
     }
 
-    // submit command buffers one by one
-    uint32_t numCmds = submitInfo.commandBufferInfoCount;
-    submitInfo.commandBufferInfoCount = 1;
-    for(uint32_t c = 0; c < numCmds; c++)
+    for(uint32_t c = 0; c < submitInfo.commandBufferInfoCount; c++)
     {
-      DoSubmit(queue, submitInfo);
-      FlushQ();
-
-      ResourceId cmd = GetResID(submitInfo.pCommandBufferInfos[0].commandBuffer);
-
-      submitInfo.pCommandBufferInfos++;
+      ResourceId cmd = GetResourceManager()->GetOriginalID(
+          GetResID(submitInfo.pCommandBufferInfos[c].commandBuffer));
 
       BakedCmdBufferInfo &cmdBufInfo = m_BakedCmdBufferInfo[cmd];
 
@@ -415,7 +409,8 @@ void WrappedVulkan::ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2 submitInfo, r
     // advance m_CurEventID to match the events added when reading
     for(uint32_t c = 0; c < submitInfo.commandBufferInfoCount; c++)
     {
-      ResourceId cmd = GetResID(submitInfo.pCommandBufferInfos[c].commandBuffer);
+      ResourceId cmd = GetResourceManager()->GetOriginalID(
+          GetResID(submitInfo.pCommandBufferInfos[c].commandBuffer));
 
       m_RootEventID += m_BakedCmdBufferInfo[cmd].eventCount;
       m_RootActionID += m_BakedCmdBufferInfo[cmd].actionCount;
@@ -454,7 +449,7 @@ void WrappedVulkan::ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2 submitInfo, r
       for(uint32_t c = 0; c < submitInfo.commandBufferInfoCount; c++)
       {
         VkCommandBufferSubmitInfo info = submitInfo.pCommandBufferInfos[c];
-        ResourceId cmdId = GetResID(info.commandBuffer);
+        ResourceId cmdId = GetResourceManager()->GetOriginalID(GetResID(info.commandBuffer));
 
         // account for the virtual vkBeginCommandBuffer label at the start of the events here
         // so it matches up to baseEvent
@@ -642,18 +637,6 @@ void WrappedVulkan::InsertActionsAndRefreshIDs(BakedCmdBufferInfo &cmdBufInfo)
   for(size_t i = 0; i < cmdBufNodes.size(); i++)
   {
     VulkanActionTreeNode n = cmdBufNodes[i];
-
-    for(VulkanActionTreeNode::DeferredResourceUsage &def : n.deferredResourceUsage)
-    {
-      if(def.descBufVersionIdx >= m_DescriptorBufferVersions.size())
-      {
-        RDCERR("Invalid deferred resource usage buffer reference");
-        continue;
-      }
-
-      AddUsageForDescriptorBuffers(n, cmdBufInfo.debugMessages, def);
-    }
-
     n.action.eventId += m_RootEventID;
     n.action.actionId += m_RootActionID;
 
@@ -1135,9 +1118,7 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
 
       for(auto refit = refs.sparseRefs.begin(); refit != refs.sparseRefs.end(); ++refit)
       {
-        // for these which are added as image views, step up to the image (if it's not an identity
-        // pointer) - see declaration of parentResInfo
-        GetResourceManager()->MarkSparseMapReferenced((*refit)->resInfo->parentResInfo);
+        GetResourceManager()->MarkSparseMapReferenced((*refit)->resInfo);
       }
 
       UpdateImageStates(refs.bindImageStates);
@@ -1225,8 +1206,7 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
         {
           RDCDEBUG("Reading back %s with GPU for comparison", ToStr(record->GetResourceID()).c_str());
 
-          VulkanDebugManager::ReadbackWindow readback =
-              GetDebugManager()->LockReadbackBuffer(state.mapOffset + state.mapSize);
+          GetDebugManager()->InitReadbackBuffer(state.mapOffset + state.mapSize);
 
           // immediately issue a command buffer to copy back the data. We do that on this queue to
           // avoid complexity with synchronising with another queue, but the transfer queue if
@@ -1248,7 +1228,8 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
           VkBufferCopy region = {state.mapOffset, state.mapOffset, state.mapSize};
 
           ObjDisp(copycmd)->CmdCopyBuffer(Unwrap(copycmd), Unwrap(state.wholeMemBuf),
-                                          readback.unwrappedBuffer, 1, &region);
+                                          GetDebugManager()->GetUnwrappedReadbackBuffer(), 1,
+                                          &region);
 
           // wait for transfer to finish before reading on CPU
           VkBufferMemoryBarrier bufBarrier = {
@@ -1258,7 +1239,7 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
               VK_ACCESS_HOST_READ_BIT,
               VK_QUEUE_FAMILY_IGNORED,
               VK_QUEUE_FAMILY_IGNORED,
-              readback.unwrappedBuffer,
+              GetDebugManager()->GetUnwrappedReadbackBuffer(),
               0,
               VK_WHOLE_SIZE,
           };
@@ -1288,7 +1269,7 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
           VkMappedMemoryRange range = {
               VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
               NULL,
-              readback.unwrappedMemory,
+              GetDebugManager()->GetUnwrappedReadbackMemory(),
               0,
               VK_WHOLE_SIZE,
           };
@@ -1297,7 +1278,7 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
               ObjDisp(queue)->InvalidateMappedMemoryRanges(Unwrap(m_Device), 1, &range);
           RDCASSERTEQUAL(copyret, VK_SUCCESS);
 
-          state.cpuReadPtr = readback.ptr;
+          state.cpuReadPtr = GetDebugManager()->GetReadbackPtr();
         }
         else
         {
@@ -1346,9 +1327,6 @@ void WrappedVulkan::CaptureQueueSubmit(VkQueue queue,
 
         // restore this just in case
         state.cpuReadPtr = state.mappedPtr;
-
-        if(state.readbackOnGPU)
-          GetDebugManager()->UnlockReadbackBuffer();
       }
     }
   }
@@ -2245,7 +2223,8 @@ bool WrappedVulkan::Serialise_vkGetDeviceQueue2(SerialiserType &ser, VkDevice de
     QueueInfo.queueIndex = remapIndex;
     ObjDisp(device)->GetDeviceQueue2(Unwrap(device), &QueueInfo, &queue);
 
-    GetResourceManager()->WrapResource(Queue, Unwrap(device), queue);
+    GetResourceManager()->WrapResource(Unwrap(device), queue);
+    GetResourceManager()->AddLiveResource(Queue, queue);
 
     if(remapFamily == m_QueueFamilyIdx && m_Queue == VK_NULL_HANDLE)
     {
@@ -2297,7 +2276,7 @@ void WrappedVulkan::vkGetDeviceQueue2(VkDevice device, const VkDeviceQueueInfo2 
     }
     else
     {
-      ResourceId id = GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), *pQueue);
+      ResourceId id = GetResourceManager()->WrapResource(Unwrap(device), *pQueue);
 
       {
         Chunk *chunk = NULL;

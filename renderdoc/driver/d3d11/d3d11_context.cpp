@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -69,15 +69,10 @@ HRESULT STDMETHODCALLTYPE WrappedID3DUserDefinedAnnotation::QueryInterface(REFII
 extern uint32_t NullCBOffsets[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
 extern uint32_t NullCBCounts[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
 
-D3DDescriptorStore::D3DDescriptorStore(WrappedID3D11Device *device) : m_pDevice(device)
+D3DDescriptorStore::D3DDescriptorStore(WrappedID3D11Device *device)
 {
   m_ID = ResourceIDGen::GetNewUniqueID();
-  device->GetResourceManager()->AddResource(GetResourceID(), this);
-}
-
-D3DDescriptorStore::~D3DDescriptorStore()
-{
-  m_pDevice->GetResourceManager()->ReleaseResource(GetResourceID());
+  device->GetResourceManager()->AddCurrentResource(GetResourceID(), this);
 }
 
 WrappedID3D11DeviceContext::WrappedID3D11DeviceContext(WrappedID3D11Device *realDevice,
@@ -151,6 +146,8 @@ WrappedID3D11DeviceContext::WrappedID3D11DeviceContext(WrappedID3D11Device *real
     m_State = CaptureState::LoadingReplaying;
 
     m_DescriptorStore = new D3DDescriptorStore(m_pDevice);
+    m_pDevice->GetResourceManager()->AddLiveResource(m_DescriptorStore->GetResourceID(),
+                                                     m_DescriptorStore);
   }
   else
   {
@@ -159,6 +156,7 @@ WrappedID3D11DeviceContext::WrappedID3D11DeviceContext(WrappedID3D11Device *real
     m_DescriptorStore = NULL;
   }
 
+  // create a temporary and grab its resource ID
   m_ResourceID = ResourceIDGen::GetNewUniqueID();
 
   m_ContextRecord = NULL;
@@ -234,6 +232,10 @@ WrappedID3D11DeviceContext::~WrappedID3D11DeviceContext()
   if(m_pRealContext && GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
     m_pDevice->RemoveDeferredContext(this);
 
+  // if this context is being destroyed by the resource manager the descriptor store may already be
+  // "removed"
+  if(m_DescriptorStore && GetResourceManager()->HasLiveResource(m_DescriptorStore->GetResourceID()))
+    GetResourceManager()->EraseLiveResource(m_DescriptorStore->GetResourceID());
   SAFE_DELETE(m_DescriptorStore);
 
   SAFE_DELETE(m_FrameReader);
@@ -442,9 +444,10 @@ bool WrappedID3D11DeviceContext::Serialise_BeginCaptureFrame(SerialiserType &ser
     // DrawAuto()
     for(const HiddenCounter &c : HiddenStreamOutCounters)
     {
-      if(m_pDevice->GetResourceManager()->HasResource(c.id))
+      if(m_pDevice->GetResourceManager()->HasLiveResource(c.id))
       {
-        StreamOutData &so = m_pDevice->GetSOHiddenCounterForBuffer(c.id);
+        StreamOutData &so =
+            m_pDevice->GetSOHiddenCounterForBuffer(m_pDevice->GetResourceManager()->GetLiveID(c.id));
         so.numPrims = c.counterValue;
         so.stride = c.stride;
       }
@@ -1158,16 +1161,16 @@ void WrappedID3D11DeviceContext::AddAction(const ActionDescription &a)
   {
     action.outputs[i] = ResourceId();
     if(m_CurrentPipelineState->OM.RenderTargets[i])
-      action.outputs[i] =
+      action.outputs[i] = m_pDevice->GetResourceManager()->GetOriginalID(
           ((WrappedID3D11RenderTargetView1 *)m_CurrentPipelineState->OM.RenderTargets[i])
-              ->GetResourceResID();
+              ->GetResourceResID());
   }
 
   {
     action.depthOut = ResourceId();
     if(m_CurrentPipelineState->OM.DepthView)
-      action.depthOut =
-          ((WrappedID3D11DepthStencilView *)m_CurrentPipelineState->OM.DepthView)->GetResourceResID();
+      action.depthOut = m_pDevice->GetResourceManager()->GetOriginalID(
+          ((WrappedID3D11DepthStencilView *)m_CurrentPipelineState->OM.DepthView)->GetResourceResID());
   }
 
   // markers don't increment action ID
@@ -1433,10 +1436,10 @@ void WrappedID3D11DeviceContext::ClearMaps()
 
   for(; it != m_OpenMaps.end(); ++it)
   {
-    RDCASSERT(m_pDevice->GetResourceManager()->HasResource(it->first.resource));
+    RDCASSERT(m_pDevice->GetResourceManager()->HasLiveResource(it->first.resource));
 
     ID3D11Resource *res =
-        (ID3D11Resource *)m_pDevice->GetResourceManager()->GetResource(it->first.resource);
+        (ID3D11Resource *)m_pDevice->GetResourceManager()->GetLiveResource(it->first.resource);
 
     m_pRealContext->Unmap(UnwrapResource(res), it->first.subresource);
   }

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2020-2026 Baldur Karlsson
+ * Copyright (c) 2020-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -413,8 +413,8 @@ ShaderVariable ModfStruct(ThreadState &state, uint32_t, const rdcarray<Id> &para
   ShaderVariable var = state.GetSrc(params[0]);
 
   ShaderVariable ret;
-  ret.rows = 0;
-  ret.columns = 0;
+  ret.rows = 1;
+  ret.columns = 1;
   ret.type = VarType::Struct;
   ret.members = {var, var};
   ret.members[0].name = "_child0";
@@ -786,8 +786,8 @@ ShaderVariable FrexpStruct(ThreadState &state, uint32_t, const rdcarray<Id> &par
   ShaderVariable var = state.GetSrc(params[0]);
 
   ShaderVariable ret;
-  ret.rows = 0;
-  ret.columns = 0;
+  ret.rows = 1;
+  ret.columns = 1;
   ret.type = VarType::Struct;
   ret.members = {var, var};
   ret.members[0].name = "_child0";
@@ -1228,21 +1228,14 @@ ShaderVariable NClamp(ThreadState &state, uint32_t, const rdcarray<Id> &params)
 
 ShaderVariable GPUOp(ThreadState &state, uint32_t instruction, const rdcarray<Id> &params)
 {
-  if(state.IsPendingResultReady())
-    return state.GetPendingResult();
-
   rdcarray<ShaderVariable> paramVars;
   for(Id id : params)
     paramVars.push_back(state.GetSrc(id));
 
   ShaderVariable ret = paramVars[0];
 
-  // these two operations change the type of the output
-  rdcspv::GLSLstd450 op = (GLSLstd450)instruction;
-  if(op == rdcspv::GLSLstd450::Length || op == rdcspv::GLSLstd450::Distance)
-    ret.columns = 1;
-
-  state.QueueMathOp(op, paramVars, ret);
+  if(!state.debugger.GetAPIWrapper()->CalculateMathOp(state, (GLSLstd450)instruction, paramVars, ret))
+    memset(&ret.value, 0, sizeof(ret.value));
 
   return ret;
 }

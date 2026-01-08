@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -310,52 +310,28 @@ struct ExtensionMetadata
     return false;
   }
 
-  DOCUMENT(R"(The version of the extension API that this extension is written against
-
-:type: int
-)");
+  DOCUMENT("The version of the extension API that this extension is written against");
   int extensionAPI;
 
-  DOCUMENT(R"(The location of this package on disk
-
-:type: str
-)");
+  DOCUMENT("The location of this package on disk");
   rdcstr filePath;
 
-  DOCUMENT(R"(The python package for this extension, e.g. foo.bar
-
-:type: str
-)");
+  DOCUMENT("The python package for this extension, e.g. foo.bar");
   rdcstr package;
 
-  DOCUMENT(R"(The short friendly name for the extension
-
-:type: str
-)");
+  DOCUMENT("The short friendly name for the extension");
   rdcstr name;
 
-  DOCUMENT(R"(The version of the extension
-
-:type: str
-)");
+  DOCUMENT("The version of the extension");
   rdcstr version;
 
-  DOCUMENT(R"(The author of the extension, optionally with an email contact
-
-:type: str
-)");
+  DOCUMENT("The author of the extension, optionally with an email contact");
   rdcstr author;
 
-  DOCUMENT(R"(The URL for where the extension is fetched from
-
-:type: str
-)");
+  DOCUMENT("The URL for where the extension is fetched from");
   rdcstr extensionURL;
 
-  DOCUMENT(R"(A longer description of what the extension does
-
-:type: str
-)");
+  DOCUMENT("A longer description of what the extension does");
   rdcstr description;
 };
 

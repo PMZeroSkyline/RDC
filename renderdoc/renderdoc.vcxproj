@@ -24,6 +24,7 @@
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>renderdoc</RootNamespace>
     <ProjectName>renderdoc</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(SolutionDir)\util\WindowsSDKTarget.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -31,7 +32,7 @@
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
     <LinkIncremental>false</LinkIncremental>
@@ -205,7 +206,6 @@
     <ClInclude Include="common\wrapped_pool.h" />
     <ClInclude Include="core\bit_flag_iterator.h" />
     <ClInclude Include="core\gpu_address_range_tracker.h" />
-    <ClInclude Include="core\rdcbytetrie.h" />
     <ClInclude Include="core\settings.h" />
     <ClInclude Include="core\core.h" />
     <ClInclude Include="core\crash_handler.h" />
@@ -252,7 +252,6 @@
     <ClInclude Include="serialise\serialiser.h" />
     <ClInclude Include="serialise\streamio.h" />
     <ClInclude Include="serialise\zstdio.h" />
-    <ClInclude Include="shaders\controlflow.h" />
     <ClInclude Include="strings\string_utils.h" />
   </ItemGroup>
   <ItemGroup>
@@ -657,7 +656,6 @@
     <ClCompile Include="serialise\streamio.cpp" />
     <ClCompile Include="serialise\streamio_tests.cpp" />
     <ClCompile Include="serialise\zstdio.cpp" />
-    <ClCompile Include="shaders\controlflow.cpp" />
     <ClCompile Include="strings\grisu2.cpp" />
     <ClCompile Include="strings\string_utils.cpp" />
     <ClCompile Include="strings\utf8printf.cpp" />
@@ -671,8 +669,6 @@
     <None Include="data\glsl\array2ms.comp" />
     <None Include="data\glsl\blit.vert" />
     <None Include="data\glsl\checkerboard.frag" />
-    <None Include="data\glsl\debug_math.comp" />
-    <None Include="data\glsl\debug_sample.frag" />
     <None Include="data\glsl\depth_copy.frag" />
     <None Include="data\glsl\depth_copyms.frag" />
     <None Include="data\glsl\deptharr2ms.frag" />
@@ -723,7 +719,6 @@
     <None Include="data\hlsl\shaderdebug.hlsl" />
     <None Include="data\hlsl\depth_copy.hlsl" />
     <None Include="data\hlsl\raytracing.hlsl" />
-    <None Include="data\hlsl\quadswizzle.hlsl" />
   </ItemGroup>
   <!-- try to bake shaders needed in DXIL now, in case we won't be able to find a dxc at runtime -->
   <UsingTask TaskName="GetDXCExecutable" TaskFactory="CodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">

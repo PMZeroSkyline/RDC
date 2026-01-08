@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -61,22 +61,27 @@ bool WrappedOpenGL::Serialise_glFenceSync(SerialiserType &ser, GLsync real, GLen
   if(IsReplayingAndReading())
   {
     // if we've already sync'd, delete the old one
-    if(GetResourceManager()->HasResource(sync))
+    if(GetResourceManager()->HasLiveResource(sync))
     {
-      GLResource res = GetResourceManager()->GetResource(sync);
+      GLResource res = GetResourceManager()->GetLiveResource(sync);
       GLsync oldSyncObj = GetResourceManager()->GetSync(res.name);
 
       GL.glDeleteSync(oldSyncObj);
 
       GetResourceManager()->UnregisterResource(res);
+      GetResourceManager()->EraseLiveResource(sync);
     }
 
     real = GL.glFenceSync(condition, flags);
 
     GLuint name = 0;
-    GetResourceManager()->RegisterSync(sync, GetCtx(), real, name);
+    ResourceId liveid = ResourceId();
+    GetResourceManager()->RegisterSync(GetCtx(), real, name, liveid);
 
     GLResource res = SyncRes(GetCtx(), name);
+
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(sync, res);
 
     AddResource(sync, ResourceType::Sync, "Sync");
   }
@@ -90,7 +95,8 @@ GLsync WrappedOpenGL::glFenceSync(GLenum condition, GLbitfield flags)
   SERIALISE_TIME_CALL(sync = GL.glFenceSync(condition, flags));
 
   GLuint name = 0;
-  ResourceId id = GetResourceManager()->RegisterSync(ResourceId(), GetCtx(), sync, name);
+  ResourceId id = ResourceId();
+  GetResourceManager()->RegisterSync(GetCtx(), sync, name, id);
   GLResource res = SyncRes(GetCtx(), name);
 
   if(IsActiveCapturing(m_State))
@@ -107,6 +113,10 @@ GLsync WrappedOpenGL::glFenceSync(GLenum condition, GLbitfield flags)
 
     GetContextRecord()->AddChunk(chunk);
   }
+  else
+  {
+    GetResourceManager()->AddLiveResource(id, res);
+  }
 
   return sync;
 }
@@ -121,9 +131,9 @@ bool WrappedOpenGL::Serialise_glClientWaitSync(SerialiserType &ser, GLsync sync_
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  if(IsReplayingAndReading() && GetResourceManager()->HasResource(sync))
+  if(IsReplayingAndReading() && GetResourceManager()->HasLiveResource(sync))
   {
-    GLResource res = GetResourceManager()->GetResource(sync);
+    GLResource res = GetResourceManager()->GetLiveResource(sync);
     GL.glClientWaitSync(GetResourceManager()->GetSync(res.name), flags, timeout);
   }
 
@@ -157,9 +167,9 @@ bool WrappedOpenGL::Serialise_glWaitSync(SerialiserType &ser, GLsync sync_, GLbi
 
   SERIALISE_CHECK_READ_ERRORS();
 
-  if(IsReplayingAndReading() && GetResourceManager()->HasResource(sync))
+  if(IsReplayingAndReading() && GetResourceManager()->HasLiveResource(sync))
   {
-    GLResource res = GetResourceManager()->GetResource(sync);
+    GLResource res = GetResourceManager()->GetLiveResource(sync);
     GL.glWaitSync(GetResourceManager()->GetSync(res.name), flags, timeout);
   }
 
@@ -186,8 +196,8 @@ void WrappedOpenGL::glDeleteSync(GLsync sync)
 
   ResourceId id = GetResourceManager()->GetSyncID(sync);
 
-  if(GetResourceManager()->HasResource(id))
-    GetResourceManager()->UnregisterResource(GetResourceManager()->GetResource(id));
+  if(GetResourceManager()->HasCurrentResource(id))
+    GetResourceManager()->UnregisterResource(GetResourceManager()->GetCurrentResource(id));
 }
 
 template <typename SerialiserType>
@@ -206,7 +216,8 @@ bool WrappedOpenGL::Serialise_glGenQueries(SerialiserType &ser, GLsizei n, GLuin
 
     GLResource res = QueryRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(query, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(query, res);
 
     AddResource(query, ResourceType::Query, "Query");
   }
@@ -221,7 +232,7 @@ void WrappedOpenGL::glGenQueries(GLsizei count, GLuint *ids)
   for(GLsizei i = 0; i < count; i++)
   {
     GLResource res = QueryRes(GetCtx(), ids[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -239,6 +250,10 @@ void WrappedOpenGL::glGenQueries(GLsizei count, GLuint *ids)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -261,7 +276,8 @@ bool WrappedOpenGL::Serialise_glCreateQueries(SerialiserType &ser, GLenum target
 
     GLResource res = QueryRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(query, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(query, res);
 
     AddResource(query, ResourceType::Query, "Query");
   }
@@ -276,7 +292,7 @@ void WrappedOpenGL::glCreateQueries(GLenum target, GLsizei count, GLuint *ids)
   for(GLsizei i = 0; i < count; i++)
   {
     GLResource res = QueryRes(GetCtx(), ids[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -294,6 +310,10 @@ void WrappedOpenGL::glCreateQueries(GLenum target, GLsizei count, GLuint *ids)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -543,7 +563,7 @@ void WrappedOpenGL::glDeleteQueries(GLsizei n, const GLuint *ids)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = QueryRes(GetCtx(), ids[i]);
-    if(GetResourceManager()->HasResource(res))
+    if(GetResourceManager()->HasCurrentResource(res))
     {
       if(GetResourceManager()->HasResourceRecord(res))
         GetResourceManager()->GetResourceRecord(res)->Delete(GetResourceManager());
@@ -579,7 +599,7 @@ bool WrappedOpenGL::Serialise_glGetQueryBufferObjectui64v(SerialiserType &ser, G
       ActionDescription action;
       action.flags |= ActionFlags::Copy;
 
-      action.copyDestination = dstid;
+      action.copyDestination = GetResourceManager()->GetOriginalID(dstid);
 
       AddAction(action);
 
@@ -662,7 +682,7 @@ bool WrappedOpenGL::Serialise_glGetQueryBufferObjectuiv(SerialiserType &ser, GLu
       ActionDescription action;
       action.flags |= ActionFlags::Copy;
 
-      action.copyDestination = dstid;
+      action.copyDestination = GetResourceManager()->GetOriginalID(dstid);
 
       AddAction(action);
 
@@ -745,7 +765,7 @@ bool WrappedOpenGL::Serialise_glGetQueryBufferObjecti64v(SerialiserType &ser, GL
       ActionDescription action;
       action.flags |= ActionFlags::Copy;
 
-      action.copyDestination = dstid;
+      action.copyDestination = GetResourceManager()->GetOriginalID(dstid);
 
       AddAction(action);
 
@@ -827,7 +847,7 @@ bool WrappedOpenGL::Serialise_glGetQueryBufferObjectiv(SerialiserType &ser, GLui
       ActionDescription action;
       action.flags |= ActionFlags::Copy;
 
-      action.copyDestination = dstid;
+      action.copyDestination = GetResourceManager()->GetOriginalID(dstid);
 
       AddAction(action);
 

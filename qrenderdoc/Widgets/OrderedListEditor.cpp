@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,20 +23,18 @@
  ******************************************************************************/
 
 #include "OrderedListEditor.h"
-#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QToolButton>
 #include "Code/QRDUtils.h"
 #include "Code/Resources.h"
 
-OrderedListEditor::OrderedListEditor(const QString &itemName, OrderedItemExtras extras,
-                                     const CustomProp &prop, QWidget *parent)
+OrderedListEditor::OrderedListEditor(const QString &itemName, ItemButton mode, QWidget *parent)
     : RDTableWidget(parent)
 {
   setFont(Formatter::PreferredFont());
 
-  m_Prop = prop;
+  m_ButtonMode = mode;
 
   setDragEnabled(true);
   setDragDropOverwriteMode(false);
@@ -51,44 +49,29 @@ OrderedListEditor::OrderedListEditor(const QString &itemName, OrderedItemExtras 
   horizontalHeader()->setMinimumSectionSize(50);
   verticalHeader()->setHighlightSections(false);
 
-  QStringList labels;
-  int columnCount = 1;
-  labels << itemName;
-
-  if(!prop.name.isEmpty())
+  if(m_ButtonMode == ItemButton::None)
   {
-    columnCount++;
-    labels << prop.name;
+    setColumnCount(1);
+    setHorizontalHeaderLabels({itemName});
+    horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
   }
-
-  if(extras & OrderedItemExtras::BrowseFile)
+  else
   {
-    columnCount++;
-    labels << tr("Browse");
-    m_Extras.push_back(OrderedItemExtras::BrowseFile);
-  }
-  else if(extras & OrderedItemExtras::BrowseFolder)
-  {
-    columnCount++;
-    labels << tr("Browse");
-    m_Extras.push_back(OrderedItemExtras::BrowseFolder);
-  }
-  if(extras & OrderedItemExtras::Delete)
-  {
-    columnCount++;
-    labels << tr("Delete");
-    m_Extras.push_back(OrderedItemExtras::Delete);
-  }
+    QStringList labels;
+    labels << itemName;
+    switch(m_ButtonMode)
+    {
+      case ItemButton::None: labels << lit("????"); break;
+      case ItemButton::BrowseFile:
+      case ItemButton::BrowseFolder: labels << tr("Browse"); break;
+      case ItemButton::Delete: labels << tr("Delete"); break;
+    }
+    setColumnCount(2);
+    setHorizontalHeaderLabels(labels);
 
-  setColumnCount(columnCount);
-  setHorizontalHeaderLabels(labels);
-
-  horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-  for(int i = 1; i < columnCount; i++)
-    horizontalHeader()->setSectionResizeMode(i, QHeaderView::ResizeToContents);
-
-  if(!prop.name.isEmpty())
-    horizontalHeaderItem(1)->setToolTip(prop.tooltip);
+    horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  }
 
   QObject::connect(this, &RDTableWidget::cellChanged, this, &OrderedListEditor::cellChanged);
 }
@@ -97,52 +80,22 @@ OrderedListEditor::~OrderedListEditor()
 {
 }
 
-QWidget *OrderedListEditor::makeCellWidget(int col, OrderedItemExtras extra)
+QToolButton *OrderedListEditor::makeButton()
 {
-  if(extra == OrderedItemExtras::Delete)
-  {
-    QToolButton *ret = new QToolButton(this);
-    ret->setAutoRaise(true);
+  QToolButton *ret = new QToolButton(this);
+
+  if(m_ButtonMode == ItemButton::Delete)
     ret->setIcon(Icons::del());
-    QObject::connect(ret, &QToolButton::clicked, [this, ret, col, extra]() {
-      for(int row = 0; row < rowCount(); row++)
-        if(cellWidget(row, col) == ret)
-          return extraClicked(row, extra);
-
-      qCritical() << "Couldn't find extra button on click";
-    });
-
-    return ret;
-  }
-  else if(extra == OrderedItemExtras::BrowseFile || extra == OrderedItemExtras::BrowseFolder)
-  {
-    QToolButton *ret = new QToolButton(this);
-    ret->setAutoRaise(true);
-    ret->setIcon(Icons::folder_page_white());
-    QObject::connect(ret, &QToolButton::clicked, [this, ret, col, extra]() {
-      for(int row = 0; row < rowCount(); row++)
-        if(cellWidget(row, col) == ret)
-          return extraClicked(row, extra);
-
-      qCritical() << "Couldn't find extra button on click";
-    });
-
-    return ret;
-  }
-  else if(extra == OrderedItemExtras::CustomProp)
-  {
-    QCheckBox *ret = new QCheckBox(this);
-    if(m_Prop.defaultValue)
-      ret->setChecked(true);
-    return ret;
-  }
   else
-  {
-    return NULL;
-  }
+    ret->setIcon(Icons::folder_page_white());
+  ret->setAutoRaise(true);
+
+  QObject::connect(ret, &QToolButton::clicked, this, &OrderedListEditor::buttonActivate);
+
+  return ret;
 }
 
-void OrderedListEditor::setItemsAndProp(const QStringList &strings, const QList<bool> &prop)
+void OrderedListEditor::setItems(const QStringList &strings)
 {
   setUpdatesEnabled(false);
   clearContents();
@@ -153,28 +106,8 @@ void OrderedListEditor::setItemsAndProp(const QStringList &strings, const QList<
   {
     setItem(i, 0, new QTableWidgetItem(strings[i]));
 
-    if(m_Prop.valid())
-    {
-      QWidget *w = makeCellWidget(1, OrderedItemExtras::CustomProp);
-      if(i < prop.count())
-      {
-        QCheckBox *c = qobject_cast<QCheckBox *>(w);
-        if(c)
-          c->setChecked(prop[i]);
-      }
-      w->setToolTip(m_Prop.tooltip);
-
-      QWidget *wrapperWidget = new QWidget();
-      QHBoxLayout *l = new QHBoxLayout();
-      l->setAlignment(Qt::AlignCenter);
-      l->addWidget(w);
-      l->setContentsMargins(QMargins(0, 0, 0, 0));
-      wrapperWidget->setLayout(l);
-      setCellWidget(i, 1, wrapperWidget);
-    }
-
-    for(int c = 0; c < m_Extras.size(); c++)
-      setCellWidget(i, c + firstExtraColumn(), makeCellWidget(c + firstExtraColumn(), m_Extras[c]));
+    if(m_ButtonMode != ItemButton::None)
+      setCellWidget(i, 1, makeButton());
   }
 
   // if we added any strings above the new item row was automatically
@@ -183,8 +116,8 @@ void OrderedListEditor::setItemsAndProp(const QStringList &strings, const QList<
     addNewItemRow();
 
   resizeColumnToContents(0);
-  for(int c = 0; c < m_Extras.size(); c++)
-    resizeColumnToContents(c + firstExtraColumn());
+  if(m_ButtonMode != ItemButton::None)
+    resizeColumnToContents(1);
 
   setUpdatesEnabled(true);
 }
@@ -200,30 +133,13 @@ void OrderedListEditor::addNewItemRow()
   item->setFlags(item->flags() & ~(Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled));
   setItem(rowCount() - 1, 0, item);
 
-  {
-    QWidget *w = makeCellWidget(1, OrderedItemExtras::CustomProp);
-    QCheckBox *c = qobject_cast<QCheckBox *>(w);
-    if(c)
-      c->setChecked(m_Prop.defaultValue);
-    w->setToolTip(m_Prop.tooltip);
-
-    QWidget *wrapperWidget = new QWidget();
-    QHBoxLayout *l = new QHBoxLayout();
-    l->setAlignment(Qt::AlignCenter);
-    l->addWidget(w);
-    l->setContentsMargins(QMargins(0, 0, 0, 0));
-    wrapperWidget->setLayout(l);
-    setCellWidget(rowCount() - 1, 1, wrapperWidget);
-  }
-
-  for(int c = 0; c < m_Extras.size(); c++)
+  if(m_ButtonMode != ItemButton::None)
   {
     item = new QTableWidgetItem(QString());
     item->setFlags(item->flags() & ~(Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled));
-    setItem(rowCount() - 1, c + firstExtraColumn(), item);
+    setItem(rowCount() - 1, 1, item);
 
-    setCellWidget(rowCount() - 1, c + firstExtraColumn(),
-                  makeCellWidget(c + firstExtraColumn(), m_Extras[c]));
+    setCellWidget(rowCount() - 1, 1, makeButton());
   }
 }
 
@@ -237,23 +153,6 @@ QStringList OrderedListEditor::getItems()
     count--;
   for(int i = 0; i < count; i++)
     ret << item(i, 0)->text();
-
-  return ret;
-}
-
-QList<bool> OrderedListEditor::getItemProps()
-{
-  QList<bool> ret;
-
-  int count = rowCount();
-  // don't include the last 'new item' entry
-  if(allowAddition())
-    count--;
-  for(int i = 0; i < count; i++)
-  {
-    QCheckBox *c = cellWidget(i, 1)->findChild<QCheckBox *>();
-    ret << (c && c->isChecked());
-  }
 
   return ret;
 }
@@ -275,8 +174,8 @@ void OrderedListEditor::cellChanged(int row, int column)
     {
       // enable dragging
       item(row, 0)->setFlags(item(row, 0)->flags() | (Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled));
-      for(int c = 0; c < m_Extras.size(); c++)
-        delete takeItem(row, c + firstExtraColumn());
+      if(m_ButtonMode != ItemButton::None)
+        delete takeItem(row, 1);
 
       addNewItemRow();
     }
@@ -290,24 +189,34 @@ void OrderedListEditor::cellChanged(int row, int column)
   recurse = false;
 }
 
-void OrderedListEditor::extraClicked(int row, OrderedItemExtras extra)
+void OrderedListEditor::buttonActivate()
 {
-  if(extra == OrderedItemExtras::Delete)
+  QWidget *tool = qobject_cast<QWidget *>(QObject::sender());
+
+  if(tool)
   {
-    // don't delete the last 'new item' entry
-    if(!allowAddition() || row != rowCount() - 1)
-      removeRow(row);
-    return;
+    for(int i = 0; i < rowCount(); i++)
+    {
+      QWidget *rowButton = cellWidget(i, 1);
+      if(rowButton == tool)
+      {
+        if(m_ButtonMode == ItemButton::Delete)
+        {
+          this->removeRow(i);
+          return;
+        }
+
+        QString sel;
+        if(m_ButtonMode == ItemButton::BrowseFolder)
+          sel = RDDialog::getExistingDirectory(this, tr("Browse for a folder"));
+        else if(m_ButtonMode == ItemButton::BrowseFile)
+          sel = RDDialog::getOpenFileName(this, tr("Browse for a file"));
+
+        if(!sel.isEmpty())
+          item(i, 0)->setText(sel);
+      }
+    }
   }
-
-  QString sel;
-  if(extra == OrderedItemExtras::BrowseFolder)
-    sel = RDDialog::getExistingDirectory(this, tr("Browse for a folder"));
-  else if(extra == OrderedItemExtras::BrowseFile)
-    sel = RDDialog::getOpenFileName(this, tr("Browse for a file"));
-
-  if(!sel.isEmpty())
-    item(row, 0)->setText(sel);
 }
 
 void OrderedListEditor::keyPressEvent(QKeyEvent *event)
@@ -319,11 +228,7 @@ void OrderedListEditor::keyPressEvent(QKeyEvent *event)
       row = selectionModel()->selectedIndexes()[0].row();
 
     if(row >= 0)
-    {
-      // don't delete the last 'new item' entry
-      if(!allowAddition() || row != rowCount() - 1)
-        removeRow(row);
-    }
+      removeRow(row);
   }
 
   RDTableWidget::keyPress(event);

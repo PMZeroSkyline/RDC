@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -66,6 +66,7 @@ enum ReplayProxyPacket
 
   eReplayProxy_SavePipelineState,
   eReplayProxy_GetUsage,
+  eReplayProxy_GetLiveID,
   eReplayProxy_GetFrameRecord,
   eReplayProxy_IsRenderOutput,
   eReplayProxy_NeedRemapForFetch,
@@ -498,6 +499,8 @@ public:
 
   IMPLEMENT_FUNCTION_PROXIED(bool, IsRenderOutput, ResourceId id);
 
+  IMPLEMENT_FUNCTION_PROXIED(ResourceId, GetLiveID, ResourceId id);
+
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<GPUCounter>, EnumerateCounters);
   IMPLEMENT_FUNCTION_PROXIED(CounterDescription, DescribeCounter, GPUCounter counterID);
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<CounterResult>, FetchCounters,
@@ -528,7 +531,7 @@ public:
                              const rdcarray<uint32_t> &passEvents);
 
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<ShaderEntryPoint>, GetShaderEntryPoints, ResourceId shader);
-  IMPLEMENT_FUNCTION_PROXIED(const ShaderReflection *, GetShader, ResourceId pipeline, ResourceId,
+  IMPLEMENT_FUNCTION_PROXIED(ShaderReflection *, GetShader, ResourceId pipeline, ResourceId,
                              ShaderEntryPoint entry);
 
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<rdcstr>, GetDisassemblyTargets, bool withPipeline);
@@ -654,6 +657,8 @@ private:
   // should not be treated as proxied.
   std::set<ResourceId> m_LocalTextures;
 
+  std::map<ResourceId, ResourceId> m_LiveIDs;
+
   struct ShaderReflKey
   {
     ShaderReflKey() {}
@@ -674,7 +679,7 @@ private:
     }
   };
 
-  std::map<ShaderReflKey, const ShaderReflection *> m_ShaderReflectionCache;
+  std::map<ShaderReflKey, ShaderReflection *> m_ShaderReflectionCache;
 
   // reader from the other side of the host <-> remote connection
   ReadSerialiser &m_Reader;

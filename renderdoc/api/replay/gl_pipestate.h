@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -66,18 +66,13 @@ struct VertexAttribute
       return byteOffset < o.byteOffset;
     return false;
   }
-  DOCUMENT(R"(``True`` if this vertex attribute is enabled.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if this vertex attribute is enabled.");
   bool enabled = false;
 
   DOCUMENT(R"(Only valid for integer formatted attributes, ``True`` if they are cast to float.
 
 This is because they were specified with an integer format but glVertexAttribFormat (not
 glVertexAttribIFormat) so they will be cast.
-
-:type: bool
 )");
   bool floatCast = false;
 
@@ -102,15 +97,10 @@ If any value is set to ``-1`` then the attribute is unbound.
 )");
   PixelValue genericValue;
 
-  DOCUMENT(R"(The vertex buffer input slot where the data is sourced from.
-
-:type: int
-)");
+  DOCUMENT("The vertex buffer input slot where the data is sourced from.");
   uint32_t vertexBufferSlot = 0;
   DOCUMENT(R"(The byte offset from the start of the vertex data in the vertex buffer from
 :data:`vertexBufferSlot`.
-
-:type: int
 )");
   uint32_t byteOffset = 0;
 };
@@ -140,21 +130,12 @@ struct VertexBuffer
       return instanceDivisor < o.instanceDivisor;
     return false;
   }
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer bound to this slot.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the buffer bound to this slot.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(The byte stride between the start of one set of vertex data and the next.
-
-:type: int
-)");
+  DOCUMENT("The byte stride between the start of one set of vertex data and the next.");
   uint32_t byteStride = 0;
-  DOCUMENT(R"(The byte offset from the start of the buffer to the beginning of the vertex data.
-
-:type: int
-)");
+  DOCUMENT("The byte offset from the start of the buffer to the beginning of the vertex data.");
   uint32_t byteOffset = 0;
   DOCUMENT(R"(The instance rate divisor.
 
@@ -162,8 +143,6 @@ If this is ``0`` then the vertex buffer is read at vertex rate.
 
 If it's ``1`` then one element is read for each instance, and for ``N`` greater than ``1`` then
 ``N`` instances read the same element before advancing.
-
-:type: int
 )");
   uint32_t instanceDivisor = 0;
 };
@@ -176,10 +155,7 @@ struct VertexInput
   VertexInput(const VertexInput &) = default;
   VertexInput &operator=(const VertexInput &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the vertex array object that's bound.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the vertex array object that's bound.");
   ResourceId vertexArrayObject;
 
   DOCUMENT(R"(The vertex attributes.
@@ -194,10 +170,7 @@ struct VertexInput
 )");
   rdcarray<VertexBuffer> vertexBuffers;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the index buffer.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the index buffer.");
   ResourceId indexBuffer;
   DOCUMENT(R"(The byte width of the index buffer - typically 1, 2 or 4 bytes. It can be 0 for
 non-indexed draws.
@@ -205,8 +178,6 @@ non-indexed draws.
 .. note::
   This does not correspond to a real GL state since the index type is specified per-action in the call
   itself. This is an implicit state derived from the last (or current) action at any given event.
-
-:type: int
 )");
   uint32_t indexByteStride = 0;
   DOCUMENT(R"(The byte width of the index buffer - typically 1, 2 or 4 bytes.
@@ -214,26 +185,16 @@ non-indexed draws.
 .. note::
   This does not correspond to a real GL state since the topology is specified per-action in the call
   itself. This is an implicit state derived from the last (or current) action at any given event.
-
-:type: Topology
 )");
   Topology topology = Topology::Unknown;
-  DOCUMENT(R"(``True`` if primitive restart is enabled for strip primitives.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if primitive restart is enabled for strip primitives.");
   bool primitiveRestart = false;
-  DOCUMENT(R"(The index value to use to indicate a strip restart.
-
-:type: int
-)");
+  DOCUMENT("The index value to use to indicate a strip restart.");
   uint32_t restartIndex = 0;
 
   DOCUMENT(R"(``True`` if the provoking vertex is the last one in the primitive.
 
 ``False`` if the provoking vertex is the first one.
-
-:type: bool
 )");
   bool provokingVertexLast = false;
 };
@@ -246,28 +207,19 @@ struct Shader
   Shader(const Shader &) = default;
   Shader &operator=(const Shader &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the shader object itself.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the shader object itself.");
   ResourceId shaderResourceId;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the program bound to this stage.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the program bound to this stage.");
   ResourceId programResourceId;
 
   DOCUMENT(R"(The reflection data for this shader.
 
 :type: ShaderReflection
 )");
-  const ShaderReflection *reflection = NULL;
+  ShaderReflection *reflection = NULL;
 
-  DOCUMENT(R"(A :class:`ShaderStage` identifying which stage this shader is bound to.
-
-:type: ShaderStage
-)");
+  DOCUMENT("A :class:`ShaderStage` identifying which stage this shader is bound to.");
   ShaderStage stage = ShaderStage::Vertex;
 
   DOCUMENT(R"(A list of integers with the subroutine values.
@@ -295,10 +247,7 @@ struct FixedVertexProcessing
 :type: Tuple[float,float,float,float]
 )");
   rdcfixedarray<float, 4> defaultOuterLevel = {0.0f, 0.0f, 0.0f, 0.0f};
-  DOCUMENT(R"(``True`` if primitives should be discarded during rasterization.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if primitives should be discarded during rasterization.");
   bool discard = false;
 
   DOCUMENT(R"(An 8-tuple of ``bool`` determining which user clipping planes are enabled.
@@ -309,15 +258,11 @@ struct FixedVertexProcessing
   DOCUMENT(R"(``True`` if the clipping origin should be in the lower left.
 
 ``False`` if it's in the upper left.
-
-:type: bool
 )");
   bool clipOriginLowerLeft = false;
   DOCUMENT(R"(``True`` if the clip-space Z goes from ``-1`` to ``1``.
 
 ``False`` if the clip-space Z goes from ``0`` to ``1``.
-
-:type: bool
 )");
   bool clipNegativeOneToOne = false;
 };
@@ -340,15 +285,11 @@ struct TextureCompleteness
   }
 
   DOCUMENT(R"(The byte offset in the GL descriptor storage of the problematic descriptor
-
-:type: int
 )");
   uint64_t descriptorByteOffset = 0;
 
   DOCUMENT(R"(The details of the texture's (in)completeness. If this string is empty, the texture is
 complete. Otherwise it contains an explanation of why the texture is believed to be incomplete.
-
-:type: str
 )");
   rdcstr completeStatus;
 
@@ -358,8 +299,6 @@ impossible to disambiguate which binding was used.
 
 If this string is empty, no conflict is present. Otherwise it contains the bindings which are
 in conflict and their types.
-
-:type: str
 )");
   rdcstr typeConflict;
 };
@@ -372,10 +311,7 @@ struct Feedback
   Feedback(const Feedback &) = default;
   Feedback &operator=(const Feedback &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the transform feedback binding.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the transform feedback binding.");
   ResourceId feedbackResourceId;
   DOCUMENT(R"(The buffer bindings.
   
@@ -392,15 +328,9 @@ struct Feedback
 :type: Tuple[int,int,int,int]
 )");
   rdcfixedarray<uint64_t, 4> byteSize = {0, 0, 0, 0};
-  DOCUMENT(R"(``True`` if the transform feedback object is currently active.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the transform feedback object is currently active.");
   bool active = false;
-  DOCUMENT(R"(``True`` if the transform feedback object is currently paused.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the transform feedback object is currently paused.");
   bool paused = false;
 };
 
@@ -412,122 +342,61 @@ struct RasterizerState
   RasterizerState(const RasterizerState &) = default;
   RasterizerState &operator=(const RasterizerState &) = default;
 
-  DOCUMENT(R"(The polygon :class:`FillMode`.
-
-:type: FillMode
-)");
+  DOCUMENT("The polygon :class:`FillMode`.");
   FillMode fillMode = FillMode::Solid;
-  DOCUMENT(R"(The polygon :class:`CullMode`.
-
-:type: CullMode
-)");
+  DOCUMENT("The polygon :class:`CullMode`.");
   CullMode cullMode = CullMode::NoCull;
   DOCUMENT(R"(``True`` if counter-clockwise polygons are front-facing.
 ``False`` if clockwise polygons are front-facing.
-
-:type: bool
 )");
   bool frontCCW = false;
-  DOCUMENT(R"(The fixed depth bias value to apply to z-values.
-
-:type: float
-)");
+  DOCUMENT("The fixed depth bias value to apply to z-values.");
   float depthBias = 0.0f;
-  DOCUMENT(R"(The slope-scaled depth bias value to apply to z-values.
-
-:type: float
-)");
+  DOCUMENT("The slope-scaled depth bias value to apply to z-values.");
   float slopeScaledDepthBias = 0.0f;
   DOCUMENT(R"(The clamp value for calculated depth bias from :data:`depthBias` and
 :data:`slopeScaledDepthBias`
-
-:type: float
 )");
   float offsetClamp = 0.0f;
   DOCUMENT(R"(``True`` if pixels outside of the near and far depth planes should be clamped and
 to ``0.0`` to ``1.0`` and not clipped.
-
-:type: bool
 )");
   bool depthClamp = false;
 
-  DOCUMENT(R"(``True`` if multisampling should be used during rendering.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if multisampling should be used during rendering.");
   bool multisampleEnable = false;
-  DOCUMENT(R"(``True`` if rendering should happen at sample-rate frequency.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if rendering should happen at sample-rate frequency.");
   bool sampleShading = false;
   DOCUMENT(R"(``True`` if the generated samples should be bitwise ``AND`` masked with
 :data:`sampleMaskValue`.
-
-:type: bool
 )");
   bool sampleMask = false;
-  DOCUMENT(R"(The sample mask value that should be masked against the generated coverage.
-
-:type: int
-)");
+  DOCUMENT("The sample mask value that should be masked against the generated coverage.");
   uint32_t sampleMaskValue = ~0U;
   DOCUMENT(R"(``True`` if a temporary mask using :data:`sampleCoverageValue` should be used to
 resolve the final output color.
-
-:type: bool
 )");
   bool sampleCoverage = false;
-  DOCUMENT(R"(``True`` if the temporary sample coverage mask should be inverted.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the temporary sample coverage mask should be inverted.");
   bool sampleCoverageInvert = false;
-  DOCUMENT(R"(The sample coverage value used if :data:`sampleCoverage` is ``True``.
-
-:type: float
-)");
+  DOCUMENT("The sample coverage value used if :data:`sampleCoverage` is ``True``.");
   float sampleCoverageValue = 1.0f;
-  DOCUMENT(R"(``True`` if alpha-to-coverage should be used when blending to an MSAA target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if alpha-to-coverage should be used when blending to an MSAA target.");
   bool alphaToCoverage = false;
-  DOCUMENT(R"(``True`` if alpha-to-one should be used when blending to an MSAA target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if alpha-to-one should be used when blending to an MSAA target.");
   bool alphaToOne = false;
-  DOCUMENT(R"(The minimum sample shading rate.
-
-:type: float
-)");
+  DOCUMENT("The minimum sample shading rate.");
   float minSampleShadingRate = 0.0f;
 
-  DOCUMENT(R"(``True`` if the point size can be programmably exported from a shader.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the point size can be programmably exported from a shader.");
   bool programmablePointSize = false;
-  DOCUMENT(R"(The fixed point size in pixels.
-
-:type: float
-)");
+  DOCUMENT("The fixed point size in pixels.");
   float pointSize = 1.0f;
-  DOCUMENT(R"(The fixed line width in pixels.
-
-:type: float
-)");
+  DOCUMENT("The fixed line width in pixels.");
   float lineWidth = 1.0f;
-  DOCUMENT(R"(The threshold value at which points are clipped if they exceed this size.
-
-:type: float
-)");
+  DOCUMENT("The threshold value at which points are clipped if they exceed this size.");
   float pointFadeThreshold = 0.0f;
-  DOCUMENT(R"(``True`` if the point sprite texture origin is upper-left. ``False`` if lower-left.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the point sprite texture origin is upper-left. ``False`` if lower-left.");
   bool pointOriginUpperLeft = false;
 };
 
@@ -566,35 +435,17 @@ struct DepthState
   DepthState(const DepthState &) = default;
   DepthState &operator=(const DepthState &) = default;
 
-  DOCUMENT(R"(``True`` if depth testing should be performed.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth testing should be performed.");
   bool depthEnable = false;
-  DOCUMENT(R"(The :class:`CompareFunction` to use for testing depth values.
-
-:type: CompareFunction
-)");
+  DOCUMENT("The :class:`CompareFunction` to use for testing depth values.");
   CompareFunction depthFunction = CompareFunction::AlwaysTrue;
-  DOCUMENT(R"(``True`` if depth values should be written to the depth target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth values should be written to the depth target.");
   bool depthWrites = false;
-  DOCUMENT(R"(``True`` if depth bounds tests should be applied.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth bounds tests should be applied.");
   bool depthBounds = false;
-  DOCUMENT(R"(The near plane bounding value.
-
-:type: float
-)");
+  DOCUMENT("The near plane bounding value.");
   double nearBound = 0.0;
-  DOCUMENT(R"(The far plane bounding value.
-
-:type: float
-)");
+  DOCUMENT("The far plane bounding value.");
   double farBound = 0.0;
 };
 
@@ -606,10 +457,7 @@ struct StencilState
   StencilState(const StencilState &) = default;
   StencilState &operator=(const StencilState &) = default;
 
-  DOCUMENT(R"(``True`` if stencil operations should be performed.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if stencil operations should be performed.");
   bool stencilEnable = false;
 
   DOCUMENT(R"(The stencil state for front-facing polygons.
@@ -633,10 +481,7 @@ struct FBO
   FBO(const FBO &) = default;
   FBO &operator=(const FBO &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the framebuffer.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the framebuffer.");
   ResourceId resourceId;
   DOCUMENT(R"(The framebuffer color attachments.
 
@@ -659,10 +504,7 @@ struct FBO
 :type: List[int]
 )");
   rdcarray<int32_t> drawBuffers;
-  DOCUMENT(R"(The read buffer index in the :data:`colorAttachments` attachment list.
-
-:type: int
-)");
+  DOCUMENT("The read buffer index in the :data:`colorAttachments` attachment list.");
   int32_t readBuffer = 0;
 };
 
@@ -695,15 +537,10 @@ struct FrameBuffer
   FrameBuffer(const FrameBuffer &) = default;
   FrameBuffer &operator=(const FrameBuffer &) = default;
 
-  DOCUMENT(R"(``True`` if sRGB correction should be applied when writing to an sRGB-formatted texture.
-
-:type: bool
-)");
+  DOCUMENT(
+      "``True`` if sRGB correction should be applied when writing to an sRGB-formatted texture.");
   bool framebufferSRGB = false;
-  DOCUMENT(R"(``True`` if dithering should be used when writing to color buffers.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if dithering should be used when writing to color buffers.");
   bool dither = false;
 
   DOCUMENT(R"(The draw framebuffer.
@@ -732,35 +569,17 @@ struct Hints
   Hints(const Hints &) = default;
   Hints &operator=(const Hints &) = default;
 
-  DOCUMENT(R"(A :class:`QualityHint` with the derivatives hint.
-
-:type: QualityHint
-)");
+  DOCUMENT("A :class:`QualityHint` with the derivatives hint.");
   QualityHint derivatives = QualityHint::DontCare;
-  DOCUMENT(R"(A :class:`QualityHint` with the line smoothing hint.
-
-:type: QualityHint
-)");
+  DOCUMENT("A :class:`QualityHint` with the line smoothing hint.");
   QualityHint lineSmoothing = QualityHint::DontCare;
-  DOCUMENT(R"(A :class:`QualityHint` with the polygon smoothing hint.
-
-:type: QualityHint
-)");
+  DOCUMENT("A :class:`QualityHint` with the polygon smoothing hint.");
   QualityHint polySmoothing = QualityHint::DontCare;
-  DOCUMENT(R"(A :class:`QualityHint` with the texture compression hint.
-
-:type: QualityHint
-)");
+  DOCUMENT("A :class:`QualityHint` with the texture compression hint.");
   QualityHint textureCompression = QualityHint::DontCare;
-  DOCUMENT(R"(``True`` if line smoothing is enabled.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if line smoothing is enabled.");
   bool lineSmoothingEnabled = false;
-  DOCUMENT(R"(``True`` if polygon smoothing is enabled.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if polygon smoothing is enabled.");
   bool polySmoothingEnabled = false;
 };
 
@@ -811,10 +630,7 @@ struct State
 )");
   Shader computeShader;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the program pipeline (if active).
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the program pipeline (if active).");
   ResourceId pipelineResourceId;
 
   DOCUMENT(R"(The fixed-function vertex processing stage.

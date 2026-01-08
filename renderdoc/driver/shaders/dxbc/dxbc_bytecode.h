@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1116,9 +1116,6 @@ public:
   }
   void FetchComputeProperties(DXBC::Reflection *reflection);
   DXBC::Reflection *GuessReflection();
-
-  void CalculateEvalSampleCache(const DXDebug::InputFetcherConfig &cfg,
-                                DXDebug::InputFetcher &fetcher) const;
 
   const rdcarray<uint32_t> &GetTokens() const { return m_ProgramWords; }
   rdcstr GetDebugStatus();

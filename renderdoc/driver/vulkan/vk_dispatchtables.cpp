@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -50,7 +50,6 @@ void InitReplayTables(void *vulkanModule)
     VkDevDispatchTable &table = replayDeviceTable;
     memset(&table, 0, sizeof(table));
     HookInit(GetDeviceProcAddr);
-    HookInit(CreateDevice);
     HookInitVulkanDevice();
   }
 

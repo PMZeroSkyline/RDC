@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -2120,7 +2120,7 @@ void D3D12Replay::InitPostMSBuffers(uint32_t eventId)
   D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
 
   WrappedID3D12PipelineState *pipe =
-      (WrappedID3D12PipelineState *)rm->GetResAs<ID3D12PipelineState>(rs.pipe);
+      (WrappedID3D12PipelineState *)rm->GetCurrentAs<ID3D12PipelineState>(rs.pipe);
   D3D12RootSignature modsig;
 
   // for indirect dispatches, fetch up to date dispatch sizes in case they're non-deterministic
@@ -2138,10 +2138,10 @@ void D3D12Replay::InitPostMSBuffers(uint32_t eventId)
       uint32_t cmdIdx = chunk->FindChild("CommandIndex")->AsUInt32();
       uint32_t argIdx = chunk->FindChild("ArgumentIndex")->AsUInt32();
 
-      WrappedID3D12CommandSignature *comSig = rm->GetResAs<WrappedID3D12CommandSignature>(
+      WrappedID3D12CommandSignature *comSig = rm->GetLiveAs<WrappedID3D12CommandSignature>(
           parentChunk->FindChild("pCommandSignature")->AsResourceId());
       ID3D12Resource *argBuf =
-          rm->GetResAs<ID3D12Resource>(parentChunk->FindChild("pArgumentBuffer")->AsResourceId());
+          rm->GetLiveAs<ID3D12Resource>(parentChunk->FindChild("pArgumentBuffer")->AsResourceId());
       uint64_t argOffs = parentChunk->FindChild("ArgumentBufferOffset")->AsUInt64();
 
       argOffs += cmdIdx * comSig->sig.ByteStride;
@@ -2192,7 +2192,7 @@ void D3D12Replay::InitPostMSBuffers(uint32_t eventId)
   D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC pipeDesc;
   pipe->Fill(pipeDesc);
 
-  ID3D12RootSignature *rootsig = rm->GetResAs<ID3D12RootSignature>(rs.graphics.rootsig);
+  ID3D12RootSignature *rootsig = rm->GetCurrentAs<ID3D12RootSignature>(rs.graphics.rootsig);
 
   if(!rootsig)
   {
@@ -2245,7 +2245,7 @@ void D3D12Replay::InitPostMSBuffers(uint32_t eventId)
     }
   }
 
-  pipeDesc.SetRootSig(annotatedSig);
+  pipeDesc.pRootSignature = annotatedSig;
 
   HRESULT hr = S_OK;
 
@@ -2641,11 +2641,9 @@ void D3D12Replay::InitPostMSBuffers(uint32_t eventId)
         SAFE_RELEASE(ampBuffer);
         SAFE_RELEASE(meshBuffer);
 
-        ret.meshout.status = StringFormat::Fmt(
-            "Got corrupted mesh output data from GPU.\n"
-            "Meshlet returned invalid vertex count %u with declared max %u",
-            numVerts, layout.vertArrayLength);
-        RDCERR("%s", ret.meshout.status.c_str());
+        RDCERR("Meshlet returned invalid vertex count %u with declared max %u", numVerts,
+               layout.vertArrayLength);
+        ret.meshout.status = "Got corrupted mesh output data from GPU";
         return;
       }
 
@@ -2654,11 +2652,9 @@ void D3D12Replay::InitPostMSBuffers(uint32_t eventId)
         SAFE_RELEASE(ampBuffer);
         SAFE_RELEASE(meshBuffer);
 
-        ret.meshout.status = StringFormat::Fmt(
-            "Got corrupted mesh output data from GPU.\n"
-            "Meshlet returned invalid primitive count %u with declared max %u",
-            numPrims, layout.primArrayLength);
-        RDCERR("%s", ret.meshout.status.c_str());
+        RDCERR("Meshlet returned invalid primitive count %u with declared max %u", numPrims,
+               layout.primArrayLength);
+        ret.meshout.status = "Got corrupted mesh output data from GPU";
         return;
       }
 
@@ -2858,7 +2854,7 @@ void D3D12Replay::InitPostVSBuffers(uint32_t eventId)
   }
 
   WrappedID3D12PipelineState *origPSO =
-      m_pDevice->GetResourceManager()->GetResAs<WrappedID3D12PipelineState>(rs.pipe);
+      m_pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12PipelineState>(rs.pipe);
 
   if(!origPSO || !origPSO->IsGraphics())
   {
@@ -2901,35 +2897,33 @@ void D3D12Replay::InitPostVSBuffers(uint32_t eventId)
     return;
   }
 
-  const DXBC::DXBCContainer *dxbcVS = vs->GetDXBC();
+  DXBC::DXBCContainer *dxbcVS = vs->GetDXBC();
 
   RDCASSERT(dxbcVS);
 
-  const DXBC::DXBCContainer *dxbcGS = NULL;
+  DXBC::DXBCContainer *dxbcGS = NULL;
 
   WrappedID3D12Shader *gs = origPSO->GS();
 
   if(gs)
   {
     dxbcGS = gs->GetDXBC();
-    gs->GetWriteableDXBC()->CacheOutputTopology();
 
     RDCASSERT(dxbcGS);
   }
 
-  const DXBC::DXBCContainer *dxbcDS = NULL;
+  DXBC::DXBCContainer *dxbcDS = NULL;
 
   WrappedID3D12Shader *ds = origPSO->DS();
 
   if(ds)
   {
     dxbcDS = ds->GetDXBC();
-    ds->GetWriteableDXBC()->CacheOutputTopology();
 
     RDCASSERT(dxbcDS);
   }
 
-  const DXBC::DXBCContainer *lastShader = dxbcDS;
+  DXBC::DXBCContainer *lastShader = dxbcDS;
   if(dxbcGS)
     lastShader = dxbcGS;
 
@@ -2950,7 +2944,7 @@ void D3D12Replay::InitPostVSBuffers(uint32_t eventId)
 
   {
     WrappedID3D12RootSignature *sig =
-        m_pDevice->GetResourceManager()->GetResAs<WrappedID3D12RootSignature>(rs.graphics.rootsig);
+        m_pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12RootSignature>(rs.graphics.rootsig);
 
     D3D12RootSignature rootsig = sig->sig;
 
@@ -3041,7 +3035,7 @@ void D3D12Replay::InitPostVSBuffers(uint32_t eventId)
     psoDesc.DepthStencilState.StencilEnable = FALSE;
 
     if(soSig)
-      psoDesc.SetRootSig(soSig);
+      psoDesc.pRootSignature = soSig;
 
     // render as points
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
@@ -4145,7 +4139,7 @@ MeshFormat D3D12Replay::GetPostVSBuffers(uint32_t eventId, uint32_t instID, uint
 
     ret.dispatchSize = s.dispatchSize;
 
-    if(stage == MeshDataStage::MeshOut || stage == MeshDataStage::Count)
+    if(stage == MeshDataStage::MeshOut)
     {
       ret.meshletSizes.resize(s.instData.size());
       for(size_t i = 0; i < s.instData.size(); i++)

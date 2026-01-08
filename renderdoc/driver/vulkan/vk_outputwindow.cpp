@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -191,7 +191,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
   {
     CreateSurface(driver, inst);
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(inst), surface);
+    GetResourceManager()->WrapResource(Unwrap(inst), surface);
   }
 
   // sensible defaults
@@ -392,7 +392,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
 
     failures = 0;
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), swap);
+    GetResourceManager()->WrapResource(Unwrap(device), swap);
 
     uint32_t numImgs = 0;
     vkr = vt->GetSwapchainImagesKHR(Unwrap(device), Unwrap(swap), &numImgs, NULL);
@@ -406,7 +406,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
 
     for(size_t i = 0; i < numImgs; i++)
     {
-      GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), colimg[i]);
+      GetResourceManager()->WrapResource(Unwrap(device), colimg[i]);
 
       colBarrier[i] = {
           VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -451,7 +451,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     vkr = vt->CreateImage(Unwrap(device), &imInfo, NULL, &dsimg);
     CHECK_VKR(driver, vkr);
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), dsimg);
+    GetResourceManager()->WrapResource(Unwrap(device), dsimg);
 
     NameVulkanObject(dsimg, "outputwindow dsimg");
 
@@ -472,7 +472,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     if(vkr != VK_SUCCESS)
       return;
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), dsmem);
+    GetResourceManager()->WrapResource(Unwrap(device), dsmem);
 
     vkr = vt->BindImageMemory(Unwrap(device), Unwrap(dsimg), Unwrap(dsmem), 0);
     CHECK_VKR(driver, vkr);
@@ -483,7 +483,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     VkImageViewCreateInfo info = {
         VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         NULL,
-        driver->DefaultImageViewCreateFlags(),
+        0,
         Unwrap(dsimg),
         VK_IMAGE_VIEW_TYPE_2D,
         VK_FORMAT_D32_SFLOAT,
@@ -496,7 +496,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     CHECK_VKR(driver, vkr);
     NameUnwrappedVulkanObject(dsview, "output window dsview");
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), dsview);
+    GetResourceManager()->WrapResource(Unwrap(device), dsview);
 
     // create resolve target, since it must precisely match the pre-resolve format, it doesn't allow
     // any format conversion.
@@ -507,7 +507,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     vkr = vt->CreateImage(Unwrap(device), &imInfo, NULL, &resolveimg);
     CHECK_VKR(driver, vkr);
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), resolveimg);
+    GetResourceManager()->WrapResource(Unwrap(device), resolveimg);
 
     NameVulkanObject(resolveimg, "outputwindow resolveimg");
 
@@ -522,7 +522,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     if(vkr != VK_SUCCESS)
       return;
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), resolvemem);
+    GetResourceManager()->WrapResource(Unwrap(device), resolvemem);
 
     vkr = vt->BindImageMemory(Unwrap(device), Unwrap(resolveimg), Unwrap(resolvemem), 0);
     CHECK_VKR(driver, vkr);
@@ -567,7 +567,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     vkr = vt->CreateRenderPass(Unwrap(device), &rpinfo, NULL, &rp);
     CHECK_VKR(driver, vkr);
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), rp);
+    GetResourceManager()->WrapResource(Unwrap(device), rp);
 
     if(dsimg != VK_NULL_HANDLE)
     {
@@ -578,7 +578,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
       vkr = vt->CreateRenderPass(Unwrap(device), &rpinfo, NULL, &rpdepth);
       CHECK_VKR(driver, vkr);
 
-      GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), rpdepth);
+      GetResourceManager()->WrapResource(Unwrap(device), rpdepth);
     }
   }
 
@@ -605,7 +605,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     vkr = vt->CreateImage(Unwrap(device), &imInfo, NULL, &bb);
     CHECK_VKR(driver, vkr);
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), bb);
+    GetResourceManager()->WrapResource(Unwrap(device), bb);
 
     NameVulkanObject(bb, "outputwindow bb");
 
@@ -626,7 +626,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     if(vkr != VK_SUCCESS)
       return;
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), bbmem);
+    GetResourceManager()->WrapResource(Unwrap(device), bbmem);
 
     vkr = vt->BindImageMemory(Unwrap(device), Unwrap(bb), Unwrap(bbmem), 0);
     CHECK_VKR(driver, vkr);
@@ -639,7 +639,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     VkImageViewCreateInfo info = {
         VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         NULL,
-        driver->DefaultImageViewCreateFlags(),
+        0,
         Unwrap(bb),
         VK_IMAGE_VIEW_TYPE_2D,
         imformat,
@@ -652,7 +652,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
     CHECK_VKR(driver, vkr);
     NameUnwrappedVulkanObject(bbview, "output window bbview");
 
-    GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), bbview);
+    GetResourceManager()->WrapResource(Unwrap(device), bbview);
 
     {
       VkFramebufferCreateInfo fbinfo = {
@@ -670,7 +670,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
       vkr = vt->CreateFramebuffer(Unwrap(device), &fbinfo, NULL, &fb);
       CHECK_VKR(driver, vkr);
 
-      GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), fb);
+      GetResourceManager()->WrapResource(Unwrap(device), fb);
     }
 
     if(dsimg != VK_NULL_HANDLE)
@@ -691,7 +691,7 @@ void VulkanReplay::OutputWindow::Create(WrappedVulkan *driver, VkDevice device, 
       vkr = vt->CreateFramebuffer(Unwrap(device), &fbinfo, NULL, &fbdepth);
       CHECK_VKR(driver, vkr);
 
-      GetResourceManager()->WrapResource(ResourceId(), Unwrap(device), fbdepth);
+      GetResourceManager()->WrapResource(Unwrap(device), fbdepth);
     }
   }
 }
@@ -826,7 +826,7 @@ void VulkanReplay::GetOutputWindowData(uint64_t id, bytebuf &retData)
 
   // map memory and readback
   byte *pData = NULL;
-  vkr = vt->MapMemory(Unwrap(device), readbackMem, 0, mrq.size, 0, (void **)&pData);
+  vkr = vt->MapMemory(Unwrap(device), readbackMem, 0, bufInfo.size, 0, (void **)&pData);
   CHECK_VKR(m_pDriver, vkr);
   if(vkr != VK_SUCCESS)
     return;
@@ -943,7 +943,7 @@ void VulkanReplay::BindOutputWindow(uint64_t id, bool depth)
   {
     // semaphore is short lived, so not wrapped, if it's cached (ideally)
     // then it should be wrapped
-    VkSemaphore sem = VK_NULL_HANDLE;
+    VkSemaphore sem;
     VkPipelineStageFlags stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
     VkSemaphoreCreateInfo semInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, NULL, 0};
 

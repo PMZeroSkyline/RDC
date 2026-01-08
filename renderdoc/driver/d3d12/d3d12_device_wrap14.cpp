@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -113,10 +113,14 @@ bool WrappedID3D12Device::Serialise_CreateRootSignatureFromSubobjectInLibrary(
         ret->Release();
         ret = (ID3D12RootSignature *)GetResourceManager()->GetWrapper(ret);
         ret->AddRef();
+
+        GetResourceManager()->AddLiveResource(pRootSignature, ret);
       }
       else
       {
-        ret = new WrappedID3D12RootSignature(pRootSignature, ret, this);
+        ret = new WrappedID3D12RootSignature(ret, this);
+
+        GetResourceManager()->AddLiveResource(pRootSignature, ret);
       }
 
       WrappedID3D12RootSignature *wrapped = (WrappedID3D12RootSignature *)ret;
@@ -175,7 +179,7 @@ HRESULT WrappedID3D12Device::CreateRootSignatureFromSubobjectInLibrary(
         return ret;
       }
 
-      wrapped = new WrappedID3D12RootSignature(ResourceId(), real, this);
+      wrapped = new WrappedID3D12RootSignature(real, this);
     }
 
     wrapped->sig =

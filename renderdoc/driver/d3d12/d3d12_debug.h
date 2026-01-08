@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,13 +42,6 @@ class DXBCContainer;
 
 #define D3D12_MSAA_SAMPLECOUNT 4
 
-enum ShaderDebugConstants
-{
-  MAX_SHADER_DEBUG_QUEUED_OPS = 128,
-  COUNT_SRVS_PER_DEBUG = 25,
-  COUNT_SAMPLERS_PER_DEBUG = 2,
-};
-
 // baked indices in descriptor heaps
 enum CBVUAVSRVSlot
 {
@@ -70,7 +63,6 @@ enum CBVUAVSRVSlot
 
   SHADER_DEBUG_UAV,
   SHADER_DEBUG_MSAA_UAV,
-  SHADER_DEBUG_LANEDATA_UAV,
 
   TMP_UAV,
 
@@ -88,8 +80,7 @@ enum CBVUAVSRVSlot
   STENCIL_MSAA_SRV32x,
 
   FIRST_SHADDEBUG_SRV,
-  LAST_SHADDEBUG_SRV = FIRST_SHADDEBUG_SRV + ShaderDebugConstants::COUNT_SRVS_PER_DEBUG *
-                                                 ShaderDebugConstants::MAX_SHADER_DEBUG_QUEUED_OPS,
+  LAST_SHADDEBUG_SRV = FIRST_SHADDEBUG_SRV + 25,
 
   FIRST_PIXELHISTORY_SRV,
   LAST_PIXELHISTORY_SRV = FIRST_PIXELHISTORY_SRV + 10,
@@ -98,7 +89,6 @@ enum CBVUAVSRVSlot
 
   FIRST_PIXELHISTORY_UAV,
   LAST_PIXELHISTORY_UAV = FIRST_PIXELHISTORY_UAV + 5,
-  PIXEL_HISTORY_CLEAR_UAV,
 
   DEPTH_COPY_SRV,
   MAX_SRV_SLOT,
@@ -112,14 +102,11 @@ enum RTVSlot
   GET_TEX_RTV,
   MSAA_RTV,
   SHADER_DEBUG_RTV,
-  PIXEL_HISTORY_TYPED_RTV,
-  PIXEL_HISTORY_FLOAT_RTV,
+  PIXEL_HISTORY_RTV,
   FIRST_TMP_RTV,
   LAST_TMP_RTV = FIRST_TMP_RTV + 16,
   FIRST_WIN_RTV,
   LAST_WIN_RTV = FIRST_WIN_RTV + 768,
-
-  MAX_RTV_SLOT,
 };
 
 enum SamplerSlot
@@ -128,9 +115,7 @@ enum SamplerSlot
   FIRST_SAMP = POINT_SAMP,
   LINEAR_SAMP,
   SHADDEBUG_SAMPLER0,
-  LAST_SHADDEBUG_SAMPLER = SHADDEBUG_SAMPLER0 + ShaderDebugConstants::COUNT_SAMPLERS_PER_DEBUG *
-                                                    ShaderDebugConstants::MAX_SHADER_DEBUG_QUEUED_OPS,
-  MAX_SAMPLER_SLOT,
+  SHADDEBUG_SAMPLER1,
 };
 
 enum DSVSlot
@@ -141,8 +126,6 @@ enum DSVSlot
   TMP_DSV,
   FIRST_WIN_DSV,
   LAST_WIN_DSV = FIRST_WIN_DSV + 64,
-
-  MAX_DSV_SLOT
 };
 
 struct MeshDisplayPipelines
@@ -229,7 +212,7 @@ public:
   void PixelHistoryCopyPixel(ID3D12GraphicsCommandListX *cmd, ID3D12Resource *dstBuffer,
                              D3D12CopyPixelParams &params, size_t offset);
 
-  bool PixelHistorySetupResources(D3D12PixelHistoryResources &resources, Subresource sub,
+  bool PixelHistorySetupResources(D3D12PixelHistoryResources &resources,
                                   WrappedID3D12Resource *targetImage,
                                   const D3D12_RESOURCE_DESC &desc, uint32_t numEvents);
   bool PixelHistoryDestroyResources(D3D12PixelHistoryResources &resources);
@@ -329,6 +312,6 @@ uint32_t GetFreeRegSpace(const D3D12RootSignature &sig, const uint32_t registerS
                          D3D12DescriptorType type, D3D12_SHADER_VISIBILITY visibility);
 
 void AddDebugDescriptorsToRenderState(WrappedID3D12Device *pDevice, D3D12RenderState &rs,
-                                      bool compute, const rdcarray<PortableHandle> &handles,
+                                      const rdcarray<PortableHandle> &handles,
                                       D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t sigElem,
                                       std::set<ResourceId> &copiedHeaps);

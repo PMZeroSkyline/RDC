@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,7 +28,6 @@
 
 #include "3rdparty/glad/glad.h"
 
-#include <functional>
 #include <vector>
 
 struct OpenGLGraphicsTest : public GraphicsTest
@@ -45,11 +44,9 @@ struct OpenGLGraphicsTest : public GraphicsTest
 
   void PostInit();
 
-  GLuint MakeProgram(std::string vertSrc, std::string fragSrc, std::string geomSrc = "",
-                     std::function<void(GLuint)> prelink = {});
+  GLuint MakeProgram(std::string vertSrc, std::string fragSrc, std::string geomSrc = "");
   GLuint MakeProgram(std::string compSrc);
   GLuint MakeProgram();
-  GLuint MakePipelineProgram(GLenum type, std::string src);
   GLuint MakePipeline();
   GLuint MakeBuffer();
   GLuint MakeTexture();

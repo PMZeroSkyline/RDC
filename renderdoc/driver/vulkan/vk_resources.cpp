@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1466,7 +1466,6 @@ BlockShape GetBlockShape(VkFormat Format, uint32_t plane)
     case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
     case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
     case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
-    case VK_FORMAT_A1B5G5R5_UNORM_PACK16:
     case VK_FORMAT_B5G6R5_UNORM_PACK16:
     case VK_FORMAT_A4R4G4B4_UNORM_PACK16:
     case VK_FORMAT_A4B4G4R4_UNORM_PACK16:
@@ -1480,8 +1479,7 @@ BlockShape GetBlockShape(VkFormat Format, uint32_t plane)
     case VK_FORMAT_R8_UINT:
     case VK_FORMAT_R8_SINT:
     case VK_FORMAT_R8_SRGB:
-    case VK_FORMAT_S8_UINT:
-    case VK_FORMAT_A8_UNORM: return {1, 1, 1};
+    case VK_FORMAT_S8_UINT: return {1, 1, 1};
     case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
     case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
     case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
@@ -1821,8 +1819,7 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_B5G6R5_UNORM_PACK16: ret.type = ResourceFormatType::R5G6B5; break;
     case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
     case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
-    case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
-    case VK_FORMAT_A1B5G5R5_UNORM_PACK16: ret.type = ResourceFormatType::R5G5B5A1; break;
+    case VK_FORMAT_A1R5G5B5_UNORM_PACK16: ret.type = ResourceFormatType::R5G5B5A1; break;
     case VK_FORMAT_D16_UNORM_S8_UINT: ret.type = ResourceFormatType::D16S8; break;
     case VK_FORMAT_D24_UNORM_S8_UINT: ret.type = ResourceFormatType::D24S8; break;
     case VK_FORMAT_D32_SFLOAT_S8_UINT: ret.type = ResourceFormatType::D32S8; break;
@@ -1945,7 +1942,6 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_G16_B16R16_2PLANE_422_UNORM:
     case VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM:
     case VK_FORMAT_G16_B16R16_2PLANE_444_UNORM: ret.type = ResourceFormatType::YUV16; break;
-    case VK_FORMAT_A8_UNORM: ret.type = ResourceFormatType::A8; break;
     default: break;
   }
 
@@ -2235,21 +2231,6 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_PVRTC2_4BPP_UNORM_BLOCK_IMG:
     case VK_FORMAT_PVRTC2_4BPP_SRGB_BLOCK_IMG: ret.compCount = 4; break;
     case VK_FORMAT_UNDEFINED:
-    case VK_FORMAT_R8_BOOL_ARM:
-    case VK_FORMAT_R10X6_UINT_PACK16_ARM:
-    case VK_FORMAT_R10X6G10X6_UINT_2PACK16_ARM:
-    case VK_FORMAT_R10X6G10X6B10X6A10X6_UINT_4PACK16_ARM:
-    case VK_FORMAT_R12X4_UINT_PACK16_ARM:
-    case VK_FORMAT_R12X4G12X4_UINT_2PACK16_ARM:
-    case VK_FORMAT_R12X4G12X4B12X4A12X4_UINT_4PACK16_ARM:
-    case VK_FORMAT_R14X2_UINT_PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2_UINT_2PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2B14X2A14X2_UINT_4PACK16_ARM:
-    case VK_FORMAT_R14X2_UNORM_PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2_UNORM_2PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2B14X2A14X2_UNORM_4PACK16_ARM:
-    case VK_FORMAT_G14X2_B14X2R14X2_2PLANE_420_UNORM_3PACK16_ARM:
-    case VK_FORMAT_G14X2_B14X2R14X2_2PLANE_422_UNORM_3PACK16_ARM:
     case VK_FORMAT_MAX_ENUM: ret.compCount = 1; break;
   }
 
@@ -2505,21 +2486,6 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM:
     case VK_FORMAT_G16_B16R16_2PLANE_444_UNORM: ret.compType = CompType::UNorm; break;
     case VK_FORMAT_UNDEFINED:
-    case VK_FORMAT_R8_BOOL_ARM:
-    case VK_FORMAT_R10X6_UINT_PACK16_ARM:
-    case VK_FORMAT_R10X6G10X6_UINT_2PACK16_ARM:
-    case VK_FORMAT_R10X6G10X6B10X6A10X6_UINT_4PACK16_ARM:
-    case VK_FORMAT_R12X4_UINT_PACK16_ARM:
-    case VK_FORMAT_R12X4G12X4_UINT_2PACK16_ARM:
-    case VK_FORMAT_R12X4G12X4B12X4A12X4_UINT_4PACK16_ARM:
-    case VK_FORMAT_R14X2_UINT_PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2_UINT_2PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2B14X2A14X2_UINT_4PACK16_ARM:
-    case VK_FORMAT_R14X2_UNORM_PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2_UNORM_2PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2B14X2A14X2_UNORM_4PACK16_ARM:
-    case VK_FORMAT_G14X2_B14X2R14X2_2PLANE_420_UNORM_3PACK16_ARM:
-    case VK_FORMAT_G14X2_B14X2R14X2_2PLANE_422_UNORM_3PACK16_ARM:
     case VK_FORMAT_MAX_ENUM: ret.compType = CompType::Typeless; break;
   }
 
@@ -2775,21 +2741,6 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_G16_B16R16_2PLANE_444_UNORM:
     case VK_FORMAT_R16G16_SFIXED5_NV: ret.compByteWidth = 2; break;
     case VK_FORMAT_UNDEFINED:
-    case VK_FORMAT_R8_BOOL_ARM:
-    case VK_FORMAT_R10X6_UINT_PACK16_ARM:
-    case VK_FORMAT_R10X6G10X6_UINT_2PACK16_ARM:
-    case VK_FORMAT_R10X6G10X6B10X6A10X6_UINT_4PACK16_ARM:
-    case VK_FORMAT_R12X4_UINT_PACK16_ARM:
-    case VK_FORMAT_R12X4G12X4_UINT_2PACK16_ARM:
-    case VK_FORMAT_R12X4G12X4B12X4A12X4_UINT_4PACK16_ARM:
-    case VK_FORMAT_R14X2_UINT_PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2_UINT_2PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2B14X2A14X2_UINT_4PACK16_ARM:
-    case VK_FORMAT_R14X2_UNORM_PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2_UNORM_2PACK16_ARM:
-    case VK_FORMAT_R14X2G14X2B14X2A14X2_UNORM_4PACK16_ARM:
-    case VK_FORMAT_G14X2_B14X2R14X2_2PLANE_420_UNORM_3PACK16_ARM:
-    case VK_FORMAT_G14X2_B14X2R14X2_2PLANE_422_UNORM_3PACK16_ARM:
     case VK_FORMAT_MAX_ENUM: ret.compByteWidth = 1; break;
   }
 
@@ -2939,7 +2890,6 @@ VkFormat MakeVkFormat(ResourceFormat fmt)
       case ResourceFormatType::D24S8: ret = VK_FORMAT_D24_UNORM_S8_UINT; break;
       case ResourceFormatType::D32S8: ret = VK_FORMAT_D32_SFLOAT_S8_UINT; break;
       case ResourceFormatType::S8: ret = VK_FORMAT_S8_UINT; break;
-      case ResourceFormatType::A8: ret = VK_FORMAT_A8_UNORM; break;
       case ResourceFormatType::YUV8:
       {
         int subsampling = fmt.YUVSubsampling();
@@ -3613,8 +3563,8 @@ RenderPassInfo::RenderPassInfo(const VkRenderPassCreateInfo2 &ci)
     indexRemapTable[i] = a;
 
     // VK_KHR_separate_depth_stencil_layouts
-    const VkAttachmentDescriptionStencilLayout *separateStencil =
-        (const VkAttachmentDescriptionStencilLayout *)FindNextStruct(
+    VkAttachmentDescriptionStencilLayout *separateStencil =
+        (VkAttachmentDescriptionStencilLayout *)FindNextStruct(
             &ci.pAttachments[i], VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_STENCIL_LAYOUT);
 
     if(separateStencil)
@@ -3729,8 +3679,8 @@ RenderPassInfo::RenderPassInfo(const VkRenderPassCreateInfo2 &ci)
         if(IsStencilFormat(ci.pAttachments[index].format))
         {
           // VK_KHR_separate_depth_stencil_layouts
-          const VkAttachmentDescriptionStencilLayout *separateStencil =
-              (const VkAttachmentDescriptionStencilLayout *)FindNextStruct(
+          VkAttachmentDescriptionStencilLayout *separateStencil =
+              (VkAttachmentDescriptionStencilLayout *)FindNextStruct(
                   &ci.pAttachments[index], VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_STENCIL_LAYOUT);
 
           if(separateStencil)
@@ -4016,10 +3966,6 @@ VkResourceRecord::~VkResourceRecord()
 {
   // bufferviews and imageviews have non-owning pointers to the sparseinfo struct
   if(resType == eResBuffer || resType == eResImage)
-    SAFE_DELETE(resInfo);
-
-  // for image views with descriptors, they have a duplicated resInfo
-  if(resType == eResImageView && resInfo && resInfo->parentResInfo != resInfo)
     SAFE_DELETE(resInfo);
 
   if(resType == eResInstance || resType == eResDevice || resType == eResPhysicalDevice)
@@ -4381,7 +4327,6 @@ TEST_CASE("Vulkan formats", "[format][vulkan]")
       VK_FORMAT_R5G5B5A1_UNORM_PACK16,
       VK_FORMAT_B5G5R5A1_UNORM_PACK16,
       VK_FORMAT_A1R5G5B5_UNORM_PACK16,
-      VK_FORMAT_A1B5G5R5_UNORM_PACK16,
       VK_FORMAT_R8_UNORM,
       VK_FORMAT_R8_SNORM,
       VK_FORMAT_R8_USCALED,
@@ -4389,7 +4334,6 @@ TEST_CASE("Vulkan formats", "[format][vulkan]")
       VK_FORMAT_R8_UINT,
       VK_FORMAT_R8_SINT,
       VK_FORMAT_R8_SRGB,
-      VK_FORMAT_A8_UNORM,
       VK_FORMAT_R8G8_UNORM,
       VK_FORMAT_R8G8_SNORM,
       VK_FORMAT_R8G8_USCALED,
@@ -4662,10 +4606,6 @@ TEST_CASE("Vulkan formats", "[format][vulkan]")
       if(f == VK_FORMAT_A1R5G5B5_UNORM_PACK16)
       {
         CHECK(reconstructed == VK_FORMAT_R5G5B5A1_UNORM_PACK16);
-      }
-      else if(f == VK_FORMAT_A1B5G5R5_UNORM_PACK16)
-      {
-        CHECK(reconstructed == VK_FORMAT_B5G5R5A1_UNORM_PACK16);
       }
       else if(f == VK_FORMAT_A8B8G8R8_UNORM_PACK32)
       {

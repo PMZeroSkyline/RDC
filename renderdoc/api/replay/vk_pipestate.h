@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -85,26 +85,11 @@ struct DescriptorSet
       return pushDescriptor < o.pushDescriptor;
     return false;
   }
-
-  DOCUMENT(R"(The :class:`ResourceId` of the descriptor set layout that matches this set.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the descriptor set layout that matches this set.");
   ResourceId layoutResourceId;
-
-  DOCUMENT(R"(The :class:`ResourceId` of the descriptor set object, if a real descriptor set is bound.
-
-.. note::
-  If using descriptor buffers this value may be unset, see :data:`descriptorBufferIndex`.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the descriptor set object.");
   ResourceId descriptorSetResourceId;
-
-  DOCUMENT(R"(Indicates if this is a virtual 'push' descriptor set.
-
-:type: bool
-)");
+  DOCUMENT("Indicates if this is a virtual 'push' descriptor set.");
   bool pushDescriptor = false;
 
   DOCUMENT(R"(A list of dynamic offsets to be applied to specific bindings, on top of the contents
@@ -116,92 +101,6 @@ of their descriptors.
 :type: List[VKDynamicOffset]
 )");
   rdcarray<DynamicOffset> dynamicOffsets;
-
-  DOCUMENT(R"(The index of the descriptor buffer to be used, or ``-1`` if no descriptor buffer is used.
-
-:type: int
-)");
-  int32_t descriptorBufferIndex = -1;
-
-  DOCUMENT(R"(The byte offset from the start of the descriptor buffer at index :data:`descriptorBufferIndex` where this set's data is.
-
-:type: int
-)");
-  uint64_t descriptorBufferByteOffset = 0;
-
-  DOCUMENT(R"(Indicates if this is a virtual descriptor set for binding embedded immutable samplers.
-
-:type: bool
-)");
-  bool descriptorBufferEmbeddedSamplers = false;
-};
-
-DOCUMENT("A single descriptor buffer binding.");
-struct DescriptorBuffer
-{
-  DOCUMENT("");
-  DescriptorBuffer() = default;
-  DescriptorBuffer(const DescriptorBuffer &) = default;
-  DescriptorBuffer &operator=(const DescriptorBuffer &) = default;
-
-  bool operator==(const DescriptorBuffer &o) const
-  {
-    return buffer == o.buffer && offset == o.offset && pushDescriptor == o.pushDescriptor &&
-           pushBuffer == o.pushBuffer && resourceBuffer == o.resourceBuffer &&
-           samplerBuffer == o.samplerBuffer;
-  }
-  bool operator<(const DescriptorBuffer &o) const
-  {
-    if(!(buffer == o.buffer))
-      return buffer < o.buffer;
-    if(!(offset == o.offset))
-      return offset < o.offset;
-    if(!(pushDescriptor == o.pushDescriptor))
-      return pushDescriptor < o.pushDescriptor;
-    if(!(pushBuffer == o.pushBuffer))
-      return pushBuffer < o.pushBuffer;
-    if(!(resourceBuffer == o.resourceBuffer))
-      return resourceBuffer < o.resourceBuffer;
-    if(!(samplerBuffer == o.samplerBuffer))
-      return samplerBuffer < o.samplerBuffer;
-    return false;
-  }
-
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer object being bound.
-
-:type: ResourceId
-)");
-  ResourceId buffer;
-
-  DOCUMENT(R"(The offset in bytes from the base of the buffer object to the start of the bound region.
-
-:type: int
-)");
-  uint64_t offset = 0;
-
-  DOCUMENT(R"(Indicates if this is the 'push' descriptor buffer.
-
-:type: bool
-)");
-  bool pushDescriptor = false;
-
-  DOCUMENT(R"(For push descriptors where a buffer is required, the :class:`ResourceId` of the push buffer object.
-
-:type: ResourceId
-)");
-  ResourceId pushBuffer;
-
-  DOCUMENT(R"(Indicates if this buffer can contain resources (buffers and images).
-
-:type: bool
-)");
-  bool resourceBuffer = false;
-
-  DOCUMENT(R"(Indicates if this buffer can contain samplers.
-
-:type: bool
-)");
-  bool samplerBuffer = false;
 };
 
 DOCUMENT("Describes the object and descriptor set bindings of a Vulkan pipeline object.");
@@ -212,47 +111,28 @@ struct Pipeline
   Pipeline(const Pipeline &) = default;
   Pipeline &operator=(const Pipeline &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the pipeline object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the pipeline object.");
   ResourceId pipelineResourceId;
-  DOCUMENT(R"(The :class:`ResourceId` of the compute pipeline layout object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the compute pipeline layout object.");
   ResourceId pipelineComputeLayoutResourceId;
   DOCUMENT(R"(The :class:`ResourceId` of the pre-rasterization pipeline layout object.
 
 When not using pipeline libraries, this will be identical to :data:`pipelineFragmentLayoutResourceId`.
-
-:type: ResourceId
 )");
   ResourceId pipelinePreRastLayoutResourceId;
   DOCUMENT(R"(The :class:`ResourceId` of the fragment pipeline layout object.
 
 When not using pipeline libraries, this will be identical to :data:`pipelinePreRastLayoutResourceId`.
-
-:type: ResourceId
 )");
   ResourceId pipelineFragmentLayoutResourceId;
-  DOCUMENT(R"(The flags used to create the pipeline object.
-
-:type: int
-)");
-  uint64_t flags = 0;
+  DOCUMENT("The flags used to create the pipeline object.");
+  uint32_t flags = 0;
 
   DOCUMENT(R"(The bound descriptor sets.
 
 :type: List[VKDescriptorSet]
 )");
   rdcarray<DescriptorSet> descriptorSets;
-
-  DOCUMENT(R"(The bound descriptor buffers.
-
-:type: List[VKDescriptorBuffer]
-)");
-  rdcarray<DescriptorBuffer> descriptorBuffers;
 };
 
 DOCUMENT("Describes the Vulkan index buffer binding.")
@@ -263,28 +143,14 @@ struct IndexBuffer
   IndexBuffer(const IndexBuffer &) = default;
   IndexBuffer &operator=(const IndexBuffer &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the index buffer.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the index buffer.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(The byte offset from the start of the buffer to the beginning of the index data.
-
-:type: int
-)");
+  DOCUMENT("The byte offset from the start of the buffer to the beginning of the index data.");
   uint64_t byteOffset = 0;
-
-  DOCUMENT(R"(The byte size from the start offset to the end of the index data.
-
-:type: int
-)");
-  uint64_t byteSize = 0;
 
   DOCUMENT(R"(The number of bytes for each index in the index buffer. Typically 2 or 4 bytes but
 it can be 0 if no index buffer is bound.
-
-:type: int
 )");
   uint32_t byteStride = 0;
 };
@@ -297,10 +163,7 @@ struct InputAssembly
   InputAssembly(const InputAssembly &) = default;
   InputAssembly &operator=(const InputAssembly &) = default;
 
-  DOCUMENT(R"(``True`` if primitive restart is enabled for strip primitives.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if primitive restart is enabled for strip primitives.");
   bool primitiveRestartEnable = false;
 
   DOCUMENT(R"(The index buffer binding.
@@ -341,25 +204,18 @@ struct VertexAttribute
       return byteOffset < o.byteOffset;
     return false;
   }
-  DOCUMENT(R"(The location in the shader that is bound to this attribute.
-
-:type: int
-)");
+  DOCUMENT("The location in the shader that is bound to this attribute.");
   uint32_t location = 0;
-  DOCUMENT(R"(The vertex binding where data will be sourced from.
-
-:type: int
-)");
+  DOCUMENT("The vertex binding where data will be sourced from.");
   uint32_t binding = 0;
   DOCUMENT(R"(The format describing how the input element is interpreted.
 
 :type: ResourceFormat
 )");
   ResourceFormat format;
-  DOCUMENT(R"(The byte offset from the start of each vertex data in the :data:`binding` to this attribute.
-
-:type: int
-)");
+  DOCUMENT(
+      "The byte offset from the start of each vertex data in the :data:`binding` to this "
+      "attribute.");
   uint32_t byteOffset = 0;
 };
 
@@ -386,15 +242,9 @@ struct VertexBinding
       return instanceDivisor < o.instanceDivisor;
     return false;
   }
-  DOCUMENT(R"(The vertex binding where data will be sourced from.
-
-:type: int
-)");
+  DOCUMENT("The vertex binding where data will be sourced from.");
   uint32_t vertexBufferBinding = 0;
-  DOCUMENT(R"(``True`` if the vertex data is instance-rate.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the vertex data is instance-rate.");
   bool perInstance = false;
   DOCUMENT(R"(The instance rate divisor.
 
@@ -402,8 +252,6 @@ If this is ``0`` then every vertex gets the same value.
 
 If it's ``1`` then one element is read for each instance, and for ``N`` greater than ``1`` then
 ``N`` instances read the same element before advancing.
-
-:type: int
 )");
   uint32_t instanceDivisor = 1;
 };
@@ -433,25 +281,13 @@ struct VertexBuffer
       return byteSize < o.byteSize;
     return false;
   }
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer bound to this slot.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the buffer bound to this slot.");
   ResourceId resourceId;
-  DOCUMENT(R"(The byte offset from the start of the buffer to the beginning of the vertex data.
-
-:type: int
-)");
+  DOCUMENT("The byte offset from the start of the buffer to the beginning of the vertex data.");
   uint64_t byteOffset = 0;
-  DOCUMENT(R"(The byte stride between the start of one set of vertex data and the next.
-
-:type: int
-)");
+  DOCUMENT("The byte stride between the start of one set of vertex data and the next.");
   uint32_t byteStride = 0;
-  DOCUMENT(R"(The size of the vertex buffer.
-
-:type: int
-)");
+  DOCUMENT("The size of the vertex buffer.");
   uint32_t byteSize = 0;
 };
 
@@ -488,44 +324,27 @@ struct Shader
   Shader(const Shader &) = default;
   Shader &operator=(const Shader &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the shader module object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the shader module object.");
   ResourceId resourceId;
-  DOCUMENT(R"(The name of the entry point in the shader module that is used.
-
-:type: str)");
+  DOCUMENT("The name of the entry point in the shader module that is used.");
   rdcstr entryPoint;
 
   DOCUMENT(R"(The reflection data for this shader.
 
 :type: ShaderReflection
 )");
-  const ShaderReflection *reflection = NULL;
+  ShaderReflection *reflection = NULL;
 
-  DOCUMENT(R"(A :class:`ShaderStage` identifying which stage this shader is bound to.
-
-:type: ShaderStage
-)");
+  DOCUMENT("A :class:`ShaderStage` identifying which stage this shader is bound to.");
   ShaderStage stage = ShaderStage::Vertex;
 
-  DOCUMENT(R"(The byte offset into the push constant data that is visible to this shader.
-
-:type: int
-)");
+  DOCUMENT("The byte offset into the push constant data that is visible to this shader.");
   uint32_t pushConstantRangeByteOffset = 0;
 
-  DOCUMENT(R"(The number of bytes in the push constant data that is visible to this shader.
-
-:type: int
-)");
+  DOCUMENT("The number of bytes in the push constant data that is visible to this shader.");
   uint32_t pushConstantRangeByteSize = 0;
 
-  DOCUMENT(R"(The required subgroup size specified for this shader at pipeline creation time.
-
-:type: int
-)");
+  DOCUMENT("The required subgroup size specified for this shader at pipeline creation time.");
   uint32_t requiredSubgroupSize = 0;
 
   DOCUMENT(R"(The provided specialization constant data. Shader constants store the byte offset into
@@ -545,10 +364,7 @@ and size into specializationData can be obtained from the reflection info.
 )")
   rdcarray<uint32_t> specializationIds;
 
-  DOCUMENT(R"(Whether the shader is a shader object or shader module.
-
-:type: bool
-)");
+  DOCUMENT("Whether the shader is a shader object or shader module.");
   bool shaderObject = false;
 };
 
@@ -560,16 +376,10 @@ struct Tessellation
   Tessellation(const Tessellation &) = default;
   Tessellation &operator=(const Tessellation &) = default;
 
-  DOCUMENT(R"(The number of control points in each input patch.
-
-:type: int
-)");
+  DOCUMENT("The number of control points in each input patch.");
   uint32_t numControlPoints = 0;
 
-  DOCUMENT(R"(``True`` if the tessellation domain origin is upper-left, ``False`` if lower-left.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the tessellation domain origin is upper-left, ``False`` if lower-left.");
   bool domainOriginUpperLeft = true;
 };
 
@@ -605,40 +415,22 @@ struct XFBBuffer
     return false;
   }
 
-  DOCUMENT(R"(A flag indicating if this buffer is active or not.
-
-:type: bool
-)");
+  DOCUMENT("A flag indicating if this buffer is active or not.");
   bool active = false;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the bound data buffer.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the bound data buffer.");
   ResourceId bufferResourceId;
 
-  DOCUMENT(R"(The offset in bytes to the start of the data in the :data:`bufferResourceId`.
-
-:type: int
-)");
+  DOCUMENT("The offset in bytes to the start of the data in the :data:`bufferResourceId`.");
   uint64_t byteOffset = 0;
 
-  DOCUMENT(R"(The size in bytes of the data buffer.
-
-:type: int
-)");
+  DOCUMENT("The size in bytes of the data buffer.");
   uint64_t byteSize = 0;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer storing the counter value (if set).
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the buffer storing the counter value (if set).");
   ResourceId counterBufferResourceId;
 
-  DOCUMENT(R"(The offset in bytes to the counter in the :data:`counterBufferResourceId`.
-
-:type: int
-)");
+  DOCUMENT("The offset in bytes to the counter in the :data:`counterBufferResourceId`.");
   uint64_t counterBufferOffset = 0;
 };
 
@@ -687,25 +479,13 @@ struct RenderArea
     return false;
   }
 
-  DOCUMENT(R"(The X co-ordinate of the render area.
-
-:type: int
-)");
+  DOCUMENT("The X co-ordinate of the render area.");
   int32_t x = 0;
-  DOCUMENT(R"(The Y co-ordinate of the render area.
-
-:type: int
-)");
+  DOCUMENT("The Y co-ordinate of the render area.");
   int32_t y = 0;
-  DOCUMENT(R"(The width of the render area.
-
-:type: int
-)");
+  DOCUMENT("The width of the render area.");
   int32_t width = 0;
-  DOCUMENT(R"(The height of the render area.
-
-:type: int
-)");
+  DOCUMENT("The height of the render area.");
   int32_t height = 0;
 };
 
@@ -767,15 +547,10 @@ and a fragment in none of them is discarded.
 .. note::
   A ``True`` value and an empty list of :data:`discardRectangles` means the test is effectively
   disabled, since with no rectangles no fragment can be inside one.
-
-:type: bool
 )");
   bool discardRectanglesExclusive = true;
 
-  DOCUMENT(R"(Whether depth clip range is set to [-1, 1] through VK_EXT_depth_clip_control.
-
-:type: bool
-)");
+  DOCUMENT(R"(Whether depth clip range is set to [-1, 1] through VK_EXT_depth_clip_control.)");
   bool depthNegativeOneToOne = false;
 };
 
@@ -789,123 +564,63 @@ struct Rasterizer
 
   DOCUMENT(R"(``True`` if pixels outside of the near and far depth planes should be clamped and
 to ``0.0`` to ``1.0``.
-
-:type: bool
 )");
   bool depthClampEnable = false;
-
   DOCUMENT(R"(``True`` if pixels outside of the near and far depth planes should be clipped.
 
 .. note::
   In Vulkan 1.0 this value was implicitly set to the opposite of :data:`depthClampEnable`, but with
   later extensions & versions it can be set independently.
-
-:type: bool
 )");
   bool depthClipEnable = true;
-
-  DOCUMENT(R"(``True`` if primitives should be discarded during rasterization.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if primitives should be discarded during rasterization.");
   bool rasterizerDiscardEnable = false;
-
   DOCUMENT(R"(``True`` if counter-clockwise polygons are front-facing.
 ``False`` if clockwise polygons are front-facing.
-
-:type: bool
 )");
   bool frontCCW = false;
-
-  DOCUMENT(R"(The polygon :class:`FillMode`.
-
-:type: FillMode
-)");
+  DOCUMENT("The polygon :class:`FillMode`.");
   FillMode fillMode = FillMode::Solid;
-
-  DOCUMENT(R"(The polygon :class:`CullMode`.
-
-:type: CullMode
-)");
+  DOCUMENT("The polygon :class:`CullMode`.");
   CullMode cullMode = CullMode::NoCull;
 
-  DOCUMENT(R"(The active conservative rasterization mode.
-
-:type: ConservativeRaster
-)");
+  DOCUMENT("The active conservative rasterization mode.");
   ConservativeRaster conservativeRasterization = ConservativeRaster::Disabled;
 
   DOCUMENT(R"(The extra size in pixels to increase primitives by during conservative rasterization,
 in the x and y directions in screen space.
 
 See :data:`conservativeRasterizationMode`
-
-:type: float
 )");
   float extraPrimitiveOverestimationSize = 0.0f;
 
-  DOCUMENT(R"(Whether the provoking vertex is the first one (default behaviour).
-
-:type: bool
-)");
+  DOCUMENT("Whether the provoking vertex is the first one (default behaviour).");
   bool provokingVertexFirst = true;
-
-  DOCUMENT(R"(Whether depth biasing is enabled.
-
-:type: bool
-)");
+  DOCUMENT("Whether depth biasing is enabled.");
   bool depthBiasEnable = false;
-
-  DOCUMENT(R"(The fixed depth bias value to apply to z-values.
-
-:type: float
-)");
+  DOCUMENT("The fixed depth bias value to apply to z-values.");
   float depthBias = 0.0f;
-
   DOCUMENT(R"(The clamp value for calculated depth bias from :data:`depthBias` and
 :data:`slopeScaledDepthBias`
-
-:type: float
 )");
   float depthBiasClamp = 0.0f;
-
-  DOCUMENT(R"(The slope-scaled depth bias value to apply to z-values.
-
-:type: float
-)");
+  DOCUMENT("The slope-scaled depth bias value to apply to z-values.");
   float slopeScaledDepthBias = 0.0f;
-
-  DOCUMENT(R"(The fixed line width in pixels.
-
-:type: float
-)");
+  DOCUMENT("The fixed line width in pixels.");
   float lineWidth = 0.0f;
 
-  DOCUMENT(R"(The line rasterization mode.
-
-:type: LineRaster
-)");
+  DOCUMENT("The line rasterization mode.");
   LineRaster lineRasterMode = LineRaster::Default;
-
-  DOCUMENT(R"(The line stipple factor, or 0 if line stipple is disabled.
-
-:type: int
-)");
+  DOCUMENT("The line stipple factor, or 0 if line stipple is disabled.");
   uint32_t lineStippleFactor = 0;
-
-  DOCUMENT(R"(The line stipple bit-pattern.
-
-:type: int
-)");
+  DOCUMENT("The line stipple bit-pattern.");
   uint16_t lineStipplePattern = 0;
-
   DOCUMENT(R"(The current pipeline fragment shading rate. This will always be 1x1 when a fragment
 shading rate has not been specified.
 
 :type: Tuple[int,int]
 )");
   rdcpair<uint32_t, uint32_t> pipelineShadingRate = {1, 1};
-
   DOCUMENT(R"(The fragment shading rate combiners.
 
 The combiners are applied as follows, according to the Vulkan spec:
@@ -933,15 +648,9 @@ struct SampleLocations
   SampleLocations(const SampleLocations &) = default;
   SampleLocations &operator=(const SampleLocations &) = default;
 
-  DOCUMENT(R"(The width in pixels of the region configured.
-
-:type: int
-)");
+  DOCUMENT("The width in pixels of the region configured.");
   uint32_t gridWidth = 1;
-  DOCUMENT(R"(The height in pixels of the region configured.
-
-:type: int
-)");
+  DOCUMENT("The height in pixels of the region configured.");
   uint32_t gridHeight = 1;
   DOCUMENT(R"(The custom sample locations. Only x and y are valid, z and w are set to 0.0.
 
@@ -960,25 +669,13 @@ struct MultiSample
   MultiSample(const MultiSample &) = default;
   MultiSample &operator=(const MultiSample &) = default;
 
-  DOCUMENT(R"(How many samples to use when rasterizing.
-
-:type: int
-)");
+  DOCUMENT("How many samples to use when rasterizing.");
   uint32_t rasterSamples = 0;
-  DOCUMENT(R"(``True`` if rendering should happen at sample-rate frequency.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if rendering should happen at sample-rate frequency.");
   bool sampleShadingEnable = false;
-  DOCUMENT(R"(The minimum sample shading rate.
-
-:type: float
-)");
+  DOCUMENT("The minimum sample shading rate.");
   float minSampleShading = 0.0f;
-  DOCUMENT(R"(A mask that generated samples should be masked with using bitwise ``AND``.
-
-:type: int
-)");
+  DOCUMENT("A mask that generated samples should be masked with using bitwise ``AND``.");
   uint32_t sampleMask = 0;
   DOCUMENT(R"(The custom sample locations configuration.
 
@@ -995,15 +692,9 @@ struct ColorBlendState
   ColorBlendState(const ColorBlendState &) = default;
   ColorBlendState &operator=(const ColorBlendState &) = default;
 
-  DOCUMENT(R"(``True`` if alpha-to-coverage should be used when blending to an MSAA target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if alpha-to-coverage should be used when blending to an MSAA target.");
   bool alphaToCoverageEnable = false;
-  DOCUMENT(R"(``True`` if alpha-to-one should be used when blending to an MSAA target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if alpha-to-one should be used when blending to an MSAA target.");
   bool alphaToOneEnable = false;
 
   DOCUMENT(R"(The blend operations for each target.
@@ -1027,31 +718,16 @@ struct DepthStencil
   DepthStencil(const DepthStencil &) = default;
   DepthStencil &operator=(const DepthStencil &) = default;
 
-  DOCUMENT(R"(``True`` if depth testing should be performed.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth testing should be performed.");
   bool depthTestEnable = false;
-  DOCUMENT(R"(``True`` if depth values should be written to the depth target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth values should be written to the depth target.");
   bool depthWriteEnable = false;
-  DOCUMENT(R"(``True`` if depth bounds tests should be applied.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth bounds tests should be applied.");
   bool depthBoundsEnable = false;
-  DOCUMENT(R"(The :class:`CompareFunction` to use for testing depth values.
-
-:type: CompareFunction
-)");
+  DOCUMENT("The :class:`CompareFunction` to use for testing depth values.");
   CompareFunction depthFunction = CompareFunction::AlwaysTrue;
 
-  DOCUMENT(R"(``True`` if stencil operations should be performed.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if stencil operations should be performed.");
   bool stencilTestEnable = false;
 
   DOCUMENT(R"(The stencil state for front-facing polygons.
@@ -1066,15 +742,9 @@ struct DepthStencil
 )");
   StencilFace backFace;
 
-  DOCUMENT(R"(The near plane bounding value.
-
-:type: float
-)");
+  DOCUMENT("The near plane bounding value.");
   float minDepthBounds = 0.0f;
-  DOCUMENT(R"(The far plane bounding value.
-
-:type: float
-)");
+  DOCUMENT("The far plane bounding value.");
   float maxDepthBounds = 0.0f;
 };
 
@@ -1092,34 +762,19 @@ struct RenderPass
   RenderPass(const RenderPass &) = default;
   RenderPass &operator=(const RenderPass &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the render pass.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the render pass.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(Whether or not dynamic rendering is in use (no render pass or framebuffer objects).
-
-:type: bool
-)");
+  DOCUMENT("Whether or not dynamic rendering is in use (no render pass or framebuffer objects).");
   bool dynamic = false;
 
-  DOCUMENT(R"(Whether or not dynamic rendering is currently suspended.
-
-:type: bool
-)");
+  DOCUMENT("Whether or not dynamic rendering is currently suspended.");
   bool suspended = false;
 
-  DOCUMENT(R"(Whether or not there is a potential feedback loop.
-
-:type: bool
-)");
+  DOCUMENT("Whether or not there is a potential feedback loop.");
   bool feedbackLoop = false;
 
-  DOCUMENT(R"(The index of the current active subpass.
-
-:type: int
-)");
+  DOCUMENT("The index of the current active subpass.");
   uint32_t subpass;
 
   // VKTODOMED renderpass and subpass information here
@@ -1145,15 +800,11 @@ attachments.
   DOCUMENT(R"(An index into the framebuffer attachments for the depth-stencil attachment.
 
 If there is no depth-stencil attachment, this index is ``-1``.
-
-:type: int
 )");
   int32_t depthstencilAttachment = -1;
   DOCUMENT(R"(An index into the framebuffer attachments for the depth-stencil resolve attachment.
 
 If there is no depth-stencil resolve attachment, this index is ``-1``.
-
-:type: int
 )");
   int32_t depthstencilResolveAttachment = -1;
 
@@ -1164,8 +815,6 @@ If there is no fragment density attachment, this index is ``-1``.
 .. note::
   Only one at most of :data:`fragmentDensityAttachment` and :data:`shadingRateAttachment` will be
   set.
-
-:type: int
 )");
   int32_t fragmentDensityAttachment = -1;
 
@@ -1176,8 +825,6 @@ If there is no fragment shading rate attachment, this index is ``-1``.
 .. note::
   Only one at most of :data:`fragmentDensityAttachment` and :data:`shadingRateAttachment` will be
   set.
-
-:type: int
 )");
   int32_t shadingRateAttachment = -1;
 
@@ -1216,8 +863,6 @@ If the list is empty, fdm_offset is disabled and rendering is as normal.
 samples used to render this subpass.
 
 If the subpass is not internally multisampled, tileOnlyMSAASampleCount is set to 0.
-
-:type: int
 )");
   uint32_t tileOnlyMSAASampleCount = 0;
 
@@ -1233,28 +878,16 @@ If the subpass is not internally multisampled, tileOnlyMSAASampleCount is set to
 )");
   rdcarray<uint32_t> colorAttachmentInputIndices;
 
-  DOCUMENT(R"(Whether or not depth input attachment index is implicit (dynamic rendering).
-
-:type: bool
-)");
+  DOCUMENT("Whether or not depth input attachment index is implicit (dynamic rendering).");
   bool isDepthInputAttachmentIndexImplicit = true;
 
-  DOCUMENT(R"(Whether or not stencil  input attachment index is implicit (dynamic rendering).
-
-:type: bool
-)");
+  DOCUMENT("Whether or not stencil  input attachment index is implicit (dynamic rendering).");
   bool isStencilInputAttachmentIndexImplicit = true;
 
-  DOCUMENT(R"(Depth input attachment index if explicit (dynamic rendering).
-
-:type: int
-)");
+  DOCUMENT("Depth input attachment index if explicit (dynamic rendering).");
   uint32_t depthInputAttachmentIndex = UINT32_MAX;
 
-  DOCUMENT(R"(Stencil input attachment index if explicit (dynamic rendering).
-
-:type: int
-)");
+  DOCUMENT("Stencil input attachment index if explicit (dynamic rendering).");
   uint32_t stencilInputAttachmentIndex = UINT32_MAX;
 
   static const uint32_t AttachmentUnused = ~0U;
@@ -1268,10 +901,7 @@ struct Framebuffer
   Framebuffer(const Framebuffer &) = default;
   Framebuffer &operator=(const Framebuffer &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the framebuffer object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the framebuffer object.");
   ResourceId resourceId;
 
   DOCUMENT(R"(The attachments of this framebuffer.
@@ -1280,20 +910,11 @@ struct Framebuffer
 )");
   rdcarray<Descriptor> attachments;
 
-  DOCUMENT(R"(The width of this framebuffer in pixels.
-
-:type: int
-)");
+  DOCUMENT("The width of this framebuffer in pixels.");
   uint32_t width = 0;
-  DOCUMENT(R"(The height of this framebuffer in pixels.
-
-:type: int
-)");
+  DOCUMENT("The height of this framebuffer in pixels.");
   uint32_t height = 0;
-  DOCUMENT(R"(The number of layers in this framebuffer.
-
-:type: int
-)");
+  DOCUMENT("The number of layers in this framebuffer.");
   uint32_t layers = 0;
 };
 
@@ -1321,22 +942,13 @@ struct CurrentPass
 )");
   RenderArea renderArea;
 
-  DOCUMENT(R"(If feedback loops are allowed on color attachments
-
-:type: bool
-)");
+  DOCUMENT("If feedback loops are allowed on color attachments");
   bool colorFeedbackAllowed = false;
 
-  DOCUMENT(R"(If feedback loops are allowed on depth attachments
-
-:type: bool
-)");
+  DOCUMENT("If feedback loops are allowed on depth attachments");
   bool depthFeedbackAllowed = false;
 
-  DOCUMENT(R"(If feedback loops are allowed on stencil attachments
-
-:type: bool
-)");
+  DOCUMENT("If feedback loops are allowed on stencil attachments");
   bool stencilFeedbackAllowed = false;
 };
 
@@ -1367,30 +979,15 @@ struct ImageLayout
       return name < o.name;
     return false;
   }
-  DOCUMENT(R"(The first mip level used in the range.
-
-:type: int
-)");
+  DOCUMENT("The first mip level used in the range.");
   uint32_t baseMip = 0;
-  DOCUMENT(R"(For 3D textures and texture arrays, the first slice used in the range.
-
-:type: int
-)");
+  DOCUMENT("For 3D textures and texture arrays, the first slice used in the range.");
   uint32_t baseLayer = 0;
-  DOCUMENT(R"(The number of mip levels in the range.
-
-:type: int
-)");
+  DOCUMENT("The number of mip levels in the range.");
   uint32_t numMip = 1;
-  DOCUMENT(R"(For 3D textures and texture arrays, the number of array slices in the range.
-
-:type: int
-)");
+  DOCUMENT("For 3D textures and texture arrays, the number of array slices in the range.");
   uint32_t numLayer = 1;
-  DOCUMENT(R"(The name of the current image state.
-
-:type: str
-)");
+  DOCUMENT("The name of the current image state.");
   rdcstr name;
 };
 
@@ -1409,10 +1006,7 @@ struct ImageData
       return resourceId < o.resourceId;
     return false;
   }
-  DOCUMENT(R"(The :class:`ResourceId` of the image.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the image.");
   ResourceId resourceId;
 
   DOCUMENT(R"(The subresource regions in this resource.
@@ -1430,28 +1024,17 @@ struct ConditionalRendering
   ConditionalRendering(const ConditionalRendering &) = default;
   ConditionalRendering &operator=(const ConditionalRendering &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer containing the predicate for conditional rendering.
-
-:type: ResourceId
-)");
+  DOCUMENT(
+      "The :class:`ResourceId` of the buffer containing the predicate for conditional rendering.");
   ResourceId bufferId;
 
-  DOCUMENT(R"(The byte offset into buffer where the predicate is located.
-
-:type: int
-)");
+  DOCUMENT("The byte offset into buffer where the predicate is located.");
   uint64_t byteOffset = 0;
 
-  DOCUMENT(R"(``True`` if predicate result is inverted.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if predicate result is inverted.");
   bool isInverted = false;
 
-  DOCUMENT(R"(``True`` if the current predicate would render.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the current predicate would render.");
   bool isPassing = false;
 };
 
@@ -1603,7 +1186,6 @@ struct State
 
 DECLARE_REFLECTION_STRUCT(VKPipe::DynamicOffset);
 DECLARE_REFLECTION_STRUCT(VKPipe::DescriptorSet);
-DECLARE_REFLECTION_STRUCT(VKPipe::DescriptorBuffer);
 DECLARE_REFLECTION_STRUCT(VKPipe::Pipeline);
 DECLARE_REFLECTION_STRUCT(VKPipe::IndexBuffer);
 DECLARE_REFLECTION_STRUCT(VKPipe::InputAssembly);

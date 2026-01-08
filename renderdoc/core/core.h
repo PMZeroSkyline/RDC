@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -614,34 +614,11 @@ public:
   void CycleActiveWindow();
   uint32_t GetCapturableWindowCount();
 
-  bool GetTrackedFileData(const rdcstr &nickname, bytebuf &data) const;
-  bool AddTrackedFileReference(const rdcstr &nickname, const rdcstr &filepath);
-  void ClearTrackedFiles();
-  bool HasTrackedFileData() const;
-  rdcarray<rdcstr> GetTrackedFileNicknames() const;
-
-  RDResult EmbedExternalFiles(RDCFile *rdc);
-  RDResult RemoveExternalFiles(RDCFile *rdc);
-  bool HasEmbeddedFiles(RDCFile *rdc) const;
-  RDResult ReadExternalFiles(RDCFile *rdc);
-
 private:
   RenderDoc();
   ~RenderDoc();
 
-  struct TrackedFile
-  {
-    TrackedFile() = default;
-    TrackedFile(const rdcstr &name, const rdcstr &path) : nickname(name), filepath(path) {}
-    TrackedFile(const rdcstr &name, const bytebuf &contents) : nickname(name), data(contents) {}
-    rdcstr nickname;
-    rdcstr filepath;
-    bytebuf data;
-  };
-
   void SyncAvailableGPUThread();
-  RDResult WriteExternalFiles(RDCFile *rdc, const rdcarray<TrackedFile> &trackedFiles);
-  bool DoesTrackedFileExist(const rdcstr &nickname) const;
 
   bool m_Replay;
 
@@ -742,9 +719,6 @@ private:
 
   ICrashHandler *m_ExHandler;
   Threading::RWLock m_ExHandlerLock;
-
-  mutable Threading::RWLock m_TrackedFilesLock;
-  rdcarray<TrackedFile> m_TrackedFiles;
 
   void ProcessConfig();
 

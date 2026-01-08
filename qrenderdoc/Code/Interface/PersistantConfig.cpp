@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -97,12 +97,6 @@ template <>
 rdcstr convertFromVariant(const QVariant &val)
 {
   return val.toString();
-}
-
-template <>
-uint32_t convertFromVariant(const QVariant &val)
-{
-  return val.toUInt();
 }
 
 template <typename listType>
@@ -307,6 +301,18 @@ void PersistantConfig::applyValues(const QVariantMap &values)
 
         for(int i = 0; i < searchPaths.size(); i++)
           debug->AddAndOwnChild(makeSDString("$el"_lit, searchPaths[i]));
+      }
+
+      if(settings.contains(lit("d3d12ShaderDebugging")))
+      {
+        RENDERDOC_SetConfigSetting("D3D12_ShaderDebugging")->data.basic.b =
+            settings[lit("d3d12ShaderDebugging")].toBool();
+      }
+
+      if(settings.contains(lit("vulkanShaderDebugging")))
+      {
+        RENDERDOC_SetConfigSetting("Vulkan_ShaderDebugging")->data.basic.b =
+            settings[lit("vulkanShaderDebugging")].toBool();
       }
 
       saveConfig = true;

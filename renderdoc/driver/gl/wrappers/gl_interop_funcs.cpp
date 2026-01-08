@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -331,26 +331,26 @@ bool WrappedOpenGL::Serialise_wglDXRegisterObjectNV(SerialiserType &ser, GLResou
 
     if(type != eGL_NONE)
     {
-      ResourceId id = GetResourceManager()->GetResID(Resource);
-      m_Textures[id].curType = type;
-      m_Textures[id].width = width;
-      m_Textures[id].height = height;
-      m_Textures[id].depth = RDCMAX(depth, samples);
-      m_Textures[id].samples = samples;
-      m_Textures[id].dimension = 2;
+      ResourceId liveId = GetResourceManager()->GetResID(Resource);
+      m_Textures[liveId].curType = type;
+      m_Textures[liveId].width = width;
+      m_Textures[liveId].height = height;
+      m_Textures[liveId].depth = RDCMAX(depth, samples);
+      m_Textures[liveId].samples = samples;
+      m_Textures[liveId].dimension = 2;
       if(type == eGL_TEXTURE_1D || type == eGL_TEXTURE_1D_ARRAY)
-        m_Textures[id].dimension = 1;
+        m_Textures[liveId].dimension = 1;
       else if(type == eGL_TEXTURE_3D)
-        m_Textures[id].dimension = 3;
+        m_Textures[liveId].dimension = 3;
 
-      m_Textures[id].internalFormat = internalFormat;
-      m_Textures[id].mipsValid = (1 << mips) - 1;
+      m_Textures[liveId].internalFormat = internalFormat;
+      m_Textures[liveId].mipsValid = (1 << mips) - 1;
     }
 
     if(type == eGL_NONE || type == eGL_TEXTURE_BUFFER)
     {
-      ResourceId id = GetResourceManager()->GetResID(Resource);
-      m_Buffers[id].size = width;
+      ResourceId liveId = GetResourceManager()->GetResID(Resource);
+      m_Buffers[liveId].size = width;
     }
 
     AddResourceInitChunk(Resource);
@@ -559,7 +559,8 @@ bool WrappedOpenGL::Serialise_glCreateMemoryObjectsEXT(SerialiserType &ser, GLsi
 
     GLResource res = ExtMemRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(memory, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(memory, res);
 
     AddResource(memory, ResourceType::Memory, "Memory Object");
   }
@@ -574,7 +575,7 @@ void WrappedOpenGL::glCreateMemoryObjectsEXT(GLsizei n, GLuint *memoryObjects)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = ExtMemRes(GetCtx(), memoryObjects[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -593,6 +594,10 @@ void WrappedOpenGL::glCreateMemoryObjectsEXT(GLsizei n, GLuint *memoryObjects)
 
       record->AddChunk(chunk);
     }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
+    }
   }
 }
 
@@ -601,7 +606,7 @@ void WrappedOpenGL::glDeleteMemoryObjectsEXT(GLsizei n, const GLuint *memoryObje
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = ExtMemRes(GetCtx(), memoryObjects[i]);
-    if(GetResourceManager()->HasResource(res))
+    if(GetResourceManager()->HasCurrentResource(res))
     {
       if(GetResourceManager()->HasResourceRecord(res))
         GetResourceManager()->GetResourceRecord(res)->Delete(GetResourceManager());
@@ -829,7 +834,8 @@ bool WrappedOpenGL::Serialise_glGenSemaphoresEXT(SerialiserType &ser, GLsizei n,
 
     GLResource res = ExtSemRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(semaphore, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(semaphore, res);
 
     AddResource(semaphore, ResourceType::Sync, "Semaphore");
   }
@@ -844,7 +850,7 @@ void WrappedOpenGL::glGenSemaphoresEXT(GLsizei n, GLuint *semaphores)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = ExtSemRes(GetCtx(), semaphores[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -863,6 +869,10 @@ void WrappedOpenGL::glGenSemaphoresEXT(GLsizei n, GLuint *semaphores)
 
       record->AddChunk(chunk);
     }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
+    }
   }
 }
 
@@ -871,7 +881,7 @@ void WrappedOpenGL::glDeleteSemaphoresEXT(GLsizei n, const GLuint *semaphores)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = ExtSemRes(GetCtx(), semaphores[i]);
-    if(GetResourceManager()->HasResource(res))
+    if(GetResourceManager()->HasCurrentResource(res))
     {
       if(GetResourceManager()->HasResourceRecord(res))
         GetResourceManager()->GetResourceRecord(res)->Delete(GetResourceManager());
@@ -1319,7 +1329,7 @@ bool WrappedOpenGL::Serialise_glNamedBufferStorageMemEXT(SerialiserType &ser, GL
     m_Buffers[id].size = size;
 
     AddResourceInitChunk(buffer);
-    DerivedResource(memory, id);
+    DerivedResource(memory, GetResourceManager()->GetOriginalID(id));
   }
 
   return true;
@@ -1420,19 +1430,19 @@ bool WrappedOpenGL::Serialise_glTextureStorageMem1DEXT(SerialiserType &ser, GLui
   if(IsReplayingAndReading())
   {
     // Replay external texture storage backed by external memory as just a plain texture.
-    ResourceId id = GetResourceManager()->GetResID(texture);
-    m_Textures[id].width = width;
-    m_Textures[id].height = 1;
-    m_Textures[id].depth = 1;
-    m_Textures[id].dimension = 1;
-    m_Textures[id].internalFormat = internalFormat;
-    m_Textures[id].emulated = false;
-    m_Textures[id].mipsValid = (1 << levels) - 1;
+    ResourceId liveId = GetResourceManager()->GetResID(texture);
+    m_Textures[liveId].width = width;
+    m_Textures[liveId].height = 1;
+    m_Textures[liveId].depth = 1;
+    m_Textures[liveId].dimension = 1;
+    m_Textures[liveId].internalFormat = internalFormat;
+    m_Textures[liveId].emulated = false;
+    m_Textures[liveId].mipsValid = (1 << levels) - 1;
 
-    GL.glTextureStorage1DEXT(texture.name, m_Textures[id].curType, levels, internalFormat, width);
+    GL.glTextureStorage1DEXT(texture.name, m_Textures[liveId].curType, levels, internalFormat, width);
 
     AddResourceInitChunk(texture);
-    DerivedResource(memory, id);
+    DerivedResource(memory, GetResourceManager()->GetOriginalID(liveId));
   }
 
   return true;
@@ -1529,20 +1539,20 @@ bool WrappedOpenGL::Serialise_glTextureStorageMem2DEXT(SerialiserType &ser, GLui
   if(IsReplayingAndReading())
   {
     // Replay external texture storage backed by external memory as just a plain texture.
-    ResourceId id = GetResourceManager()->GetResID(texture);
-    m_Textures[id].width = width;
-    m_Textures[id].height = height;
-    m_Textures[id].depth = 1;
-    m_Textures[id].dimension = 2;
-    m_Textures[id].internalFormat = internalFormat;
-    m_Textures[id].emulated = false;
-    m_Textures[id].mipsValid = (1 << levels) - 1;
+    ResourceId liveId = GetResourceManager()->GetResID(texture);
+    m_Textures[liveId].width = width;
+    m_Textures[liveId].height = height;
+    m_Textures[liveId].depth = 1;
+    m_Textures[liveId].dimension = 2;
+    m_Textures[liveId].internalFormat = internalFormat;
+    m_Textures[liveId].emulated = false;
+    m_Textures[liveId].mipsValid = (1 << levels) - 1;
 
-    GL.glTextureStorage2DEXT(texture.name, m_Textures[id].curType, levels, internalFormat, width,
-                             height);
+    GL.glTextureStorage2DEXT(texture.name, m_Textures[liveId].curType, levels, internalFormat,
+                             width, height);
 
     AddResourceInitChunk(texture);
-    DerivedResource(memory, id);
+    DerivedResource(memory, GetResourceManager()->GetOriginalID(liveId));
   }
 
   return true;
@@ -1647,21 +1657,21 @@ bool WrappedOpenGL::Serialise_glTextureStorageMem2DMultisampleEXT(
     CheckReplayFunctionPresent(glTexStorage2DMultisample);
 
     // Replay external texture storage backed by external memory as just a plain texture.
-    ResourceId id = GetResourceManager()->GetResID(texture);
-    m_Textures[id].width = width;
-    m_Textures[id].height = height;
-    m_Textures[id].depth = 1;
-    m_Textures[id].samples = samples;
-    m_Textures[id].dimension = 2;
-    m_Textures[id].internalFormat = internalFormat;
-    m_Textures[id].emulated = false;
-    m_Textures[id].mipsValid = 1;
+    ResourceId liveId = GetResourceManager()->GetResID(texture);
+    m_Textures[liveId].width = width;
+    m_Textures[liveId].height = height;
+    m_Textures[liveId].depth = 1;
+    m_Textures[liveId].samples = samples;
+    m_Textures[liveId].dimension = 2;
+    m_Textures[liveId].internalFormat = internalFormat;
+    m_Textures[liveId].emulated = false;
+    m_Textures[liveId].mipsValid = 1;
 
-    GL.glTextureStorage2DMultisampleEXT(texture.name, m_Textures[id].curType, samples,
+    GL.glTextureStorage2DMultisampleEXT(texture.name, m_Textures[liveId].curType, samples,
                                         internalFormat, width, height, fixedSampleLocations);
 
     AddResourceInitChunk(texture);
-    DerivedResource(memory, id);
+    DerivedResource(memory, GetResourceManager()->GetOriginalID(liveId));
   }
 
   return true;
@@ -1768,20 +1778,20 @@ bool WrappedOpenGL::Serialise_glTextureStorageMem3DEXT(SerialiserType &ser, GLui
   if(IsReplayingAndReading())
   {
     // Replay external texture storage backed by external memory as just a plain texture.
-    ResourceId id = GetResourceManager()->GetResID(texture);
-    m_Textures[id].width = width;
-    m_Textures[id].height = height;
-    m_Textures[id].depth = depth;
-    m_Textures[id].dimension = 3;
-    m_Textures[id].internalFormat = internalFormat;
-    m_Textures[id].emulated = false;
-    m_Textures[id].mipsValid = (1 << levels) - 1;
+    ResourceId liveId = GetResourceManager()->GetResID(texture);
+    m_Textures[liveId].width = width;
+    m_Textures[liveId].height = height;
+    m_Textures[liveId].depth = depth;
+    m_Textures[liveId].dimension = 3;
+    m_Textures[liveId].internalFormat = internalFormat;
+    m_Textures[liveId].emulated = false;
+    m_Textures[liveId].mipsValid = (1 << levels) - 1;
 
-    GL.glTextureStorage3DEXT(texture.name, m_Textures[id].curType, levels, internalFormat, width,
-                             height, depth);
+    GL.glTextureStorage3DEXT(texture.name, m_Textures[liveId].curType, levels, internalFormat,
+                             width, height, depth);
 
     AddResourceInitChunk(texture);
-    DerivedResource(memory, id);
+    DerivedResource(memory, GetResourceManager()->GetOriginalID(liveId));
   }
 
   return true;
@@ -1882,21 +1892,21 @@ bool WrappedOpenGL::Serialise_glTextureStorageMem3DMultisampleEXT(
   if(IsReplayingAndReading())
   {
     // Replay external texture storage backed by external memory as just a plain texture.
-    ResourceId id = GetResourceManager()->GetResID(texture);
-    m_Textures[id].width = width;
-    m_Textures[id].height = height;
-    m_Textures[id].depth = depth;
-    m_Textures[id].samples = samples;
-    m_Textures[id].dimension = 3;
-    m_Textures[id].internalFormat = internalFormat;
-    m_Textures[id].emulated = false;
-    m_Textures[id].mipsValid = 1;
+    ResourceId liveId = GetResourceManager()->GetResID(texture);
+    m_Textures[liveId].width = width;
+    m_Textures[liveId].height = height;
+    m_Textures[liveId].depth = depth;
+    m_Textures[liveId].samples = samples;
+    m_Textures[liveId].dimension = 3;
+    m_Textures[liveId].internalFormat = internalFormat;
+    m_Textures[liveId].emulated = false;
+    m_Textures[liveId].mipsValid = 1;
 
-    GL.glTextureStorage3DMultisampleEXT(texture.name, m_Textures[id].curType, samples,
+    GL.glTextureStorage3DMultisampleEXT(texture.name, m_Textures[liveId].curType, samples,
                                         internalFormat, width, height, depth, fixedSampleLocations);
 
     AddResourceInitChunk(texture);
-    DerivedResource(memory, id);
+    DerivedResource(memory, GetResourceManager()->GetOriginalID(liveId));
   }
 
   return true;

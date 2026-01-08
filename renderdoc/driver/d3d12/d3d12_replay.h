@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -39,15 +39,6 @@ class NVD3D12Counters;
 class D3D12DebugManager;
 
 struct PortableHandle;
-
-namespace DXBC
-{
-class DXBCContainer;
-};
-namespace DXDebug
-{
-struct InputFetcher;
-};
 
 enum TexDisplayFlags
 {
@@ -138,7 +129,7 @@ public:
   rdcarray<DebugMessage> GetDebugMessages();
 
   rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader);
-  const ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader, ShaderEntryPoint entry);
+  ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader, ShaderEntryPoint entry);
 
   rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline);
   rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target);
@@ -194,6 +185,7 @@ public:
 
   // indicates that EID alias is the same as eventId
   void AliasPostVSBuffers(uint32_t eventId, uint32_t alias) { m_PostVSAlias[alias] = eventId; }
+  ResourceId GetLiveID(ResourceId id);
 
   void PickPixel(ResourceId texture, uint32_t x, uint32_t y, const Subresource &sub,
                  CompType typeCast, float pixel[4]);
@@ -253,12 +245,6 @@ public:
 
   rdcarray<PixelModification> PixelHistory(rdcarray<EventUsage> events, ResourceId target, uint32_t x,
                                            uint32_t y, const Subresource &sub, CompType typeCast);
-
-  ID3DBlob *CompileShaderDebugFetcher(const DXBC::DXBCContainer *dxbc, const rdcstr &hlsl);
-  ID3D12Resource *CreateInputFetchBuffer(DXDebug::InputFetcher &fetcher, uint64_t &laneDataOffset,
-                                         uint64_t &evalDataOffset);
-  ID3D12RootSignature *CreateInputFetchRootSig(bool compute, uint32_t &uavspace, uint32_t &sigElem);
-
   ShaderDebugTrace *DebugVertex(uint32_t eventId, uint32_t vertid, uint32_t instid, uint32_t idx,
                                 uint32_t view);
   ShaderDebugTrace *DebugPixel(uint32_t eventId, uint32_t x, uint32_t y,

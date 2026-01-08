@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -107,45 +107,26 @@ struct CaptureSettings
 :type: renderdoc.CaptureOptions
 )");
   CaptureOptions options;
-  DOCUMENT(R"(``True`` if the described capture is an inject-into-process instead of a launched executable.
-
-:type: bool
-)");
+  DOCUMENT(
+      "``True`` if the described capture is an inject-into-process instead of a launched "
+      "executable.");
   bool inject;
-  DOCUMENT(R"(``True`` if this capture settings object should be immediately executed upon load.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if this capture settings object should be immediately executed upon load.");
   bool autoStart;
-  DOCUMENT(R"(The path to the executable to run.
-
-:type: str
-)");
+  DOCUMENT("The path to the executable to run.");
   rdcstr executable;
-  DOCUMENT(R"(The path to the working directory to run in, or blank for the executable's directory.
-
-:type: str
-)");
+  DOCUMENT("The path to the working directory to run in, or blank for the executable's directory.");
   rdcstr workingDir;
-  DOCUMENT(R"(The command line to pass when running :data:`executable`.
-
-:type: str
-)");
+  DOCUMENT("The command line to pass when running :data:`executable`.");
   rdcstr commandLine;
   DOCUMENT(R"(The environment changes to apply.
 
 :type: List[renderdoc.EnvironmentModification]
 )");
   rdcarray<EnvironmentModification> environment;
-  DOCUMENT(R"(The number of queued frames to capture, or 0 if no frames are queued to be captured.
-
-:type: int
-)");
+  DOCUMENT("The number of queued frames to capture, or 0 if no frames are queued to be captured.");
   uint32_t numQueuedFrames;
-  DOCUMENT(R"(The first queued frame to capture. Ignored if :data:`numQueuedFrames` is 0.
-
-:type: int
-)");
+  DOCUMENT("The first queued frame to capture. Ignored if :data:`numQueuedFrames` is 0.");
   uint32_t queuedFrameCap;
 };
 
@@ -1390,11 +1371,6 @@ QWidget.
 )");
   virtual void SetHistory(const rdcarray<PixelModification> &history) = 0;
 
-  DOCUMENT(R"(Indicates that the pixel history was launched as a result of failing to debug a shader,
-so a message will be displayed to explain.
-)");
-  virtual void SetFailedDebug() = 0;
-
 protected:
   IPixelHistoryView() = default;
   ~IPixelHistoryView() = default;
@@ -1786,16 +1762,10 @@ BITMASK_OPERATORS(CaptureModifications);
 DOCUMENT("A description of a bookmark on an event");
 struct EventBookmark
 {
-  DOCUMENT(R"(The :data:`eventId <renderdoc.APIEvent.eventId>` at which this bookmark is placed.
-
-:type: int
-)");
+  DOCUMENT("The :data:`eventId <renderdoc.APIEvent.eventId>` at which this bookmark is placed.");
   uint32_t eventId = 0;
 
-  DOCUMENT(R"(The text associated with this bookmark - could be empty
-
-:type: str
-)");
+  DOCUMENT("The text associated with this bookmark - could be empty");
   rdcstr text;
 
   DOCUMENT("");
@@ -2365,11 +2335,6 @@ as well as messages generated during replay and analysis.
 )");
   virtual void AddMessages(const rdcarray<DebugMessage> &msgs) = 0;
 
-  DOCUMENT(R"(Clear the currently stored messages, and mark all as unread. This can be used in
-combination with :meth:`DebugMessages` and :meth:`AddMessages` to filter the current set of messages.
-)");
-  virtual void ClearMessages() = 0;
-
   DOCUMENT(R"(Retrieve the contents for a given notes field.
 
 Examples of fields are:
@@ -2419,44 +2384,6 @@ If no bookmark exists, this function will do nothing.
 :param int eventId: The eventId of the bookmark to remove.
 )");
   virtual void RemoveBookmark(uint32_t eventId) = 0;
-
-  DOCUMENT(R"(Stores the dependent file data into the capture i.e. shader debug files.
-
-This reads the contents of the dependent files and stores their file contents into the capture.
-This can help the capture to be more portable by embedding all externally referenced dependent files.
-Use :meth:`RemoveDependentFiles` to remove the embedded file data.
-
-.. warning::
-  Will remove all the existing embedded file data from the capture.
-  Will directly modify the capture file on disk.
-
-.. note::
-  This will increase the size of the capture file.
-  Externally referenced files which can't be found on disk are skipped.
-  For remote replay the modifications are performed on the remote machine and copied back to the local host.
-)");
-  virtual void EmbedDependentFiles() = 0;
-
-  DOCUMENT(R"(Removes the dependent files storage from the capture i.e. shader debug files.
-
-The files will be still be considered to be referenced by the capture and could be re-embedded 
-by calling :meth:`EmbedDependentFiles`.
-
-.. warning::
-  Will directly modify the capture file on disk.
-
-.. note::
-  For remote replay the modifications are performed on the remote machine and copied back to the local host.
-)");
-  virtual void RemoveDependentFiles() = 0;
-
-  DOCUMENT(R"(Registers a delayed callback to be called after a certain number of milliseconds
-on the UI thread.
-
-:param int milliseconds: The number of milliseconds (approximately) to wait before the callback.
-:param Callable[[], None] callback: The function to call
-)");
-  virtual void DelayedCallback(uint32_t milliseconds, std::function<void()> callback) = 0;
 
   DOCUMENT(R"(Retrieve the current singleton :class:`MainWindow`.
 

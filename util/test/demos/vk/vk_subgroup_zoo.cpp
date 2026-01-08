@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2025-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -77,9 +77,6 @@ void main()
     vec2(-1.0f,  1.0f),
     vec2( 1.0f,  1.0f),
     vec2(-1.0f, -1.0f),
-
-    vec2( 1.0f,  1.0f),
-    vec2(-1.0f, -1.0f),
     vec2( 1.0f, -1.0f),
   };
 
@@ -107,34 +104,12 @@ layout(location = 0, index = 0) out vec4 Color;
 
 void main()
 {
-  uint subgroupId = gl_SubgroupInvocationID;
-
   vec4 fragdata = vec4(0);
 
   if(IsTest(1) || IsTest(2))
-  {
-    fragdata = vec4(subgroupId, 0, 0, 1);
-  }
+    fragdata = vec4(gl_SubgroupInvocationID, 0, 0, 1);
   else if(IsTest(4))
-  {
-    fragdata = vec4(subgroupAdd(subgroupId), 0, 0, 0);
-  }
-  else if(IsTest(5))
-  {
-    // subgroupQuadBroadcast : unit tests
-    fragdata.x = float(subgroupQuadBroadcast(subgroupId, 0));
-    fragdata.y = float(subgroupQuadBroadcast(subgroupId, 1));
-    fragdata.z = float(subgroupQuadBroadcast(subgroupId, 2));
-    fragdata.w = float(subgroupQuadBroadcast(subgroupId, 3));
-  }
-  else if(IsTest(6))
-  {
-    // subgroupQuadSwapDiagonal, subgroupQuadSwapHorizontal, subgroupQuadSwapVertical : unit tests
-    fragdata.x = float(subgroupQuadSwapDiagonal(subgroupId));
-    fragdata.y = float(subgroupQuadSwapHorizontal(subgroupId));
-    fragdata.z = float(subgroupQuadSwapVertical(subgroupId));
-    fragdata.w = subgroupQuadBroadcast(fragdata.x, 2);
-  }
+    fragdata = vec4(subgroupAdd(gl_SubgroupInvocationID), 0, 0, 0);
 
   Color = vertdata + fragdata;
 }
@@ -142,8 +117,6 @@ void main()
 )EOSHADER";
 
   const std::string comp = common + R"EOSHADER(
-
-#extension GL_EXT_shader_quad_control : require
 
 struct Output
 {
@@ -156,132 +129,16 @@ layout(binding = 0, std430) buffer outbuftype {
 
 layout(local_size_x = GROUP_SIZE_X, local_size_y = GROUP_SIZE_Y, local_size_z = 1) in;
 
-void SetOutput(vec4 val)
-{
-  outbuf.data[push.test].vals[gl_LocalInvocationID.y * GROUP_SIZE_X + gl_LocalInvocationID.x] = val;
-}
 void main()
 {
-  vec4 testResult = vec4(0);
-  uint id = gl_SubgroupInvocationID;
-  SetOutput(testResult);
+  vec4 data = vec4(0);
 
   if(IsTest(0))
-  {
-    // Query functions : unit tests
-    testResult.x = float(gl_SubgroupSize);
-    testResult.y = float(gl_SubgroupInvocationID);
-    testResult.z = float(subgroupElect());
-  }
+    data = vec4(gl_SubgroupInvocationID, 0, 0, 0);
   else if(IsTest(1))
-  {
-    // Vote functions : unit tests
-    testResult.x = float(subgroupAny(id*2 > id+10));
-    testResult.y = float(subgroupAll(id < gl_SubgroupSize));
-    if (id > 10)
-    {
-      testResult.z = float(subgroupAll(id > 10));
-      uvec4 ballot = subgroupBallot(id > 20);
-      testResult.w = bitCount(ballot.x) + bitCount(ballot.y) + bitCount(ballot.z) + bitCount(ballot.w);
-    }
-    else
-    {
-      testResult.z = float(subgroupAll(id > 3));
-      uvec4 ballot = subgroupBallot(id > 4);
-      testResult.w = bitCount(ballot.x) + bitCount(ballot.y) + bitCount(ballot.z) + bitCount(ballot.w);
-    }
-  }
-  else if(IsTest(2))
-  {
-    // Broadcast functions : unit tests
-    if (id >= 2 && id <= 20)
-    {
-      testResult.x = subgroupBroadcastFirst(id);
-      testResult.y = subgroupBroadcast(id, 5);
-      testResult.z = subgroupShuffle(id, id);
-      testResult.w = subgroupShuffle(testResult.x, 2+id%3);
-    }
-  }
-  else if(IsTest(3))
-  {
-    // Scan and Prefix functions : unit tests
-    if (id >= 2 && id <= 20)
-    {
-      uvec4 bits = subgroupBallot(id > 4);
-      testResult.x = subgroupBallotExclusiveBitCount(bits);
-      bits = subgroupBallot(id > 10);
-      testResult.y = subgroupBallotExclusiveBitCount(bits);
-      testResult.z = subgroupExclusiveAdd(testResult.x);
-      testResult.w = subgroupExclusiveMul(1 + testResult.y);
-    }
-    else
-    {
-      uvec4 bits = subgroupBallot(id > 23);
-      testResult.x = subgroupBallotExclusiveBitCount(bits);
-      bits = subgroupBallot(id < 1);
-      testResult.y = subgroupBallotExclusiveBitCount(bits);
-      testResult.z = subgroupExclusiveAdd(testResult.x);
-      testResult.w = subgroupExclusiveAdd(testResult.y);
-    }
-  }
-  else if(IsTest(4))
-  {
-    // Reduction functions : unit tests
-    if (id >= 2 && id <= 20)
-    {
-      testResult.x = float(subgroupMax(id));
-      testResult.y = float(subgroupMin(id));
-      testResult.z = float(subgroupMul(id));
-      testResult.w = float(subgroupAdd(id));
-    }
-  }
-  else if(IsTest(5))
-  {
-    // Reduction functions : unit tests
-    if (id >= 2 && id <= 20)
-    {
-      uvec4 bits = subgroupBallot(id > 23);
-      testResult.x = float(subgroupBallotBitCount(bits));
-      testResult.y = float(subgroupAnd(id));
-      testResult.z = float(subgroupOr(id));
-      testResult.w = float(subgroupXor(id));
-    }
-  }
-  else if(IsTest(6))
-  {
-    // Reduction functions : unit tests
-    if (id > 13)
-    {
-      testResult.x = float(subgroupAllEqual(id > 15));
-      testResult.y = float(subgroupAllEqual(id < 23));
-      testResult.z = float(subgroupAllEqual(id >= 25));
-      testResult.w = float(subgroupAllEqual(id >= 28));
-    }
-  }
-  else if(IsTest(7))
-  {
-    // subgroupQuadBroadcast : unit tests
-    testResult.x = float(subgroupQuadBroadcast(id, 0));
-    testResult.y = float(subgroupQuadBroadcast(id, 1));
-    testResult.z = float(subgroupQuadBroadcast(id, 2));
-    testResult.w = float(subgroupQuadBroadcast(id, 3));
-  }
-  else if(IsTest(8))
-  {
-    // subgroupQuadSwapDiagonal, subgroupQuadSwapHorizontal, subgroupQuadSwapVertical : unit tests
-    testResult.x = float(subgroupQuadSwapDiagonal(id));
-    testResult.y = float(subgroupQuadSwapHorizontal(id));
-    testResult.z = float(subgroupQuadSwapVertical(id));
-    testResult.w = subgroupQuadBroadcast(testResult.x, 2);
-  }
-  else if(IsTest(9))
-  {
-    testResult.x = float(subgroupQuadAny(id*2 > id+10));
-    testResult.y = float(subgroupQuadAll(id < gl_SubgroupSize));
-    testResult.z = subgroupQuadBroadcast(testResult.x, 2);
-    testResult.w = subgroupQuadBroadcast(testResult.y, 2);
-  }
-  SetOutput(testResult);
+    data = vec4(subgroupAdd(gl_SubgroupInvocationID), 0, 0, 0);
+
+  outbuf.data[push.test].vals[gl_LocalInvocationID.y * GROUP_SIZE_X + gl_LocalInvocationID.x] = data;
 }
 
 )EOSHADER";
@@ -290,9 +147,6 @@ void main()
 
   void Prepare(int argc, char **argv)
   {
-    devExts.push_back(VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME);
-    devExts.push_back(VK_KHR_SHADER_QUAD_CONTROL_EXTENSION_NAME);
-
     VulkanGraphicsTest::Prepare(argc, argv);
 
     if(!Avail.empty())
@@ -329,16 +183,6 @@ void main()
 
     if((subProps.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0)
       Avail = "Missing compute subgroup support";
-
-    static VkPhysicalDeviceShaderQuadControlFeaturesKHR quadControlFeats = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_QUAD_CONTROL_FEATURES_KHR,
-    };
-
-    getPhysFeatures2(&quadControlFeats);
-    if(quadControlFeats.shaderQuadControl == VK_FALSE)
-      Avail = "Missing compute quad support";
-
-    devInfoNext = &quadControlFeats;
   }
 
   int main()
@@ -382,7 +226,7 @@ void main()
 
     pipeCreateInfo.renderPass = renderPass;
     pipeCreateInfo.layout = layout;
-    pipeCreateInfo.inputAssemblyState.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    pipeCreateInfo.inputAssemblyState.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
 
     std::map<std::string, std::string> macros;
 
@@ -464,28 +308,28 @@ void main()
 
     macros["GROUP_SIZE_X"] = "256";
     macros["GROUP_SIZE_Y"] = "1";
-    comppipe_name[0] = fmt::format("{}x{}", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"]);
+    comppipe_name[0] = "256x1";
     comppipe[0] = createComputePipeline(vkh::ComputePipelineCreateInfo(
         layout, CompileShaderModule(comp, ShaderLang::glsl, ShaderStage::comp, "main", macros,
                                     SPIRVTarget::vulkan11)));
 
     macros["GROUP_SIZE_X"] = "128";
     macros["GROUP_SIZE_Y"] = "2";
-    comppipe_name[1] = fmt::format("{}x{}", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"]);
+    comppipe_name[1] = "128x2";
     comppipe[1] = createComputePipeline(vkh::ComputePipelineCreateInfo(
         layout, CompileShaderModule(comp, ShaderLang::glsl, ShaderStage::comp, "main", macros,
                                     SPIRVTarget::vulkan11)));
 
     macros["GROUP_SIZE_X"] = "8";
     macros["GROUP_SIZE_Y"] = "128";
-    comppipe_name[2] = fmt::format("{}x{}", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"]);
+    comppipe_name[2] = "8x128";
     comppipe[2] = createComputePipeline(vkh::ComputePipelineCreateInfo(
         layout, CompileShaderModule(comp, ShaderLang::glsl, ShaderStage::comp, "main", macros,
                                     SPIRVTarget::vulkan11)));
 
-    macros["GROUP_SIZE_X"] = "152";
+    macros["GROUP_SIZE_X"] = "150";
     macros["GROUP_SIZE_Y"] = "1";
-    comppipe_name[3] = fmt::format("{}x{}", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"]);
+    comppipe_name[3] = "150x1";
     comppipe[3] = createComputePipeline(vkh::ComputePipelineCreateInfo(
         layout, CompileShaderModule(comp, ShaderLang::glsl, ShaderStage::comp, "main", macros,
                                     SPIRVTarget::vulkan11)));
@@ -555,7 +399,7 @@ void main()
             VK_SUBPASS_CONTENTS_INLINE);
 
         vkh::cmdPushConstants(cmd, layout, i);
-        vkCmdDraw(cmd, 6, 1, 0, 0);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
       }
 

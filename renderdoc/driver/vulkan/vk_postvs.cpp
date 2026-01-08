@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -57,12 +57,6 @@ struct VkXfbQueryResult
   uint64_t numPrimitivesGenerated;
 };
 
-struct VertexAttributeInfo
-{
-  uint32_t divisor;
-  bool valid = false;
-};
-
 static const char *PatchedMeshOutputEntryPoint = "rdc";
 static const uint32_t MeshOutputDispatchWidth = 128;
 static uint32_t MeshOutputBufferArraySize = 64;
@@ -75,13 +69,12 @@ static uint32_t MeshOutputOutputSpecConstant = MeshOutputIBufferSpecConstant + 1
 // 2 = vbuffers
 static const uint32_t MeshOutputReservedBindings = 3;
 
-static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRVPatchData &patchData,
-                                       const rdcstr &entryName, BufferStorageMode storageMode,
-                                       rdcarray<VertexAttributeInfo> vertexAttrInfo,
+static void ConvertToMeshOutputCompute(const ShaderReflection &refl,
+                                       const SPIRVPatchData &patchData, const rdcstr &entryName,
+                                       BufferStorageMode storageMode, rdcarray<uint32_t> instDivisor,
                                        const ActionDescription *action, uint32_t numVerts,
                                        uint32_t numViews, uint32_t baseSpecConstant,
-                                       rdcarray<uint32_t> &modSpirv, uint32_t &bufStride,
-                                       int defaultVertexAttributeValue)
+                                       rdcarray<uint32_t> &modSpirv, uint32_t &bufStride)
 {
   rdcspv::Editor editor(modSpirv);
 
@@ -104,24 +97,22 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
     rdcspv::Id variable;
     // constant ID for the index of this attribute
     rdcspv::Id indexConst;
-    // only for inputs - we load as uvec4 and bitcast to this type (vec4/ivec4) as needed. This is a
-    // 4-component vector always
+    // base gvec4 type for this input. We always fetch uvec4 from the buffer but then bitcast to
+    // vec4 or ivec4 if needed
     rdcspv::Id fetchVec4Type;
-    // the type with the right number of components but the component is rounded up to a 32-bit type
+    // the actual gvec4 type for the input, possibly needed to convert to from the above if it's
+    // declared as a 16-bit type since we always fetch 32-bit.
+    rdcspv::Id vec4Type;
+    // the base type for this attribute. Must be present already by definition! This is the same
+    // scalar type as vec4Type but with the correct number of components.
     rdcspv::Id baseType;
     // Uniform Pointer type ID for this output. Used only for output data, to write to output SSBO
-    // underlying type is baseType
     rdcspv::Id ssboPtrType;
     // Output Pointer type ID for this attribute.
-    // underlying type is baseType
     // For inputs, used to 'write' to the global at the start.
     // For outputs, used to 'read' from the global at the end.
     rdcspv::Id privatePtrType;
   };
-
-  rdcspv::Id uint32Type = editor.DeclareType(rdcspv::scalar<uint32_t>());
-  rdcspv::Id sint32Type = editor.DeclareType(rdcspv::scalar<int32_t>());
-  rdcspv::Id floatType = editor.DeclareType(rdcspv::scalar<float>());
 
   rdcarray<inputOutputIDs> ins;
   ins.resize(numInputs);
@@ -132,7 +123,6 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
   std::set<rdcspv::Id> outputs;
 
   std::map<rdcspv::Id, rdcspv::Id> typeReplacements;
-  rdcarray<rdcspv::Id> expandedPtrTypes, expandedPtrVars;
 
   // keep track of any builtins we're preserving
   std::set<rdcspv::Id> builtinKeeps;
@@ -175,10 +165,9 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
       {
         editor.Remove(it);
       }
-      // same with flat/noperspective/centroid
+      // same with flat/noperspective
       else if(decorate.decoration == rdcspv::Decoration::Flat ||
-              decorate.decoration == rdcspv::Decoration::NoPerspective ||
-              decorate.decoration == rdcspv::Decoration::Centroid)
+              decorate.decoration == rdcspv::Decoration::NoPerspective)
       {
         editor.Remove(it);
       }
@@ -249,65 +238,6 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
 
       if(id)
       {
-        rdcspv::DataType &dataType = editor.GetDataType(ptr.type);
-
-        rdcspv::Id expandedPtr;
-
-        // expand up input/output pointers to sub-32-bit types to be 32-bit
-        if(dataType.scalar().width < 32 && dataType.scalar().width > 0)
-        {
-          VarType varType = dataType.scalar().Type();
-
-          if(varType == VarType::Half)
-            varType = VarType::Float;
-          else if(varType == VarType::SShort || varType == VarType::SByte)
-            varType = VarType::SInt;
-          else if(varType == VarType::UShort || varType == VarType::UByte)
-            varType = VarType::UInt;
-
-          if(dataType.type == rdcspv::DataType::VectorType)
-          {
-            const uint32_t compCount = dataType.vector().count;
-            expandedPtr = editor.GetType(rdcspv::Vector(rdcspv::scalar(varType), compCount));
-
-            // if this pointer doesn't exist, add it while preserving the iterator
-            if(expandedPtr == rdcspv::Id())
-            {
-              if(varType == VarType::Float)
-                expandedPtr = editor.AddOperation(
-                    it, rdcspv::OpTypeVector(editor.MakeId(), floatType, compCount));
-              else if(varType == VarType::UInt)
-                expandedPtr = editor.AddOperation(
-                    it, rdcspv::OpTypeVector(editor.MakeId(), uint32Type, compCount));
-              else
-                expandedPtr = editor.AddOperation(
-                    it, rdcspv::OpTypeVector(editor.MakeId(), sint32Type, compCount));
-              ++it;
-            }
-          }
-          else
-          {
-            expandedPtr = editor.GetType(rdcspv::scalar(varType));
-
-            // if this pointer doesn't exist, add it while preserving the iterator
-            if(expandedPtr == rdcspv::Id())
-            {
-              if(varType == VarType::Float)
-                expandedPtr = editor.AddOperation(it, rdcspv::OpTypeFloat(editor.MakeId(), 32));
-              else
-                expandedPtr = editor.AddOperation(
-                    it, rdcspv::OpTypeInt(editor.MakeId(), 32, varType == VarType::SInt));
-              ++it;
-            }
-          }
-
-          ptr.type = expandedPtr;
-
-          // record the original pointer type so we can patch with conversions any loads/stores
-          if(!expandedPtrTypes.contains(ptr.result))
-            expandedPtrTypes.push_back(ptr.result);
-        }
-
         rdcspv::Pointer privPtr(ptr.type, rdcspv::StorageClass::Private);
 
         rdcspv::Id origId = editor.GetType(privPtr);
@@ -338,9 +268,6 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
       rdcspv::OpVariable var(it);
 
       bool mod = false;
-
-      if(expandedPtrTypes.contains(var.resultType))
-        expandedPtrVars.push_back(var.result);
 
       if(builtinKeeps.find(var.result) != builtinKeeps.end())
       {
@@ -485,77 +412,6 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
 
   for(rdcspv::Iter it = editor.Begin(rdcspv::Section::Functions); it; ++it)
   {
-    // identify any loads or stores via expanded pointer types, these will expect a different return
-    // type so insert an appropriate conversion to expand/contract. The pointers themselves will be
-    // handled either via globals being patched or access chains above being patched (at the same
-    // time as we patch from input/output to private). The only thing remaining is the potential
-    // type mismatch of storing a half to a float or loading a half from a float etc.
-    //
-    // we do this before patching the types in any OpAccessChain so we can identify such loads or
-    // stores either due to using one of the old pointer types, or because the pointer is the global
-    // directly (it must be one or ther other)
-    if(it.opcode() == rdcspv::Op::Load)
-    {
-      rdcspv::OpLoad load(it);
-
-      rdcspv::Id ptrType = editor.GetIDType(load.pointer);
-
-      if(expandedPtrTypes.contains(ptrType) || expandedPtrVars.contains(load.pointer))
-      {
-        // this pointer was expanded, get the new type and update the load to a temp id
-        rdcspv::Id tmpLoadedVal = editor.MakeId();
-
-        editor.PreModify(it);
-        it.word(1) = editor.GetDataType(ptrType).InnerType().value();
-        it.word(2) = tmpLoadedVal.value();
-        editor.PostModify(it);
-
-        ++it;
-
-        rdcspv::Scalar scalarType = editor.GetDataType(load.resultType).scalar();
-
-        if(scalarType.type == rdcspv::Op::TypeFloat)
-          editor.AddOperation(it, rdcspv::OpFConvert(load.resultType, load.result, tmpLoadedVal));
-        else if(scalarType.signedness)
-          editor.AddOperation(it, rdcspv::OpSConvert(load.resultType, load.result, tmpLoadedVal));
-        else
-          editor.AddOperation(it, rdcspv::OpUConvert(load.resultType, load.result, tmpLoadedVal));
-      }
-    }
-    else if(it.opcode() == rdcspv::Op::Store)
-    {
-      rdcspv::OpStore store(it);
-
-      rdcspv::Id ptrType = editor.GetIDType(store.pointer);
-
-      if(expandedPtrTypes.contains(ptrType) || expandedPtrVars.contains(store.pointer))
-      {
-        // this pointer was expanded, get the new type and update the store to use a temp id
-        rdcspv::Id tmpStoreVal = editor.MakeId();
-
-        rdcspv::Id storedType = editor.GetDataType(ptrType).InnerType();
-        rdcspv::Scalar scalarType = editor.GetDataType(editor.GetIDType(store.object)).scalar();
-
-        if(scalarType.type == rdcspv::Op::TypeFloat)
-          editor.AddOperation(it, rdcspv::OpFConvert(storedType, tmpStoreVal, store.object));
-        else if(scalarType.signedness)
-          editor.AddOperation(it, rdcspv::OpSConvert(storedType, tmpStoreVal, store.object));
-        else
-          editor.AddOperation(it, rdcspv::OpUConvert(storedType, tmpStoreVal, store.object));
-
-        ++it;
-
-        RDCASSERT(it.opcode() == rdcspv::Op::Store);
-
-        editor.PreModify(it);
-        it.word(2) = tmpStoreVal.value();
-        editor.PostModify(it);
-      }
-    }
-  }
-
-  for(rdcspv::Iter it = editor.Begin(rdcspv::Section::Functions); it; ++it)
-  {
     // identify functions with result types we might want to replace
     if(it.opcode() == rdcspv::Op::Function || it.opcode() == rdcspv::Op::FunctionParameter ||
        it.opcode() == rdcspv::Op::Variable || it.opcode() == rdcspv::Op::AccessChain ||
@@ -662,31 +518,25 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
 
     io.variable = patchData.outputs[i].ID;
 
-    VarType varType = refl.outputSignature[i].varType;
+    // base type - either a scalar or a vector, since matrix outputs are decayed to vectors
+    {
+      rdcspv::Scalar scalarType = rdcspv::scalar(refl.outputSignature[i].varType);
 
-    const uint32_t compCount = refl.outputSignature[i].compCount;
+      io.vec4Type = editor.DeclareType(rdcspv::Vector(scalarType, 4));
 
-    // upconvert to 32-bit as needed
-    if(varType == VarType::Half)
-      varType = VarType::Float;
-    else if(varType == VarType::SShort || varType == VarType::SByte)
-      varType = VarType::SInt;
-    else if(varType == VarType::UShort || varType == VarType::UByte)
-      varType = VarType::UInt;
-
-    rdcspv::Scalar scalarType = rdcspv::scalar(varType);
-
-    if(compCount > 1)
-      io.baseType = editor.DeclareType(rdcspv::Vector(scalarType, compCount));
-    else
-      io.baseType = editor.DeclareType(scalarType);
+      if(refl.outputSignature[i].compCount > 1)
+        io.baseType =
+            editor.DeclareType(rdcspv::Vector(scalarType, refl.outputSignature[i].compCount));
+      else
+        io.baseType = editor.DeclareType(scalarType);
+    }
 
     io.ssboPtrType = editor.DeclareType(rdcspv::Pointer(io.baseType, bufferClass));
     io.privatePtrType =
         editor.DeclareType(rdcspv::Pointer(io.baseType, rdcspv::StorageClass::Private));
 
-    RDCASSERT(io.baseType && io.indexConst && io.privatePtrType && io.ssboPtrType, io.baseType,
-              io.indexConst, io.privatePtrType, io.ssboPtrType);
+    RDCASSERT(io.baseType && io.vec4Type && io.indexConst && io.privatePtrType && io.ssboPtrType,
+              io.baseType, io.vec4Type, io.indexConst, io.privatePtrType, io.ssboPtrType);
   }
 
   // repeat for inputs
@@ -701,41 +551,49 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
 
     io.variable = patchData.inputs[i].ID;
 
-    VarType varType = refl.inputSignature[i].varType;
+    VarType vType = refl.inputSignature[i].varType;
 
-    const uint32_t compCount = refl.inputSignature[i].compCount;
-
-    // upconvert to 32-bit as needed
-    if(varType == VarType::Half)
-      varType = VarType::Float;
-    else if(varType == VarType::SShort || varType == VarType::SByte)
-      varType = VarType::SInt;
-    else if(varType == VarType::UShort || varType == VarType::UByte)
-      varType = VarType::UInt;
-
-    rdcspv::Scalar scalarType = rdcspv::scalar(varType);
+    rdcspv::Scalar scalarType = rdcspv::scalar(vType);
 
     // 64-bit values are loaded as uvec4 and then packed in pairs, so we need to declare vec4ID as
     // uvec4
-    if(varType == VarType::Double || varType == VarType::ULong || varType == VarType::SLong)
+    if(vType == VarType::Double || vType == VarType::ULong || vType == VarType::SLong)
     {
-      io.fetchVec4Type = editor.DeclareType(rdcspv::Vector(rdcspv::scalar<uint32_t>(), 4));
+      io.fetchVec4Type = io.vec4Type =
+          editor.DeclareType(rdcspv::Vector(rdcspv::scalar<uint32_t>(), 4));
     }
     else
     {
-      io.fetchVec4Type = editor.DeclareType(rdcspv::Vector(scalarType, 4));
+      io.vec4Type = editor.DeclareType(rdcspv::Vector(scalarType, 4));
+
+      // if the underlying scalar is actually
+      switch(vType)
+      {
+        case VarType::Half:
+          io.fetchVec4Type = editor.DeclareType(rdcspv::Vector(rdcspv::scalar<float>(), 4));
+          break;
+        case VarType::SShort:
+        case VarType::SByte:
+          io.fetchVec4Type = editor.DeclareType(rdcspv::Vector(rdcspv::scalar<int32_t>(), 4));
+          break;
+        case VarType::UShort:
+        case VarType::UByte:
+          io.fetchVec4Type = editor.DeclareType(rdcspv::Vector(rdcspv::scalar<uint32_t>(), 4));
+          break;
+        default: io.fetchVec4Type = io.vec4Type; break;
+      }
     }
 
     if(refl.inputSignature[i].compCount > 1)
-      io.baseType = editor.DeclareType(rdcspv::Vector(scalarType, compCount));
+      io.baseType = editor.DeclareType(rdcspv::Vector(scalarType, refl.inputSignature[i].compCount));
     else
       io.baseType = editor.DeclareType(scalarType);
 
     io.privatePtrType =
         editor.DeclareType(rdcspv::Pointer(io.baseType, rdcspv::StorageClass::Private));
 
-    RDCASSERT(io.fetchVec4Type && io.baseType && io.indexConst && io.privatePtrType,
-              io.fetchVec4Type, io.baseType, io.indexConst, io.privatePtrType);
+    RDCASSERT(io.baseType && io.vec4Type && io.indexConst && io.privatePtrType, io.baseType,
+              io.vec4Type, io.indexConst, io.privatePtrType);
   }
 
   rdcspv::Id u32Type = editor.DeclareType(rdcspv::scalar<uint32_t>());
@@ -1189,9 +1047,9 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
           rdcspv::Id idx = vertexLookupID;
 
           // maybe idx = instanceIndex / someDivisor
-          if(location < vertexAttrInfo.size())
+          if(location < instDivisor.size())
           {
-            uint32_t divisor = vertexAttrInfo[location].divisor;
+            uint32_t divisor = instDivisor[location];
 
             if(divisor == ~0U)
             {
@@ -1230,85 +1088,40 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
           // when we're using buffer device address we have one variable per vbuffer and it's a
           // plain uvec4*
 
-          rdcspv::Id result;
-          if(refl.inputSignature[i].regIndex >= vertexAttrInfo.size() ||
-             !vertexAttrInfo[refl.inputSignature[i].regIndex].valid)
-          {
-            VarType varType = refl.inputSignature[i].varType;
-
-            // input variables were already expanded to 32-bit, so do the same here
-            if(varType == VarType::Half)
-              varType = VarType::Float;
-            else if(varType == VarType::SShort || varType == VarType::SByte)
-              varType = VarType::SInt;
-            else if(varType == VarType::UShort || varType == VarType::UByte)
-              varType = VarType::UInt;
-
-            rdcspv::Id v4TypeId = editor.DeclareType(rdcspv::Vector(rdcspv::scalar(varType), 4));
-
-            rdcspv::Id constZero, constOne;
-            switch(varType)
-            {
-              default: RDCERR("Unexpected input type"); DELIBERATE_FALLTHROUGH();
-              case VarType::Float:
-                constZero = editor.AddConstantImmediate(0.0f);
-                constOne = editor.AddConstantImmediate(1.0f);
-                break;
-              case VarType::Double:
-                constZero = editor.AddConstantImmediate(0.0);
-                constOne = editor.AddConstantImmediate(1.0);
-                break;
-              case VarType::SInt:
-                constZero = editor.AddConstantImmediate(0);
-                constOne = editor.AddConstantImmediate(1);
-                break;
-              case VarType::SLong:
-                constZero = editor.AddConstantImmediate<int64_t>(0);
-                constOne = editor.AddConstantImmediate<int64_t>(1);
-                break;
-              case VarType::UInt:
-                constZero = editor.AddConstantImmediate<uint32_t>(0);
-                constOne = editor.AddConstantImmediate<uint32_t>(1);
-                break;
-              case VarType::ULong:
-                constZero = editor.AddConstantImmediate<uint64_t>(0);
-                constOne = editor.AddConstantImmediate<uint64_t>(1);
-                break;
-            }
-
-            // baseTypeN result = driverDefaultVertexValue;
-            result = editor.AddConstant(rdcspv::Operation(rdcspv::OpConstantComposite(
-                v4TypeId, editor.MakeId(),
-                {constZero, constZero, constZero,
-                 defaultVertexAttributeValue == 0 ? constZero : constOne})));
-          }
+          // uvec4 *vertex = &vbuffers[reg].member0[idx]
+          if(IsBinding(storageMode))
+            ptrId =
+                ops.add(rdcspv::OpAccessChain(uvec4PtrType, editor.MakeId(), vbuffersBindVar.second,
+                                              {idxs[refl.inputSignature[i].regIndex], zero, idx}));
           else
+            // uvec4 *vertex = &vbufferN.member0[idx]
+            ptrId = ops.add(rdcspv::OpAccessChain(uvec4PtrType, editor.MakeId(),
+                                                  vbufferVars[refl.inputSignature[i].regIndex],
+                                                  {zero, idx}));
+
+          // uvec4 result = *vertex
+          rdcspv::Id result =
+              ops.add(rdcspv::OpLoad(uvec4Type, editor.MakeId(), ptrId, memoryAccess));
+
+          // if we want this as ivec4 or vec4, bitcast now
+          if(ins[i].fetchVec4Type != uvec4Type)
+            result = ops.add(rdcspv::OpBitcast(ins[i].fetchVec4Type, editor.MakeId(), result));
+
+          // we always fetch as full 32-bit values, but if the input was declared as a different
+          // size (typically ushort or half) then convert here
+          if(ins[i].fetchVec4Type != ins[i].vec4Type)
           {
-            // uvec4 *vertex = &vbuffers[reg].member0[idx]
-            if(IsBinding(storageMode))
-              ptrId = ops.add(
-                  rdcspv::OpAccessChain(uvec4PtrType, editor.MakeId(), vbuffersBindVar.second,
-                                        {idxs[refl.inputSignature[i].regIndex], zero, idx}));
+            if(VarTypeCompType(vType) == CompType::Float)
+              result = ops.add(rdcspv::OpFConvert(ins[i].vec4Type, editor.MakeId(), result));
+            else if(VarTypeCompType(vType) == CompType::UInt)
+              result = ops.add(rdcspv::OpUConvert(ins[i].vec4Type, editor.MakeId(), result));
             else
-              // uvec4 *vertex = &vbufferN.member0[idx]
-              ptrId = ops.add(rdcspv::OpAccessChain(uvec4PtrType, editor.MakeId(),
-                                                    vbufferVars[refl.inputSignature[i].regIndex],
-                                                    {zero, idx}));
-
-            // uvec4 result = *vertex
-            result = ops.add(rdcspv::OpLoad(uvec4Type, editor.MakeId(), ptrId, memoryAccess));
-
-            // if we want this as ivec4 or vec4, bitcast now
-            if(ins[i].fetchVec4Type != uvec4Type)
-              result = ops.add(rdcspv::OpBitcast(ins[i].fetchVec4Type, editor.MakeId(), result));
+              result = ops.add(rdcspv::OpSConvert(ins[i].vec4Type, editor.MakeId(), result));
           }
 
-          uint32_t firstComp =
-              Bits::CountTrailingZeroes(uint32_t(refl.inputSignature[i].regChannelMask));
+          uint32_t comp = Bits::CountTrailingZeroes(uint32_t(refl.inputSignature[i].regChannelMask));
 
-          if(refl.inputSignature[i].regIndex < vertexAttrInfo.size() &&
-             vertexAttrInfo[refl.inputSignature[i].regIndex].valid &&
-             (vType == VarType::Double || vType == VarType::ULong || vType == VarType::SLong))
+          if(vType == VarType::Double || vType == VarType::ULong || vType == VarType::SLong)
           {
             // since 64-bit values are packed into two uints, we now need to fetch more data and do
             // packing. We can fetch the data unconditionally since it's harmless to read out of the
@@ -1385,8 +1198,8 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
             // for one component, extract x
 
             // baseType value = result.x;
-            result = ops.add(
-                rdcspv::OpCompositeExtract(ins[i].baseType, editor.MakeId(), result, {firstComp}));
+            result =
+                ops.add(rdcspv::OpCompositeExtract(ins[i].baseType, editor.MakeId(), result, {comp}));
           }
           else if(refl.inputSignature[i].compCount != 4)
           {
@@ -1395,7 +1208,7 @@ static void ConvertToMeshOutputCompute(const ShaderReflection &refl, const SPIRV
             rdcarray<uint32_t> swizzle;
 
             for(uint32_t c = 0; c < refl.inputSignature[i].compCount; c++)
-              swizzle.push_back(c + firstComp);
+              swizzle.push_back(c + comp);
 
             // baseTypeN value = result.xyz;
             result = ops.add(
@@ -1509,55 +1322,6 @@ struct OutMeshletLayout
 static void LayOutStorageStruct(rdcspv::Editor &editor, const rdcarray<SpecConstant> &specInfo,
                                 rdcspv::SparseIdMap<rdcspv::Id> &outputTypeReplacements,
                                 const rdcspv::DataType &type, rdcspv::Id &structType,
-                                uint32_t &byteSize);
-
-static rdcspv::Id GetArraySizeAndAlign(rdcspv::Editor &editor, const rdcarray<SpecConstant> &specInfo,
-                                       rdcspv::SparseIdMap<rdcspv::Id> &outputTypeReplacements,
-                                       const rdcspv::DataType &type, uint32_t &size)
-{
-  const rdcspv::DataType &arrayInnerType = editor.GetDataType(type.InnerType());
-
-  rdcspv::Id innerId;
-
-  // handle arrays-of-arrays and arrays-of-struts
-  if(arrayInnerType.type == rdcspv::DataType::StructType)
-  {
-    innerId = arrayInnerType.InnerType();
-    LayOutStorageStruct(editor, specInfo, outputTypeReplacements,
-                        editor.GetDataType(arrayInnerType.InnerType()), innerId, size);
-  }
-  else if(arrayInnerType.type == rdcspv::DataType::ArrayType)
-  {
-    innerId = GetArraySizeAndAlign(editor, specInfo, outputTypeReplacements,
-                                   editor.GetDataType(arrayInnerType.InnerType()), size);
-  }
-  else
-  {
-    size = VarTypeByteSize(arrayInnerType.scalar().Type());
-    if(arrayInnerType.type == rdcspv::DataType::VectorType)
-      size *= arrayInnerType.vector().count;
-
-    // use the same type, nothing changed
-    innerId = type.InnerType();
-  }
-
-  // make a new array type so we can decorate it with a stride
-  rdcspv::Id memberTypeId =
-      editor.AddType(rdcspv::OpTypeArray(editor.MakeId(), innerId, type.length));
-  outputTypeReplacements[type.id] = memberTypeId;
-  editor.SetName(memberTypeId, StringFormat::Fmt("stridedArray%d", type.id.value()));
-
-  editor.AddDecoration(rdcspv::OpDecorate(
-      memberTypeId, rdcspv::DecorationParam<rdcspv::Decoration::ArrayStride>(size)));
-
-  size *= editor.EvaluateConstant(type.length, specInfo).value.u32v[0];
-
-  return memberTypeId;
-}
-
-static void LayOutStorageStruct(rdcspv::Editor &editor, const rdcarray<SpecConstant> &specInfo,
-                                rdcspv::SparseIdMap<rdcspv::Id> &outputTypeReplacements,
-                                const rdcspv::DataType &type, rdcspv::Id &structType,
                                 uint32_t &byteSize)
 {
   rdcarray<rdcspv::Id> members;
@@ -1580,6 +1344,9 @@ static void LayOutStorageStruct(rdcspv::Editor &editor, const rdcarray<SpecConst
     uint32_t size = 1;
     const rdcspv::DataType &childType = editor.GetDataType(type.children[i].type);
 
+    if(childType.type == rdcspv::DataType::ArrayType)
+      memberTypeId = childType.InnerType();
+
     if(childType.type == rdcspv::DataType::StructType)
     {
       offset = AlignUp16(offset);
@@ -1594,9 +1361,11 @@ static void LayOutStorageStruct(rdcspv::Editor &editor, const rdcarray<SpecConst
     }
     else if(childType.type == rdcspv::DataType::ArrayType)
     {
-      memberTypeId = GetArraySizeAndAlign(editor, specInfo, outputTypeReplacements, childType, size);
-
-      offset = AlignUp16(offset);
+      const rdcspv::DataType &arrayInnerType = editor.GetDataType(childType.InnerType());
+      size = VarTypeByteSize(arrayInnerType.scalar().Type());
+      offset = AlignUp(offset, size);
+      if(arrayInnerType.type == rdcspv::DataType::VectorType)
+        size *= arrayInnerType.vector().count;
     }
     else
     {
@@ -1611,7 +1380,24 @@ static void LayOutStorageStruct(rdcspv::Editor &editor, const rdcarray<SpecConst
 
     offsets.push_back(offset);
 
-    offset += size;
+    if(childType.type == rdcspv::DataType::ArrayType)
+    {
+      // make a new array type so we can decorate it with a stride
+      memberTypeId =
+          editor.AddType(rdcspv::OpTypeArray(editor.MakeId(), memberTypeId, childType.length));
+      outputTypeReplacements[type.children[i].type] = memberTypeId;
+      editor.SetName(memberTypeId,
+                     StringFormat::Fmt("stridedArray%d", type.children[i].type.value()));
+
+      editor.AddDecoration(rdcspv::OpDecorate(
+          memberTypeId, rdcspv::DecorationParam<rdcspv::Decoration::ArrayStride>(size)));
+
+      offset += size * editor.EvaluateConstant(childType.length, specInfo).value.u32v[0];
+    }
+    else
+    {
+      offset += size;
+    }
 
     members.push_back(memberTypeId);
   }
@@ -2380,43 +2166,9 @@ static void AddMeshShaderOutputStores(const ShaderReflection &refl,
           stride,
       };
     }
-    else if(type.type == rdcspv::DataType::ArrayType)
-    {
-      // handle arrays-of-arrays and arrays-of-structs here
-      arrayInnerType = GetArraySizeAndAlign(editor, specInfo, outputTypeReplacements, type, byteSize);
-
-      stride = byteSize;
-
-      outputTypeReplacements[type.id] = arrayInnerType;
-
-      uint32_t offset = 0;
-      bool perPrim = false;
-
-      if(d.others.contains(rdcspv::Decoration::PerPrimitiveEXT))
-      {
-        primOutByteCount = AlignUp16(primOutByteCount);
-        offset = primOutByteCount;
-        perPrim = true;
-        primOutByteCount += byteSize * arrayLength;
-      }
-      else
-      {
-        vertOutByteCount = AlignUp16(vertOutByteCount);
-        offset = vertOutByteCount;
-        perPrim = false;
-        vertOutByteCount += byteSize * arrayLength;
-      }
-
-      outputGlobals[var.id] = {
-          offset,
-          perPrim,
-          false,
-          byteSize,
-      };
-    }
     else
     {
-      // loose variable, vector/matrix/scalar
+      // loose variable
       const uint32_t scalarAlign = VarTypeByteSize(type.scalar().Type());
       byteSize = scalarAlign;
       if(type.type == rdcspv::DataType::VectorType)
@@ -2910,6 +2662,8 @@ void VulkanReplay::FetchMeshOut(uint32_t eventId, VulkanRenderState &state)
       ResourceId buf = chunk->FindChild("buffer")->AsResourceId();
       uint64_t offs = chunk->FindChild("offset")->AsUInt64();
 
+      buf = GetResourceManager()->GetLiveID(buf);
+
       bytebuf dispatchArgs;
       GetBufferData(buf, offs, sizeof(VkDrawMeshTasksIndirectCommandEXT), dispatchArgs);
 
@@ -2938,7 +2692,7 @@ void VulkanReplay::FetchMeshOut(uint32_t eventId, VulkanRenderState &state)
                                   : pipeInfo.shaders[(size_t)ShaderStage::Mesh];
 
   const VulkanCreationInfo::ShaderModule &meshInfo = creationInfo.m_ShaderModule[meshShad.module];
-  const ShaderReflection *meshrefl = meshShad.refl;
+  ShaderReflection *meshrefl = meshShad.refl;
 
   VulkanPostVSData &ret = m_PostVS.Data[eventId];
 
@@ -4043,18 +3797,16 @@ void VulkanReplay::FetchMeshOut(uint32_t eventId, VulkanRenderState &state)
 
       if(numVerts > layout.vertArrayLength)
       {
-        ret.meshout.status =
-            StringFormat::Fmt("Meshlet returned invalid vertex count %u with declared max %u",
-                              numVerts, layout.vertArrayLength);
-        RDCERR("%s", ret.meshout.status.c_str());
+        RDCERR("Meshlet returned invalid vertex count %u with declared max %u", numVerts,
+               layout.vertArrayLength);
+        ret.meshout.status = "Got corrupted mesh output data from GPU";
       }
 
       if(numPrims > layout.primArrayLength)
       {
-        ret.meshout.status =
-            StringFormat::Fmt("Meshlet returned invalid primitive count %u with declared max %u",
-                              numPrims, layout.primArrayLength);
-        RDCERR("%s", ret.meshout.status.c_str());
+        RDCERR("Meshlet returned invalid primitive count %u with declared max %u", numPrims,
+               layout.primArrayLength);
+        ret.meshout.status = "Got corrupted mesh output data from GPU";
       }
 
       if(!ret.meshout.status.empty())
@@ -4314,7 +4066,7 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
 
   const VulkanCreationInfo::ShaderModule &moduleInfo = creationInfo.m_ShaderModule[vertShad.module];
 
-  const ShaderReflection *refl = vertShad.refl;
+  ShaderReflection *refl = vertShad.refl;
 
   VulkanPostVSData &ret = m_PostVS.Data[eventId];
 
@@ -4356,24 +4108,6 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
 
     MeshOutputBufferArraySize =
         m_pDriver->GetDeviceProps().limits.maxPerStageDescriptorStorageBuffers - 2;
-  }
-
-  // the default value of vertex input variables when no vertex attribute is provided
-  // 0 = (0,0,0,0), 1 = (0,0,0,1)
-  int defaultVertexAttributeValue = 1;
-
-  // if maintenance 9 is enabled, emulate the driver's default value
-  if(m_pDriver->Maintenance9())
-  {
-    VkPhysicalDeviceMaintenance9PropertiesKHR maintenance9Props = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_PROPERTIES_KHR};
-
-    VkPhysicalDeviceProperties2 propBase = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-    propBase.pNext = &maintenance9Props;
-
-    m_pDriver->vkGetPhysicalDeviceProperties2(m_pDriver->GetPhysDev(), &propBase);
-
-    defaultVertexAttributeValue = maintenance9Props.defaultVertexAttributeValue;
   }
 
   for(size_t i = 0; i < refl->inputSignature.size(); i++)
@@ -4491,24 +4225,9 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
     uint32_t *idx32 = NULL;
 
     // fetch ibuffer
-    {
-      uint64_t readSizeBytes = uint64_t(action->numIndices) * state.ibuffer.bytewidth;
-      // clamp to handle subrange bound via vkCmdBindIndexBuffer2
-      if(state.ibuffer.size != VK_WHOLE_SIZE)
-      {
-        uint64_t offsetBytes = uint64_t(action->indexOffset) * state.ibuffer.bytewidth;
-        uint64_t maxSubrangeBytes =
-            state.ibuffer.size > offsetBytes ? state.ibuffer.size - offsetBytes : 0;
-
-        readSizeBytes = RDCMIN(readSizeBytes, maxSubrangeBytes);
-      }
-
-      if(state.ibuffer.buf != ResourceId())
-        GetBufferData(state.ibuffer.buf, state.ibuffer.offs + action->indexOffset * idxsize,
-                      readSizeBytes, idxdata);
-      else if(m_pDriver->Maintenance6())
-        idxdata.resize((size_t)readSizeBytes);
-    }
+    if(state.ibuffer.buf != ResourceId())
+      GetBufferData(state.ibuffer.buf, state.ibuffer.offs + action->indexOffset * idxsize,
+                    uint64_t(action->numIndices) * idxsize, idxdata);
 
     // figure out what the maximum index could be, so we can clamp our index buffer to something
     // sane
@@ -4837,7 +4556,7 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
     VkDescriptorBufferInfo descriptor;
   };
 
-  rdcarray<VertexAttributeInfo> vertexAttrInfo;
+  rdcarray<uint32_t> attrInstDivisor;
   rdcarray<CompactedAttrBuffer> vbuffers;
   vbuffers.resize(MeshOutputBufferArraySize);
 
@@ -4879,19 +4598,7 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
 
         offs += action->vertexOffset * stride;
       }
-      // Handle the case of vertex attribute offset larger than the stride
-      uint64_t extraAttributeLen = 0;
-      for(uint32_t va = 0; va < state.vertexAttributes.size(); va++)
-      {
-        if(state.vertexAttributes[va].binding == binding)
-        {
-          uint64_t vaOffset = state.vertexAttributes[va].offset;
-          if(vaOffset > stride)
-            extraAttributeLen = RDCMAX(extraAttributeLen, vaOffset);
-        }
-      }
 
-      len += extraAttributeLen;
       len = RDCMIN(len, state.vbuffers[binding].size);
 
       origVBs.push_back(bytebuf());
@@ -5194,9 +4901,8 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
         m_pDriver->vkUnmapMemory(m_Device, vbuffers[attr].mem);
       }
 
-      vertexAttrInfo.resize(RDCMAX(vertexAttrInfo.size(), size_t(attr + 1)));
-      vertexAttrInfo[attr].divisor = instDivisor;
-      vertexAttrInfo[attr].valid = true;
+      attrInstDivisor.resize(RDCMAX(attrInstDivisor.size(), size_t(attr + 1)));
+      attrInstDivisor[attr] = instDivisor;
 
       vbuffers[attr].descriptor.buffer = vbuffers[attr].buf;
       vbuffers[attr].descriptor.offset = 0;
@@ -5252,8 +4958,8 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
     FileIO::WriteAll(Vulkan_Debug_PostVSDumpDirPath() + "/debug_postvs_vert.spv", modSpirv);
 
   ConvertToMeshOutputCompute(*refl, *vertShad.patchData, vertShad.entryPoint, m_StorageMode,
-                             vertexAttrInfo, action, numVerts, numViews, baseSpecConstant, modSpirv,
-                             bufStride, defaultVertexAttributeValue);
+                             attrInstDivisor, action, numVerts, numViews, baseSpecConstant,
+                             modSpirv, bufStride);
 
   if(!Vulkan_Debug_PostVSDumpDirPath().empty())
     FileIO::WriteAll(Vulkan_Debug_PostVSDumpDirPath() + "/debug_postvs_comp.spv", modSpirv);
@@ -5346,9 +5052,6 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
   // repoint pipeline layout
   compPipeInfo.layout = patchedBufferdata.pipeLayout;
 
-  if(pipeCreateInfo.flags & VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT)
-    compPipeInfo.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-
   // create vertex shader with modified code
   VkShaderModuleCreateInfo moduleCreateInfo = {
       VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL,         0,
@@ -5382,21 +5085,12 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
                         "KHR and EXT buffer_device_address should be interchangeable here.");
       VkBufferDeviceAddressInfo getAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
 
-      uint32_t specIdOffset = i;
       if(i < MeshOutputBufferArraySize)
-      {
         getAddressInfo.buffer = vbuffers[i].buf;
-      }
       else if(i == MeshOutputBufferArraySize)
-      {
         getAddressInfo.buffer = uniqIdxBuf;
-        specIdOffset = MeshOutputIBufferSpecConstant;
-      }
       else if(i == MeshOutputBufferArraySize + 1)
-      {
         getAddressInfo.buffer = meshBuffer;
-        specIdOffset = MeshOutputOutputSpecConstant;
-      }
 
       // skip
       if(getAddressInfo.buffer == VK_NULL_HANDLE)
@@ -5409,7 +5103,7 @@ void VulkanReplay::FetchVSOut(uint32_t eventId, VulkanRenderState &state)
 
       VkSpecializationMapEntry entry;
       entry.offset = baseOffset + i * sizeof(uint64_t);
-      entry.constantID = baseSpecConstant + specIdOffset * 2 + 0;
+      entry.constantID = baseSpecConstant + i * 2 + 0;
 
       // for EXT we have one 64-bit spec constant per address, for KHR we have a uvec2 - two
       // constants
@@ -5730,7 +5424,7 @@ void VulkanReplay::FetchTessGSOut(uint32_t eventId, VulkanRenderState &state)
       state.graphics.shaderObject ? creationInfo.m_ShaderObject[state.shaderObjects[stageIndex]].shad
                                   : pipeInfo.shaders[stageIndex];
 
-  const ShaderReflection *lastRefl = shader.refl;
+  ShaderReflection *lastRefl = shader.refl;
 
   RDCASSERT(lastRefl);
 
@@ -6494,7 +6188,7 @@ MeshFormat VulkanReplay::GetPostVSBuffers(uint32_t eventId, uint32_t instID, uin
 
     ret.dispatchSize = s.dispatchSize;
 
-    if(stage == MeshDataStage::MeshOut || stage == MeshDataStage::Count)
+    if(stage == MeshDataStage::MeshOut)
     {
       ret.meshletSizes.resize(s.instData.size());
       for(size_t i = 0; i < s.instData.size(); i++)

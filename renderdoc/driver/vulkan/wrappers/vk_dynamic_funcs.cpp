@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,7 +42,7 @@ bool WrappedVulkan::Serialise_vkCmdSetViewport(SerialiserType &ser, VkCommandBuf
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -114,7 +114,7 @@ bool WrappedVulkan::Serialise_vkCmdSetViewportWithCount(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -180,7 +180,7 @@ bool WrappedVulkan::Serialise_vkCmdSetScissor(SerialiserType &ser, VkCommandBuff
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -251,7 +251,7 @@ bool WrappedVulkan::Serialise_vkCmdSetScissorWithCount(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -314,7 +314,7 @@ bool WrappedVulkan::Serialise_vkCmdSetLineWidth(SerialiserType &ser, VkCommandBu
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -377,7 +377,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthBias(SerialiserType &ser, VkCommandBu
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -445,7 +445,7 @@ bool WrappedVulkan::Serialise_vkCmdSetBlendConstants(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -507,7 +507,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthBounds(SerialiserType &ser, VkCommand
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -574,7 +574,7 @@ bool WrappedVulkan::Serialise_vkCmdSetStencilCompareMask(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -643,7 +643,7 @@ bool WrappedVulkan::Serialise_vkCmdSetStencilWriteMask(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -712,7 +712,7 @@ bool WrappedVulkan::Serialise_vkCmdSetStencilReference(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -779,7 +779,7 @@ bool WrappedVulkan::Serialise_vkCmdSetSampleLocationsEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -850,7 +850,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDiscardRectangleEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -911,9 +911,10 @@ void WrappedVulkan::vkCmdSetDiscardRectangleEXT(VkCommandBuffer commandBuffer,
 }
 
 template <typename SerialiserType>
-bool WrappedVulkan::Serialise_vkCmdSetLineStipple(SerialiserType &ser, VkCommandBuffer commandBuffer,
-                                                  uint32_t lineStippleFactor,
-                                                  uint16_t lineStipplePattern)
+bool WrappedVulkan::Serialise_vkCmdSetLineStippleKHR(SerialiserType &ser,
+                                                     VkCommandBuffer commandBuffer,
+                                                     uint32_t lineStippleFactor,
+                                                     uint16_t lineStipplePattern)
 {
   SERIALISE_ELEMENT(commandBuffer);
   SERIALISE_ELEMENT(lineStippleFactor).Important();
@@ -925,7 +926,7 @@ bool WrappedVulkan::Serialise_vkCmdSetLineStipple(SerialiserType &ser, VkCommand
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -952,14 +953,14 @@ bool WrappedVulkan::Serialise_vkCmdSetLineStipple(SerialiserType &ser, VkCommand
     // other since it's a straight promotion. This allows us to share implementation between the two
     if(commandBuffer != VK_NULL_HANDLE)
       ObjDisp(commandBuffer)
-          ->CmdSetLineStipple(Unwrap(commandBuffer), lineStippleFactor, lineStipplePattern);
+          ->CmdSetLineStippleKHR(Unwrap(commandBuffer), lineStippleFactor, lineStipplePattern);
   }
 
   return true;
 }
 
-void WrappedVulkan::vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t lineStippleFactor,
-                                        uint16_t lineStipplePattern)
+void WrappedVulkan::vkCmdSetLineStippleKHR(VkCommandBuffer commandBuffer,
+                                           uint32_t lineStippleFactor, uint16_t lineStipplePattern)
 {
   SCOPED_DBG_SINK();
 
@@ -967,7 +968,7 @@ void WrappedVulkan::vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t 
   // other since it's a straight promotion. This allows us to share implementation between the two
   SERIALISE_TIME_CALL(
       ObjDisp(commandBuffer)
-          ->CmdSetLineStipple(Unwrap(commandBuffer), lineStippleFactor, lineStipplePattern));
+          ->CmdSetLineStippleKHR(Unwrap(commandBuffer), lineStippleFactor, lineStipplePattern));
 
   if(IsCaptureMode(m_State))
   {
@@ -975,8 +976,8 @@ void WrappedVulkan::vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t 
 
     CACHE_THREAD_SERIALISER();
 
-    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetLineStipple);
-    Serialise_vkCmdSetLineStipple(ser, commandBuffer, lineStippleFactor, lineStipplePattern);
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetLineStippleKHR);
+    Serialise_vkCmdSetLineStippleKHR(ser, commandBuffer, lineStippleFactor, lineStipplePattern);
 
     record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
@@ -988,7 +989,7 @@ void WrappedVulkan::vkCmdSetLineStipple(VkCommandBuffer commandBuffer, uint32_t 
 void WrappedVulkan::vkCmdSetLineStippleEXT(VkCommandBuffer commandBuffer,
                                            uint32_t lineStippleFactor, uint16_t lineStipplePattern)
 {
-  return vkCmdSetLineStipple(commandBuffer, lineStippleFactor, lineStipplePattern);
+  return vkCmdSetLineStippleKHR(commandBuffer, lineStippleFactor, lineStipplePattern);
 }
 
 template <typename SerialiserType>
@@ -1004,7 +1005,7 @@ bool WrappedVulkan::Serialise_vkCmdSetCullMode(SerialiserType &ser, VkCommandBuf
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1065,7 +1066,7 @@ bool WrappedVulkan::Serialise_vkCmdSetFrontFace(SerialiserType &ser, VkCommandBu
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1127,7 +1128,7 @@ bool WrappedVulkan::Serialise_vkCmdSetPrimitiveTopology(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1195,7 +1196,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthTestEnable(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1258,7 +1259,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthWriteEnable(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1321,7 +1322,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthCompareOp(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1384,7 +1385,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthBoundsTestEnable(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1448,7 +1449,7 @@ bool WrappedVulkan::Serialise_vkCmdSetStencilTestEnable(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1517,7 +1518,7 @@ bool WrappedVulkan::Serialise_vkCmdSetStencilOp(SerialiserType &ser, VkCommandBu
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1599,7 +1600,7 @@ bool WrappedVulkan::Serialise_vkCmdSetColorWriteEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1666,7 +1667,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthBiasEnable(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1728,7 +1729,7 @@ bool WrappedVulkan::Serialise_vkCmdSetLogicOpEXT(SerialiserType &ser, VkCommandB
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1790,7 +1791,7 @@ bool WrappedVulkan::Serialise_vkCmdSetPatchControlPointsEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1854,7 +1855,7 @@ bool WrappedVulkan::Serialise_vkCmdSetPrimitiveRestartEnable(SerialiserType &ser
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1919,7 +1920,7 @@ bool WrappedVulkan::Serialise_vkCmdSetRasterizerDiscardEnable(SerialiserType &se
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -1986,7 +1987,7 @@ bool WrappedVulkan::Serialise_vkCmdSetFragmentShadingRateKHR(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2055,7 +2056,7 @@ bool WrappedVulkan::Serialise_vkCmdSetAttachmentFeedbackLoopEnableEXT(Serialiser
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2119,7 +2120,7 @@ bool WrappedVulkan::Serialise_vkCmdSetAlphaToCoverageEnableEXT(SerialiserType &s
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2184,7 +2185,7 @@ bool WrappedVulkan::Serialise_vkCmdSetAlphaToOneEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2259,7 +2260,7 @@ bool WrappedVulkan::Serialise_vkCmdSetColorBlendEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2334,7 +2335,7 @@ bool WrappedVulkan::Serialise_vkCmdSetColorBlendEquationEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2411,7 +2412,7 @@ bool WrappedVulkan::Serialise_vkCmdSetColorWriteMaskEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2484,7 +2485,7 @@ bool WrappedVulkan::Serialise_vkCmdSetConservativeRasterizationModeEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2589,7 +2590,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthClampEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2653,7 +2654,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthClipEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2716,7 +2717,7 @@ bool WrappedVulkan::Serialise_vkCmdSetDepthClipNegativeOneToOneEXT(SerialiserTyp
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2780,7 +2781,7 @@ bool WrappedVulkan::Serialise_vkCmdSetExtraPrimitiveOverestimationSizeEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2847,7 +2848,7 @@ bool WrappedVulkan::Serialise_vkCmdSetLineRasterizationModeEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2912,7 +2913,7 @@ bool WrappedVulkan::Serialise_vkCmdSetLineStippleEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2976,7 +2977,7 @@ bool WrappedVulkan::Serialise_vkCmdSetLogicOpEnableEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3039,7 +3040,7 @@ bool WrappedVulkan::Serialise_vkCmdSetPolygonModeEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3101,7 +3102,7 @@ bool WrappedVulkan::Serialise_vkCmdSetProvokingVertexModeEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3164,7 +3165,7 @@ bool WrappedVulkan::Serialise_vkCmdSetRasterizationSamplesEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3228,7 +3229,7 @@ bool WrappedVulkan::Serialise_vkCmdSetRasterizationStreamEXT(SerialiserType &ser
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3298,7 +3299,7 @@ bool WrappedVulkan::Serialise_vkCmdSetSampleLocationsEnableEXT(SerialiserType &s
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3365,7 +3366,7 @@ bool WrappedVulkan::Serialise_vkCmdSetSampleMaskEXT(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3435,7 +3436,7 @@ bool WrappedVulkan::Serialise_vkCmdSetTessellationDomainOriginEXT(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3512,7 +3513,7 @@ bool WrappedVulkan::Serialise_vkCmdSetRayTracingPipelineStackSizeKHR(SerialiserT
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3565,7 +3566,7 @@ void WrappedVulkan::vkCmdSetRayTracingPipelineStackSizeKHR(VkCommandBuffer comma
 }
 
 template <typename SerialiserType>
-bool WrappedVulkan::Serialise_vkCmdSetRenderingAttachmentLocations(
+bool WrappedVulkan::Serialise_vkCmdSetRenderingAttachmentLocationsKHR(
     SerialiserType &ser, VkCommandBuffer commandBuffer,
     const VkRenderingAttachmentLocationInfo *pLocationInfo)
 {
@@ -3578,7 +3579,7 @@ bool WrappedVulkan::Serialise_vkCmdSetRenderingAttachmentLocations(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3599,19 +3600,20 @@ bool WrappedVulkan::Serialise_vkCmdSetRenderingAttachmentLocations(
     }
 
     if(commandBuffer != VK_NULL_HANDLE)
-      ObjDisp(commandBuffer)->CmdSetRenderingAttachmentLocations(Unwrap(commandBuffer), &locationInfo);
+      ObjDisp(commandBuffer)->CmdSetRenderingAttachmentLocationsKHR(Unwrap(commandBuffer), &locationInfo);
   }
 
   return true;
 }
 
-void WrappedVulkan::vkCmdSetRenderingAttachmentLocations(
+void WrappedVulkan::vkCmdSetRenderingAttachmentLocationsKHR(
     VkCommandBuffer commandBuffer, const VkRenderingAttachmentLocationInfo *pLocationInfo)
 {
   SCOPED_DBG_SINK();
 
   SERIALISE_TIME_CALL(
-      ObjDisp(commandBuffer)->CmdSetRenderingAttachmentLocations(Unwrap(commandBuffer), pLocationInfo));
+      ObjDisp(commandBuffer)
+          ->CmdSetRenderingAttachmentLocationsKHR(Unwrap(commandBuffer), pLocationInfo));
 
   if(IsCaptureMode(m_State))
   {
@@ -3619,15 +3621,15 @@ void WrappedVulkan::vkCmdSetRenderingAttachmentLocations(
 
     CACHE_THREAD_SERIALISER();
 
-    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetRenderingAttachmentLocations);
-    Serialise_vkCmdSetRenderingAttachmentLocations(ser, commandBuffer, pLocationInfo);
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetRenderingAttachmentLocationsKHR);
+    Serialise_vkCmdSetRenderingAttachmentLocationsKHR(ser, commandBuffer, pLocationInfo);
 
     record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
 }
 
 template <typename SerialiserType>
-bool WrappedVulkan::Serialise_vkCmdSetRenderingInputAttachmentIndices(
+bool WrappedVulkan::Serialise_vkCmdSetRenderingInputAttachmentIndicesKHR(
     SerialiserType &ser, VkCommandBuffer commandBuffer,
     const VkRenderingInputAttachmentIndexInfo *pInputAttachmentIndexInfo)
 {
@@ -3642,7 +3644,7 @@ bool WrappedVulkan::Serialise_vkCmdSetRenderingInputAttachmentIndices(
 
   if(IsReplayingAndReading())
   {
-    m_LastCmdBufferID = GetResID(commandBuffer);
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3664,21 +3666,22 @@ bool WrappedVulkan::Serialise_vkCmdSetRenderingInputAttachmentIndices(
 
     if(commandBuffer != VK_NULL_HANDLE)
       ObjDisp(commandBuffer)
-          ->CmdSetRenderingInputAttachmentIndices(Unwrap(commandBuffer), &inputAttachmentIndexInfo);
+          ->CmdSetRenderingInputAttachmentIndicesKHR(Unwrap(commandBuffer),
+                                                     &inputAttachmentIndexInfo);
   }
 
   return true;
 }
 
-void WrappedVulkan::vkCmdSetRenderingInputAttachmentIndices(
+void WrappedVulkan::vkCmdSetRenderingInputAttachmentIndicesKHR(
     VkCommandBuffer commandBuffer,
     const VkRenderingInputAttachmentIndexInfo *pInputAttachmentIndexInfo)
 {
   SCOPED_DBG_SINK();
 
   SERIALISE_TIME_CALL(ObjDisp(commandBuffer)
-                          ->CmdSetRenderingInputAttachmentIndices(Unwrap(commandBuffer),
-                                                                  pInputAttachmentIndexInfo));
+                          ->CmdSetRenderingInputAttachmentIndicesKHR(Unwrap(commandBuffer),
+                                                                     pInputAttachmentIndexInfo));
 
   if(IsCaptureMode(m_State))
   {
@@ -3686,8 +3689,9 @@ void WrappedVulkan::vkCmdSetRenderingInputAttachmentIndices(
 
     CACHE_THREAD_SERIALISER();
 
-    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetRenderingInputAttachmentIndices);
-    Serialise_vkCmdSetRenderingInputAttachmentIndices(ser, commandBuffer, pInputAttachmentIndexInfo);
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetRenderingInputAttachmentIndicesKHR);
+    Serialise_vkCmdSetRenderingInputAttachmentIndicesKHR(ser, commandBuffer,
+                                                         pInputAttachmentIndexInfo);
 
     record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
@@ -3730,7 +3734,7 @@ INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetDiscardRectangleEXT, VkCommandBuff
                                 uint32_t firstDiscardRectangle, uint32_t discardRectangleCount,
                                 const VkRect2D *pDiscardRectangles);
 
-INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetLineStipple, VkCommandBuffer commandBuffer,
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetLineStippleKHR, VkCommandBuffer commandBuffer,
                                 uint32_t lineStippleFactor, uint16_t lineStipplePattern);
 
 INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetCullMode, VkCommandBuffer commandBuffer,
@@ -3835,9 +3839,9 @@ INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetTessellationDomainOriginEXT,
 INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetRayTracingPipelineStackSizeKHR,
                                 VkCommandBuffer commandBuffer, uint32_t pipelineStackSize)
 
-INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetRenderingAttachmentLocations,
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetRenderingAttachmentLocationsKHR,
                                 VkCommandBuffer commandBuffer,
                                 const VkRenderingAttachmentLocationInfo *pLocationInfo);
-INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetRenderingInputAttachmentIndices,
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetRenderingInputAttachmentIndicesKHR,
                                 VkCommandBuffer commandBuffer,
                                 const VkRenderingInputAttachmentIndexInfo *pInputAttachmentIndexInfo);

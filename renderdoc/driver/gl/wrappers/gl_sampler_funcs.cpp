@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -50,7 +50,8 @@ bool WrappedOpenGL::Serialise_glGenSamplers(SerialiserType &ser, GLsizei n, GLui
 
     GLResource res = SamplerRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(sampler, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(sampler, res);
 
     AddResource(sampler, ResourceType::Sampler, "Sampler");
   }
@@ -65,7 +66,7 @@ void WrappedOpenGL::glGenSamplers(GLsizei count, GLuint *samplers)
   for(GLsizei i = 0; i < count; i++)
   {
     GLResource res = SamplerRes(GetCtx(), samplers[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -83,6 +84,10 @@ void WrappedOpenGL::glGenSamplers(GLsizei count, GLuint *samplers)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -103,7 +108,8 @@ bool WrappedOpenGL::Serialise_glCreateSamplers(SerialiserType &ser, GLsizei n, G
 
     GLResource res = SamplerRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(sampler, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(sampler, res);
 
     AddResource(sampler, ResourceType::Sampler, "Sampler");
   }
@@ -118,7 +124,7 @@ void WrappedOpenGL::glCreateSamplers(GLsizei count, GLuint *samplers)
   for(GLsizei i = 0; i < count; i++)
   {
     GLResource res = SamplerRes(GetCtx(), samplers[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -136,6 +142,10 @@ void WrappedOpenGL::glCreateSamplers(GLsizei count, GLuint *samplers)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -620,7 +630,7 @@ void WrappedOpenGL::glDeleteSamplers(GLsizei n, const GLuint *ids)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = SamplerRes(GetCtx(), ids[i]);
-    if(GetResourceManager()->HasResource(res))
+    if(GetResourceManager()->HasCurrentResource(res))
     {
       if(GetResourceManager()->HasResourceRecord(res))
         GetResourceManager()->GetResourceRecord(res)->Delete(GetResourceManager());

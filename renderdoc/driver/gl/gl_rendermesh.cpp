@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -56,11 +56,8 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
   GLMarkerRegion renderMesh(
       StringFormat::Fmt("RenderMesh with %zu secondary draws", secondaryDraws.size()));
 
-  float nearPlane = cfg.cam ? ((Camera *)cfg.cam)->GetNear() : 0.1f;
-  float farPlane = cfg.cam ? ((Camera *)cfg.cam)->GetFar() : 100000.0f;
-
   Matrix4f projMat =
-      Matrix4f::Perspective(90.0f, nearPlane, farPlane, DebugData.outWidth / DebugData.outHeight);
+      Matrix4f::Perspective(90.0f, 0.1f, 100000.0f, DebugData.outWidth / DebugData.outHeight);
 
   Matrix4f camMat = cfg.cam ? ((Camera *)cfg.cam)->GetMatrix() : Matrix4f::Identity();
 
@@ -98,8 +95,6 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
   }
 
   drv.glDisable(eGL_CULL_FACE);
-  if(HasExt[ARB_depth_clamp])
-    drv.glEnable(eGL_DEPTH_CLAMP);
 
   if(cfg.position.unproject)
   {
@@ -154,7 +149,7 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
       const MeshFormat &fmt = secondaryDraws[i];
 
       if(fmt.vertexResourceId != ResourceId() &&
-         m_pDriver->GetResourceManager()->HasResource(fmt.vertexResourceId))
+         m_pDriver->GetResourceManager()->HasCurrentResource(fmt.vertexResourceId))
       {
         uboParams.color = Vec4f(fmt.meshColor.x, fmt.meshColor.y, fmt.meshColor.z, fmt.meshColor.w);
 
@@ -170,7 +165,7 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
         *uboptr = uboParams;
         drv.glUnmapBuffer(eGL_UNIFORM_BUFFER);
 
-        GLuint vb = m_pDriver->GetResourceManager()->GetResource(fmt.vertexResourceId).name;
+        GLuint vb = m_pDriver->GetResourceManager()->GetCurrentResource(fmt.vertexResourceId).name;
         drv.glBindVertexBuffer(0, vb, (GLintptr)fmt.vertexByteOffset, fmt.vertexByteStride);
 
         {
@@ -186,7 +181,7 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
 
         if(fmt.indexByteStride)
         {
-          GLuint ib = m_pDriver->GetResourceManager()->GetResource(fmt.indexResourceId).name;
+          GLuint ib = m_pDriver->GetResourceManager()->GetCurrentResource(fmt.indexResourceId).name;
           drv.glBindBuffer(eGL_ELEMENT_ARRAY_BUFFER, ib);
 
           GLenum idxtype = eGL_UNSIGNED_BYTE;
@@ -212,7 +207,7 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
   for(uint32_t i = 0; i < 2; i++)
   {
     if(meshData[i]->vertexResourceId == ResourceId() ||
-       !m_pDriver->GetResourceManager()->HasResource(meshData[i]->vertexResourceId))
+       !m_pDriver->GetResourceManager()->HasCurrentResource(meshData[i]->vertexResourceId))
       continue;
 
     if(meshData[i]->format.Special())
@@ -312,7 +307,8 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
     if(meshData[i]->instanced)
       offs += meshData[i]->vertexByteStride * (cfg.curInstance / meshData[i]->instStepRate);
 
-    GLuint vb = m_pDriver->GetResourceManager()->GetResource(meshData[i]->vertexResourceId).name;
+    GLuint vb =
+        m_pDriver->GetResourceManager()->GetCurrentResource(meshData[i]->vertexResourceId).name;
 
     {
       GLuint bytesize = 0;
@@ -356,8 +352,6 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
   if(cfg.visualisationMode != Visualisation::NoSolid && topo != eGL_PATCHES)
   {
     drv.glDepthFunc(eGL_LESS);
-    if(HasExt[ARB_depth_clamp])
-      drv.glDisable(eGL_DEPTH_CLAMP);
 
     GLuint solidProg = prog;
 
@@ -414,7 +408,8 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
 
       if(cfg.position.indexResourceId != ResourceId())
       {
-        GLuint ib = m_pDriver->GetResourceManager()->GetResource(cfg.position.indexResourceId).name;
+        GLuint ib =
+            m_pDriver->GetResourceManager()->GetCurrentResource(cfg.position.indexResourceId).name;
         drv.glBindBuffer(eGL_ELEMENT_ARRAY_BUFFER, ib);
       }
       drv.glDrawElementsBaseVertex(topo, cfg.position.numIndices, idxtype,
@@ -429,9 +424,6 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
     drv.glDisableVertexAttribArray(1);
 
     drv.glUseProgram(prog);
-
-    if(HasExt[ARB_depth_clamp])
-      drv.glEnable(eGL_DEPTH_CLAMP);
   }
 
   drv.glDepthFunc(eGL_ALWAYS);
@@ -468,9 +460,10 @@ void GLReplay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondar
         idxtype = eGL_UNSIGNED_INT;
 
       if(cfg.position.indexResourceId != ResourceId() &&
-         m_pDriver->GetResourceManager()->HasResource(cfg.position.indexResourceId))
+         m_pDriver->GetResourceManager()->HasCurrentResource(cfg.position.indexResourceId))
       {
-        GLuint ib = m_pDriver->GetResourceManager()->GetResource(cfg.position.indexResourceId).name;
+        GLuint ib =
+            m_pDriver->GetResourceManager()->GetCurrentResource(cfg.position.indexResourceId).name;
         drv.glBindBuffer(eGL_ELEMENT_ARRAY_BUFFER, ib);
 
         drv.glDrawElementsBaseVertex(

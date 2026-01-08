@@ -1,4 +1,3 @@
-// clang-format off
 /****************************************************************************
 **
 ** Copyright (C) 2015 The Qt Company Ltd.
@@ -70,7 +69,6 @@ public:
 
 private:
     int doLayout(const QRect &rect, bool testOnly) const;
-    void setLineGeometry(const QList<QPair<QLayoutItem *, QRect>> &line, int lineHeight) const;
     int smartSpacing(QStyle::PixelMetric pm) const;
 
     QList<QLayoutItem *> itemList;

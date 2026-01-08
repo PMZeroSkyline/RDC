@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -85,7 +85,8 @@ bool WrappedOpenGL::Serialise_glGenBuffers(SerialiserType &ser, GLsizei n, GLuin
 
     GLResource res = BufferRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(buffer, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(buffer, res);
 
     AddResource(buffer, ResourceType::Buffer, "Buffer");
 
@@ -104,7 +105,7 @@ void WrappedOpenGL::glGenBuffers(GLsizei n, GLuint *buffers)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = BufferRes(GetCtx(), buffers[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -125,6 +126,7 @@ void WrappedOpenGL::glGenBuffers(GLsizei n, GLuint *buffers)
     }
     else
     {
+      GetResourceManager()->AddLiveResource(id, res);
       m_Buffers[id].resource = res;
       m_Buffers[id].curType = eGL_NONE;
       m_Buffers[id].creationFlags = BufferCategory::NoFlags;
@@ -148,7 +150,8 @@ bool WrappedOpenGL::Serialise_glCreateBuffers(SerialiserType &ser, GLsizei n, GL
 
     GLResource res = BufferRes(GetCtx(), real);
 
-    ResourceId live = m_ResourceManager->RegisterResource(buffer, res);
+    ResourceId live = m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(buffer, res);
 
     AddResource(buffer, ResourceType::Buffer, "Buffer");
 
@@ -167,7 +170,7 @@ void WrappedOpenGL::glCreateBuffers(GLsizei n, GLuint *buffers)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = BufferRes(GetCtx(), buffers[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -188,6 +191,7 @@ void WrappedOpenGL::glCreateBuffers(GLsizei n, GLuint *buffers)
     }
     else
     {
+      GetResourceManager()->AddLiveResource(id, res);
       m_Buffers[id].resource = res;
       m_Buffers[id].curType = eGL_NONE;
       m_Buffers[id].creationFlags = BufferCategory::NoFlags;
@@ -1116,8 +1120,8 @@ bool WrappedOpenGL::Serialise_glNamedCopyBufferSubDataEXT(SerialiserType &ser,
       ActionDescription action;
       action.flags |= ActionFlags::Copy;
 
-      action.copySource = srcid;
-      action.copyDestination = dstid;
+      action.copySource = GetResourceManager()->GetOriginalID(srcid);
+      action.copyDestination = GetResourceManager()->GetOriginalID(dstid);
 
       AddAction(action);
 
@@ -2005,7 +2009,7 @@ bool WrappedOpenGL::Serialise_glInvalidateBufferData(SerialiserType &ser, GLuint
       ActionDescription action;
       action.flags |= ActionFlags::Clear;
 
-      action.copyDestination = id;
+      action.copyDestination = GetResourceManager()->GetOriginalID(id);
 
       AddAction(action);
 
@@ -2082,7 +2086,7 @@ bool WrappedOpenGL::Serialise_glInvalidateBufferSubData(SerialiserType &ser, GLu
       ActionDescription action;
       action.flags |= ActionFlags::Clear;
 
-      action.copyDestination = id;
+      action.copyDestination = GetResourceManager()->GetOriginalID(id);
 
       AddAction(action);
 
@@ -3114,7 +3118,8 @@ bool WrappedOpenGL::Serialise_glGenTransformFeedbacks(SerialiserType &ser, GLsiz
 
     GLResource res = FeedbackRes(GetCtx(), real);
 
-    m_ResourceManager->RegisterResource(feedback, res);
+    m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(feedback, res);
 
     AddResource(feedback, ResourceType::StateObject, "Transform Feedback");
   }
@@ -3129,7 +3134,7 @@ void WrappedOpenGL::glGenTransformFeedbacks(GLsizei n, GLuint *ids)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = FeedbackRes(GetCtx(), ids[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -3147,6 +3152,10 @@ void WrappedOpenGL::glGenTransformFeedbacks(GLsizei n, GLuint *ids)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -3167,7 +3176,8 @@ bool WrappedOpenGL::Serialise_glCreateTransformFeedbacks(SerialiserType &ser, GL
 
     GLResource res = FeedbackRes(GetCtx(), real);
 
-    m_ResourceManager->RegisterResource(feedback, res);
+    m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(feedback, res);
 
     AddResource(feedback, ResourceType::StateObject, "Transform Feedback");
   }
@@ -3182,7 +3192,7 @@ void WrappedOpenGL::glCreateTransformFeedbacks(GLsizei n, GLuint *ids)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = FeedbackRes(GetCtx(), ids[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -3201,6 +3211,10 @@ void WrappedOpenGL::glCreateTransformFeedbacks(GLsizei n, GLuint *ids)
 
       record->AddChunk(chunk);
     }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
+    }
   }
 }
 
@@ -3209,7 +3223,7 @@ void WrappedOpenGL::glDeleteTransformFeedbacks(GLsizei n, const GLuint *ids)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = FeedbackRes(GetCtx(), ids[i]);
-    if(GetResourceManager()->HasResource(res))
+    if(GetResourceManager()->HasCurrentResource(res))
     {
       if(GetResourceManager()->HasResourceRecord(res))
       {
@@ -4539,7 +4553,8 @@ bool WrappedOpenGL::Serialise_glGenVertexArrays(SerialiserType &ser, GLsizei n, 
 
     GLResource res = VertexArrayRes(GetCtx(), real);
 
-    m_ResourceManager->RegisterResource(array, res);
+    m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(array, res);
 
     AddResource(array, ResourceType::StateObject, "Vertex Array");
   }
@@ -4554,7 +4569,7 @@ void WrappedOpenGL::glGenVertexArrays(GLsizei n, GLuint *arrays)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = VertexArrayRes(GetCtx(), arrays[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -4572,6 +4587,10 @@ void WrappedOpenGL::glGenVertexArrays(GLsizei n, GLuint *arrays)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -4592,7 +4611,8 @@ bool WrappedOpenGL::Serialise_glCreateVertexArrays(SerialiserType &ser, GLsizei 
 
     GLResource res = VertexArrayRes(GetCtx(), real);
 
-    m_ResourceManager->RegisterResource(array, res);
+    m_ResourceManager->RegisterResource(res);
+    GetResourceManager()->AddLiveResource(array, res);
 
     AddResource(array, ResourceType::StateObject, "Vertex Array");
   }
@@ -4607,7 +4627,7 @@ void WrappedOpenGL::glCreateVertexArrays(GLsizei n, GLuint *arrays)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = VertexArrayRes(GetCtx(), arrays[i]);
-    ResourceId id = GetResourceManager()->RegisterResource(ResourceId(), res);
+    ResourceId id = GetResourceManager()->RegisterResource(res);
 
     if(IsCaptureMode(m_State))
     {
@@ -4625,6 +4645,10 @@ void WrappedOpenGL::glCreateVertexArrays(GLsizei n, GLuint *arrays)
       RDCASSERT(record);
 
       record->AddChunk(chunk);
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(id, res);
     }
   }
 }
@@ -5124,7 +5148,7 @@ void WrappedOpenGL::glDeleteBuffers(GLsizei n, const GLuint *buffers)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = BufferRes(GetCtx(), buffers[i]);
-    if(GetResourceManager()->HasResource(res))
+    if(GetResourceManager()->HasCurrentResource(res))
     {
       GLResourceRecord *record = GetResourceManager()->GetResourceRecord(res);
       if(record)
@@ -5163,7 +5187,7 @@ void WrappedOpenGL::glDeleteVertexArrays(GLsizei n, const GLuint *arrays)
   for(GLsizei i = 0; i < n; i++)
   {
     GLResource res = VertexArrayRes(GetCtx(), arrays[i]);
-    if(GetResourceManager()->HasResource(res) && arrays[i])
+    if(GetResourceManager()->HasCurrentResource(res) && arrays[i])
     {
       if(GetResourceManager()->HasResourceRecord(res))
       {

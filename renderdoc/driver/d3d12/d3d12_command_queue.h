@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -148,7 +148,7 @@ struct WrappedDownlevelQueue : public ID3D12CommandQueueDownlevel
 
 class WrappedID3D12GraphicsCommandList;
 
-class WrappedID3D12CommandQueue : public ID3D12CommandQueue1,
+class WrappedID3D12CommandQueue : public ID3D12CommandQueue,
                                   public RefCounter12<ID3D12CommandQueue>,
                                   public ID3DDevice,
                                   public IDXGISwapper
@@ -156,7 +156,6 @@ class WrappedID3D12CommandQueue : public ID3D12CommandQueue1,
   friend class WrappedID3D12GraphicsCommandList;
 
   ID3D12CommandQueueDownlevel *m_pDownlevel;
-  ID3D12CommandQueue1 *m_pReal1;
 
   WrappedDownlevelQueue m_WrappedDownlevel;
 
@@ -183,7 +182,6 @@ class WrappedID3D12CommandQueue : public ID3D12CommandQueue1,
 
   WrappedID3D12DebugCommandQueue m_WrappedDebug;
   WrappedID3D12CompatibilityQueue m_WrappedCompat;
-  WrappedID3D12SharingContract m_SharingContract;
 
   rdcarray<D3D12ResourceRecord *> m_CmdListRecords;
   rdcarray<D3D12ResourceRecord *> m_CmdListAllocators;
@@ -215,7 +213,7 @@ class WrappedID3D12CommandQueue : public ID3D12CommandQueue1,
 public:
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12CommandQueue);
 
-  WrappedID3D12CommandQueue(ResourceId id, ID3D12CommandQueue *real, WrappedID3D12Device *device,
+  WrappedID3D12CommandQueue(ID3D12CommandQueue *real, WrappedID3D12Device *device,
                             CaptureState &state);
   virtual ~WrappedID3D12CommandQueue();
 
@@ -410,35 +408,6 @@ public:
   virtual HRESULT STDMETHODCALLTYPE Present(ID3D12GraphicsCommandList *pOpenCommandList,
                                             ID3D12Resource *pSourceTex2D, HWND hWindow,
                                             D3D12_DOWNLEVEL_PRESENT_FLAGS Flags);
-
-  // implement ID3D12CommandQueue1
-  virtual HRESULT STDMETHODCALLTYPE SetProcessPriority(D3D12_COMMAND_QUEUE_PROCESS_PRIORITY Priority)
-  {
-    if(!m_pReal1)
-      return E_NOINTERFACE;
-    return m_pReal1->SetProcessPriority(Priority);
-  }
-
-  virtual HRESULT STDMETHODCALLTYPE GetProcessPriority(D3D12_COMMAND_QUEUE_PROCESS_PRIORITY *pOutValue)
-  {
-    if(!m_pReal1)
-      return E_NOINTERFACE;
-    return m_pReal1->GetProcessPriority(pOutValue);
-  }
-
-  virtual HRESULT STDMETHODCALLTYPE SetGlobalPriority(D3D12_COMMAND_QUEUE_GLOBAL_PRIORITY Priority)
-  {
-    if(!m_pReal1)
-      return E_NOINTERFACE;
-    return m_pReal1->SetGlobalPriority(Priority);
-  }
-
-  virtual HRESULT STDMETHODCALLTYPE GetGlobalPriority(D3D12_COMMAND_QUEUE_GLOBAL_PRIORITY *pOutValue)
-  {
-    if(!m_pReal1)
-      return E_NOINTERFACE;
-    return m_pReal1->GetGlobalPriority(pOutValue);
-  }
 };
 
 template <>

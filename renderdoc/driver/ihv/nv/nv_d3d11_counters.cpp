@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2022-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -38,7 +38,6 @@ struct NVD3D11Counters::Impl
 {
   NVCounterEnumerator *CounterEnumerator;
   bool LibraryNotFound = false;
-  bool LibraryNotSupported = false;
 
   Impl() : CounterEnumerator(NULL) {}
   ~Impl()
@@ -65,48 +64,12 @@ struct NVD3D11Counters::Impl
                             MessageSource::RuntimeWarning, message);
   }
 
-  static bytebuf GetCounterAvailabilityImage(WrappedID3D11Device *device)
-  {
-    bytebuf counterAvailabilityImage;
-    NVPA_Status result;
-    NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability_Params params = {};
-    params.structSize = NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability_Params_STRUCT_SIZE;
-    params.pDeviceContext = device->GetImmediateContext()->GetReal();
-    result = NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability(&params);
-    if(result != NVPA_STATUS_SUCCESS)
-    {
-      Impl::LogDebugMessage("NVD3D11Counters::GetCounterAvailabilityImage",
-                            "NvPerf could not determine counter availability for this GPU", device);
-      return {};
-    }
-    counterAvailabilityImage.resize(params.counterAvailabilityImageSize);
-    params.pCounterAvailabilityImage = counterAvailabilityImage.data();
-    result = NVPW_D3D11_Profiler_DeviceContext_GetCounterAvailability(&params);
-    if(result != NVPA_STATUS_SUCCESS)
-    {
-      Impl::LogDebugMessage("NVD3D11Counters::GetCounterAvailabilityImage",
-                            "NvPerf could not determine counter availability for this GPU", device);
-      return {};
-    }
-    return counterAvailabilityImage;
-  }
-
   bool TryInitializePerfSDK(WrappedID3D11Device *device)
   {
     if(!NVCounterEnumerator::InitializeNvPerf())
     {
       RDCWARN("NvPerf library failed to initialize");
       LibraryNotFound = true;
-
-      // NOTE: Return success here so that we can later show a message
-      //       directing the user to download the Nsight Perf SDK library.
-      return true;
-    }
-
-    if(!NVPA_GetProcAddress("NVPW_D3D11_RawCounterConfig_Create"))
-    {
-      RDCWARN("NvPerf library version is out-of-date");
-      LibraryNotSupported = true;
 
       // NOTE: Return success here so that we can later show a message
       //       directing the user to download the Nsight Perf SDK library.
@@ -162,40 +125,12 @@ struct NVD3D11Counters::Impl
 
     nv::perf::MetricsEvaluator metricsEvaluator(pMetricsEvaluator, std::move(scratchBuffer));
 
-    bytebuf counterAvailabilityImage = Impl::GetCounterAvailabilityImage(device);
-    if(counterAvailabilityImage.empty())
-    {
-      Impl::LogDebugMessage("NVD3D11Counters::Impl::TryInitializePerfSDK",
-                            "NvPerf could not initialize counter availability image", device);
-      // NOTE: Not a fatal error; we can attempt to list counters regardless of availability
-    }
-
-    NVPW_RawCounterConfig *pRawCounterConfig =
-        nv::perf::profiler::D3D11CreateRawCounterConfig(deviceIdentifiers.pChipName);
-    if(!pRawCounterConfig)
-    {
-      Impl::LogDebugMessage("NVD3D11Counters::Impl::TryInitializePerfSDK",
-                            "NvPerf could not initialize raw counter config", device);
-      return false;
-    }
-
-    nv::perf::RawCounterConfigBuilder rawCounterConfigBuilder;
-    if(!rawCounterConfigBuilder.Initialize(pRawCounterConfig))
-    {
-      Impl::LogDebugMessage("NVD3D11Counters::Impl::TryInitializePerfSDK",
-                            "NvPerf failed to initialize raw counter config builder", device);
-      return false;
-    }
-
     CounterEnumerator = new NVCounterEnumerator;
-    if(!CounterEnumerator->Init(std::move(metricsEvaluator), std::move(rawCounterConfigBuilder),
-                                std::move(counterAvailabilityImage)))
+    if(!CounterEnumerator->Init(std::move(metricsEvaluator)))
     {
       Impl::LogDebugMessage("NVD3D11Counters::Impl::TryInitializePerfSDK",
                             "NvPerf could not initialize metrics evaluator", device);
       delete CounterEnumerator;
-      CounterEnumerator = NULL;
-      // NOTE: Not reachable; CounterEnumerator::Init() never returns false
       return false;
     }
     return true;
@@ -283,7 +218,7 @@ bool NVD3D11Counters::Init(WrappedID3D11Device *device)
 
 rdcarray<GPUCounter> NVD3D11Counters::EnumerateCounters() const
 {
-  if(m_Impl->LibraryNotFound || m_Impl->LibraryNotSupported)
+  if(m_Impl->LibraryNotFound)
   {
     return {GPUCounter::FirstNvidia};
   }
@@ -292,13 +227,9 @@ rdcarray<GPUCounter> NVD3D11Counters::EnumerateCounters() const
 
 bool NVD3D11Counters::HasCounter(GPUCounter counterID) const
 {
-  if(m_Impl->LibraryNotFound || m_Impl->LibraryNotSupported)
+  if(m_Impl->LibraryNotFound)
   {
     return counterID == GPUCounter::FirstNvidia;
-  }
-  if(!m_Impl->CounterEnumerator)
-  {
-    return false;
   }
   return m_Impl->CounterEnumerator->HasCounter(counterID);
 }
@@ -311,12 +242,6 @@ CounterDescription NVD3D11Counters::DescribeCounter(GPUCounter counterID) const
     // Dummy counter shows message directing user to download the Nsight Perf SDK library
     return NVCounterEnumerator::LibraryNotFoundMessage();
   }
-  if(m_Impl->LibraryNotSupported)
-  {
-    RDCASSERT(counterID == GPUCounter::FirstNvidia);
-    // Dummy counter shows message directing user to update the Nsight Perf SDK library
-    return NVCounterEnumerator::LibraryNotSupportedMessage();
-  }
   return m_Impl->CounterEnumerator->GetCounterDescription(counterID);
 }
 
@@ -325,7 +250,7 @@ rdcarray<CounterResult> NVD3D11Counters::FetchCounters(const rdcarray<GPUCounter
                                                        WrappedID3D11Device *device,
                                                        WrappedID3D11DeviceContext *immediateContext)
 {
-  if(m_Impl->LibraryNotFound || m_Impl->LibraryNotSupported)
+  if(m_Impl->LibraryNotFound)
   {
     return {};
   }
@@ -364,9 +289,9 @@ rdcarray<CounterResult> NVD3D11Counters::FetchCounters(const rdcarray<GPUCounter
   // Create counter configuration, and set it.
   {
     nv::perf::DeviceIdentifiers deviceIdentifiers = nv::perf::D3D11GetDeviceIdentifiers(d3dDevice);
-    NVPW_RawCounterConfig *pRawCounterConfig =
-        nv::perf::profiler::D3D11CreateRawCounterConfig(deviceIdentifiers.pChipName);
-    m_Impl->CounterEnumerator->CreateConfig(deviceIdentifiers.pChipName, pRawCounterConfig, counters);
+    NVPA_RawMetricsConfig *pRawMetricsConfig =
+        nv::perf::profiler::D3D11CreateRawMetricsConfig(deviceIdentifiers.pChipName);
+    m_Impl->CounterEnumerator->CreateConfig(deviceIdentifiers.pChipName, pRawMetricsConfig, counters);
   }
 
   nv::perf::profiler::SetConfigParams setConfigParams;
@@ -409,8 +334,6 @@ rdcarray<CounterResult> NVD3D11Counters::FetchCounters(const rdcarray<GPUCounter
       break;    // Failure
     }
 
-    d3dImmediateContext->Flush();
-
     nv::perf::profiler::DecodeResult decodeResult;
     if(!rangeProfiler.DecodeCounters(decodeResult))
     {
@@ -427,8 +350,9 @@ rdcarray<CounterResult> NVD3D11Counters::FetchCounters(const rdcarray<GPUCounter
 
     if(replayPass >= maxNumReplayPasses - 1)
     {
-      RDCERR("NvPerf exceeded the maximum expected number of replay passes");
-      break;    // Failure
+      // FIXME: maxNumReplayPasses does not appear to be calculated correctly for d3d11!
+      // RDCERR("NvPerf exceeded the maximum expected number of replay passes");
+      // break;    // Failure
     }
   }
 

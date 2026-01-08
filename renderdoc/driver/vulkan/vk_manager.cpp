@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -312,7 +312,7 @@ void VulkanResourceManager::SerialiseImageStates(SerialiserType &ser,
     }
     else
     {
-      bool hasLiveRes = HasResource(Image);
+      bool hasLiveRes = HasLiveResource(Image);
 
       ImageState imageState;
 
@@ -379,13 +379,15 @@ void VulkanResourceManager::SerialiseImageStates(SerialiserType &ser,
       }
       if(hasLiveRes)
       {
+        ResourceId liveid = GetLiveID(Image);
+
         if(IsLoading(m_State))
         {
-          auto stit = states.find(Image);
+          auto stit = states.find(liveid);
           if(stit == states.end())
           {
             imageState.subresourceStates.Unsplit();
-            states.insert({Image, LockingImageState(imageState)});
+            states.insert({liveid, LockingImageState(imageState)});
           }
           else
           {
@@ -396,8 +398,8 @@ void VulkanResourceManager::SerialiseImageStates(SerialiserType &ser,
         }
         else if(IsActiveReplaying(m_State))
         {
-          auto current = states.find(Image)->second.LockRead();
-          auto stit = states.find(Image);
+          auto current = states.find(liveid)->second.LockRead();
+          auto stit = states.find(liveid);
           for(auto subit = imageState.subresourceStates.begin();
               subit != imageState.subresourceStates.end(); ++subit)
           {
@@ -538,10 +540,11 @@ bool VulkanResourceManager::Serialise_ImageRefs(ReadSerialiser &ser,
     // unpack data into states
     for(auto it = data.begin(); it != data.end(); ++it)
     {
-      if(!HasResource(it->image))
+      if(!HasLiveResource(it->image))
         continue;
+      ResourceId liveid = GetLiveID(it->image);
 
-      auto stit = states.find(it->image);
+      auto stit = states.find(liveid);
       if(stit == states.end())
       {
         RDCWARN("Found ImgRefs for unknown image");
@@ -659,7 +662,7 @@ void VulkanResourceManager::ApplyBarriers(uint32_t queueFamilyIndex,
     ResourceId id = states[ti].first;
     ImageRegionState &t = states[ti].second;
 
-    TRDBG("Applying barrier to %s", ToStr(id).c_str());
+    TRDBG("Applying barrier to %s", ToStr(GetOriginalID(id)).c_str());
 
     auto stit = layouts.find(id);
 
@@ -881,7 +884,7 @@ void VulkanResourceManager::RecordBarriers(rdcflatmap<ResourceId, ImageState> &s
 
 ResourceId VulkanResourceManager::GetFirstIDForHandle(uint64_t handle)
 {
-  for(auto it = m_ResourceMap.begin(); it != m_ResourceMap.end(); ++it)
+  for(auto it = m_CurrentResourceMap.begin(); it != m_CurrentResourceMap.end(); ++it)
   {
     WrappedVkRes *res = it->second;
 
@@ -892,22 +895,17 @@ ResourceId VulkanResourceManager::GetFirstIDForHandle(uint64_t handle)
     {
       WrappedVkDispRes *disp = (WrappedVkDispRes *)res;
       if(disp->real.handle == handle)
-        return disp->id;
+        return IsReplayMode(m_State) ? GetOriginalID(disp->id) : disp->id;
     }
     else
     {
       WrappedVkNonDispRes *nondisp = (WrappedVkNonDispRes *)res;
       if(nondisp->real.handle == handle)
-        return nondisp->id;
+        return IsReplayMode(m_State) ? GetOriginalID(nondisp->id) : nondisp->id;
     }
   }
 
   return ResourceId();
-}
-
-uint32_t VulkanResourceManager::DescriptorDataSize(VkDescriptorType type)
-{
-  return m_Core->DescriptorDataSize(type);
 }
 
 void VulkanResourceManager::MarkMemoryFrameReferenced(ResourceId mem, VkDeviceSize offset,
@@ -1025,14 +1023,14 @@ bool VulkanResourceManager::Serialise_InitialState(WriteSerialiser &ser, Resourc
   return m_Core->Serialise_InitialState(ser, id, record, initial);
 }
 
-void VulkanResourceManager::Create_InitialState(ResourceId id, WrappedVkRes *res, bool hasData)
+void VulkanResourceManager::Create_InitialState(ResourceId id, WrappedVkRes *live, bool hasData)
 {
-  return m_Core->Create_InitialState(id, res, hasData);
+  return m_Core->Create_InitialState(id, live, hasData);
 }
 
-void VulkanResourceManager::Apply_InitialState(WrappedVkRes *res, VkInitialContents &initial)
+void VulkanResourceManager::Apply_InitialState(WrappedVkRes *live, VkInitialContents &initial)
 {
-  return m_Core->Apply_InitialState(res, initial);
+  return m_Core->Apply_InitialState(live, initial);
 }
 
 rdcarray<ResourceId> VulkanResourceManager::InitialContentResources()

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,41 +24,12 @@
 
 #include "dxil_debug.h"
 #include "common/formatting.h"
-#include "common/threading.h"
 #include "core/settings.h"
 #include "maths/formatpacking.h"
 #include "replay/common/var_dispatch_helpers.h"
-#include "shaders/controlflow.h"
 
 RDOC_CONFIG(bool, D3D12_DXILShaderDebugger_Logging, false,
             "Debug logging for the DXIL shader debugger");
-
-RDOC_CONFIG(bool, D3D12_DXILShaderDebugger_EnableMT, true,
-            "Use multiple threads to run the shader debugger simulation.");
-
-RDOC_EXTERN_CONFIG(bool, Shader_Debug_UseJobSystemJobs);
-
-#if ENABLED(RDOC_RELEASE)
-#define CHECK_DEBUGGER_THREAD() \
-  do                            \
-  {                             \
-  } while((void)0, 0)
-#else
-#define CHECK_DEBUGGER_THREAD() \
-  RDCASSERTMSG("Debugger function called from non-device thread!", IsDeviceThread());
-#endif    // #if ENABLED(RDOC_RELEASE)
-
-#if ENABLED(RDOC_RELEASE)
-#define THREADSTATE_CHECK_DEBUGGER_THREAD() \
-  do                                        \
-  {                                         \
-  } while((void)0, 0)
-#else
-#define THREADSTATE_CHECK_DEBUGGER_THREAD() \
-  RDCASSERTMSG("Function called from non-debugger thread!", m_Debugger.IsDeviceThread());
-#endif    // #if ENABLED(RDOC_RELEASE)
-
-using namespace rdcshaders;
 
 // TODO: Extend support for Compound Constants: arithmetic, logical ops
 // TODO: Assert m_Block in ThreadState is correct per instruction
@@ -67,9 +38,6 @@ using namespace rdcshaders;
 // TODO: Support UAVs with counter
 // TODO: Extend debug data parsing: DW_TAG_array_type for the base element type
 // TODO: Extend debug data parsing: N-dimensional arrays, mapping covers whole sub-array
-// TODO: Load's from Pointers should re-read the memory to get accurate values
-// TODO: Change Pointers to be GPUPointers : update pointers aliased to base pointers
-// TODO: Unify and share the code for reading and writing thru pointers
 
 // Notes:
 //   The phi node capture variables are not shown in the UI
@@ -125,146 +93,32 @@ using namespace DXDebug;
 
 const uint32_t POINTER_MAGIC = 0xBEAFDEAF;
 
-static bool IsFloatingPointType(VarType type)
-{
-  switch(type)
-  {
-    case VarType::Double:
-    case VarType::Float:
-    case VarType::Half: return true;
-    default: return false;
-  }
-}
-
-static bool IsSignedIntegerType(VarType type)
-{
-  switch(type)
-  {
-    case VarType::SLong:
-    case VarType::SInt:
-    case VarType::SShort: return true;
-    case VarType::SByte: return true;
-    default: return false;
-  }
-}
-
-static bool IsUnsignedIntegerType(VarType type)
-{
-  switch(type)
-  {
-    case VarType::ULong:
-    case VarType::UInt:
-    case VarType::UShort: return true;
-    case VarType::UByte: return true;
-    default: return false;
-  }
-}
-
-static bool IsIntegerType(VarType type)
-{
-  return IsSignedIntegerType(type) || IsUnsignedIntegerType(type);
-}
-
-static bool IsEncodedPointer(const ShaderVariable &var)
-{
-  if(var.type != VarType::GPUPointer)
-  {
-    return false;
-  }
-  if(var.value.u32v[1] != POINTER_MAGIC)
-  {
-    return false;
-  }
-  return true;
-}
-
-static void EncodePointer(DXILDebug::Id ptrId, uint64_t offset, uint64_t size, VarType baseType,
-                          ShaderVariable &var)
+static void EncodePointer(DXILDebug::Id ptrId, uint64_t offset, uint64_t size, ShaderVariable &var)
 {
   var.type = VarType::GPUPointer;
   var.value.u32v[0] = ptrId;
   var.value.u32v[1] = POINTER_MAGIC;
   var.value.u64v[1] = offset;
   var.value.u64v[2] = size;
-  var.value.u64v[3] = (uint64_t)baseType;
 }
 
-static bool DecodePointer(DXILDebug::Id &ptrId, uint64_t &offset, uint64_t &size, VarType &baseType,
+static bool DecodePointer(DXILDebug::Id &ptrId, uint64_t &offset, uint64_t &size,
                           const ShaderVariable &var)
 {
-  if(!IsEncodedPointer(var))
+  if(var.type != VarType::GPUPointer)
   {
-    RDCERR("Calling DecodePointer on non encoded pointer");
+    RDCERR("Calling DecodePointer on non-pointer type %s", ToStr(var.type).c_str());
     return false;
   }
-
+  if(var.value.u32v[1] != POINTER_MAGIC)
+  {
+    RDCERR("Calling DecodePointer on non encoded pointer type %u", var.value.u32v[1]);
+    return false;
+  }
   ptrId = var.value.u32v[0];
   offset = var.value.u64v[1];
   size = var.value.u64v[2];
-  baseType = (VarType)var.value.u64v[3];
   return true;
-}
-
-static void SetFloatValue(float val, ShaderVariable &var)
-{
-  for(uint8_t c = 0; c < var.columns; c++)
-  {
-#undef _IMPL
-#define _IMPL(T) comp<T>(var, c) = val;
-
-    IMPL_FOR_FLOAT_TYPES(_IMPL);
-  }
-}
-
-static void SetUIntValue(uint64_t val, ShaderVariable &var)
-{
-  for(uint8_t c = 0; c < var.columns; c++)
-  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(var, c) = U(val);
-
-    IMPL_FOR_INT_TYPES(_IMPL);
-  }
-}
-
-static void SetIntValue(int64_t val, ShaderVariable &var)
-{
-  for(uint8_t c = 0; c < var.columns; c++)
-  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<I>(var, c) = I(val);
-
-    IMPL_FOR_INT_TYPES(_IMPL);
-  }
-}
-
-static void SetShaderValue(float fVal, uint64_t uVal, int64_t iVal, ShaderVariable &var)
-{
-  switch(var.type)
-  {
-    case VarType::Half:
-    case VarType::Float:
-    case VarType::Double: SetFloatValue(fVal, var); break;
-    case VarType::SByte:
-    case VarType::SShort:
-    case VarType::SInt:
-    case VarType::SLong: SetIntValue(iVal, var); break;
-    case VarType::UByte:
-    case VarType::UShort:
-    case VarType::UInt:
-    case VarType::ULong: SetUIntValue(uVal, var); break;
-    default: RDCERR("Unknown type %s", ToStr(var.type).c_str());
-  }
-}
-
-static void SetShaderValueZero(ShaderVariable &var)
-{
-  SetShaderValue(0.0f, 0, 0, var);
-}
-
-static void SetShaderValueOne(ShaderVariable &var)
-{
-  SetShaderValue(1.0f, 1, 1, var);
 }
 
 static bool OperationFlushing(const Operation op, DXOp dxOpCode)
@@ -669,27 +523,31 @@ static bool IsAnnotatedHandle(const ShaderVariable &var)
   return (var.value.u32v[15] == 1);
 }
 
-static ShaderEvents AssignValue(ShaderVariable &result, bool flushDenorm)
+static ShaderEvents AssignValue(ShaderVariable &result, const ShaderVariable &src, bool flushDenorm)
 {
+  RDCASSERTEQUAL(result.type, src.type);
+
   ShaderEvents flags = ShaderEvents::NoEvent;
 
   if(result.type == VarType::Float)
   {
-    float ft = result.value.f32v[0];
+    float ft = src.value.f32v[0];
     if(!RDCISFINITE(ft))
       flags |= ShaderEvents::GeneratedNanOrInf;
   }
   else if(result.type == VarType::Double)
   {
-    double dt = result.value.f64v[0];
+    double dt = src.value.f64v[0];
     if(!RDCISFINITE(dt))
       flags |= ShaderEvents::GeneratedNanOrInf;
   }
 
+  result.value.u32v[0] = src.value.u32v[0];
+
   if(flushDenorm)
   {
     if(result.type == VarType::Float)
-      result.value.f32v[0] = flush_denorm(result.value.f32v[0]);
+      result.value.f32v[0] = flush_denorm(src.value.f32v[0]);
     else if(result.type == VarType::Double)
       RDCERR("Unhandled flushing denormalised double");
   }
@@ -723,42 +581,6 @@ static uint8_t GetElementByteSize(VarType type)
     case VarType::Unknown: RDCERR("Unhandled VarType %s", ToStr(type).c_str()); break;
   };
   return 0;
-}
-
-static uint8_t GetShaderVariableElementByteSize(const ShaderVariable &var)
-{
-  if(var.members.empty())
-    return GetElementByteSize(var.type);
-  return GetShaderVariableElementByteSize(var.members[0]);
-}
-
-static void UpdateShaderVariableFromBackingMemory(ShaderVariable &var, const void *ptr)
-{
-  // Memory copy from backing memory to base memory variable
-  size_t elementSize = GetShaderVariableElementByteSize(var);
-  const uint8_t *src = (const uint8_t *)ptr;
-  if(var.members.size() == 0)
-  {
-    RDCASSERTEQUAL(var.rows, 1);
-    RDCASSERTEQUAL(var.columns, 1);
-    if(elementSize <= sizeof(ShaderValue))
-      memcpy(&var.value, src, elementSize);
-    else
-      RDCERR("Updating MemoryVariable elementSize %u too large max %u", elementSize,
-             sizeof(ShaderValue));
-  }
-  else
-  {
-    for(uint32_t i = 0; i < var.members.size(); ++i)
-    {
-      if(elementSize <= sizeof(ShaderValue))
-        memcpy(&var.members[i].value, src, elementSize);
-      else
-        RDCERR("Updating MemoryVariable member %u elementSize %u too large max %u", i, elementSize,
-               sizeof(ShaderValue));
-      src += elementSize;
-    }
-  }
 }
 
 static DXBC::ResourceRetType ConvertComponentTypeToResourceRetType(const ComponentType compType)
@@ -907,9 +729,9 @@ static void ConvertDXILTypeToShaderVariable(const Type *type, ShaderVariable &va
     }
     case Type::TypeKind::Array:
     {
-      var.rows = 0;
-      var.columns = 0;
-      var.type = VarType::Unknown;
+      var.rows = (uint8_t)type->elemCount;
+      var.columns = 1;
+      var.type = ConvertDXILTypeToVarType(type->inner);
       var.members.resize(type->elemCount);
       for(size_t i = 0; i < type->elemCount; i++)
       {
@@ -1084,7 +906,7 @@ static bool ConvertDXILConstantToShaderVariable(const Constant *constant, Shader
         VarType baseType = ConvertDXILTypeToVarType(elementType);
         uint32_t elementSize = GetElementByteSize(baseType);
         uint32_t countElems = RDCMAX(1U, elementType->elemCount);
-        uint64_t size = countElems * elementSize;
+        uint64_t size = countElems * GetElementByteSize(baseType);
 
         DXILDebug::Id ptrId = gv->ssaId;
         // members[1..] : indices 1...N
@@ -1106,8 +928,8 @@ static bool ConvertDXILConstantToShaderVariable(const Constant *constant, Shader
         if(indexes.size() > 1)
           offset += indexes[1] * elementSize;
         RDCASSERT(indexes.size() <= 2);
-        // Encode the pointer allocation: ptrId, offset, size, baseType
-        EncodePointer(ptrId, offset, size, baseType, var);
+        // Encode the pointer allocation: ptrId, offset, size
+        EncodePointer(ptrId, offset, size, var);
         return true;
       }
       // case Operation::Trunc:
@@ -1154,7 +976,7 @@ static bool ConvertDXILConstantToShaderVariable(const Constant *constant, Shader
     return false;
   }
   // Struct: rows = 0, columns = 0 : var.members is structure members
-  // Array: rows = 0, columns == 0 : var.members is array elements
+  // Array: rows >= 1, columns == 1 : var.members is array elements
   if(constant->isCompound())
   {
     const rdcarray<DXIL::Value *> &members = constant->getMembers();
@@ -1170,51 +992,10 @@ static bool ConvertDXILConstantToShaderVariable(const Constant *constant, Shader
     }
     return true;
   }
-  else if(constant->isNULL())
-  {
-    // Nothing to do because Shader Variables created initialised to zero
-    return true;
-  }
   return false;
 }
 
-static bool ConvertShaderVariableStructToVector(const DXIL::Type *dxilType, ShaderVariable &var)
-{
-  // convert struct of four members, to be a vector
-  if(var.type != VarType::Struct)
-  {
-    RDCERR("Expected type %s to be a struct", ToStr(var.type).c_str());
-    return false;
-  }
-
-  // convert the DXIL return type to full variable
-  ShaderVariable structVar;
-  ConvertDXILTypeToShaderVariable(dxilType, structVar);
-
-  RDCASSERT(structVar.members.size() <= 4);
-  if(structVar.members.size() > 4)
-  {
-    RDCERR("Expected struct size %u to be four or less", structVar.members.size());
-    return false;
-  }
-
-  for(uint32_t i = 0; i < structVar.members.size(); ++i)
-  {
-    if(structVar.members[i].type != structVar.members[0].type)
-    {
-      RDCERR("Expected struct member type to be the same for all members %s != %s",
-             ToStr(structVar.members[i].type).c_str(), ToStr(structVar.members[0].type).c_str());
-      return false;
-    }
-  }
-
-  var.type = structVar.members[0].type;
-  var.rows = 1;
-  var.columns = (uint8_t)structVar.members.size();
-  return true;
-}
-
-static size_t ComputeDXILTypeByteSize(const Type *type)
+size_t ComputeDXILTypeByteSize(const Type *type)
 {
   size_t byteSize = 0;
   switch(type->type)
@@ -1252,7 +1033,298 @@ static size_t ComputeDXILTypeByteSize(const Type *type)
   return byteSize;
 }
 
-void ConvertTypeToViewFormat(const DXIL::Type *type, DXILDebug::ViewFmt &fmt)
+static void TypedUAVStore(DXILDebug::GlobalState::ViewFmt &fmt, byte *d, const ShaderValue &value)
+{
+  if(fmt.byteWidth == 10)
+  {
+    uint32_t u = 0;
+
+    if(fmt.compType == CompType::UInt)
+    {
+      u |= (value.u32v[0] & 0x3ff) << 0;
+      u |= (value.u32v[1] & 0x3ff) << 10;
+      u |= (value.u32v[2] & 0x3ff) << 20;
+      u |= (value.u32v[3] & 0x3) << 30;
+    }
+    else if(fmt.compType == CompType::UNorm)
+    {
+      u = ConvertToR10G10B10A2(Vec4f(value.f32v[0], value.f32v[1], value.f32v[2], value.f32v[3]));
+    }
+    else
+    {
+      RDCERR("Unexpected format type on buffer resource");
+    }
+    memcpy(d, &u, sizeof(uint32_t));
+  }
+  else if(fmt.byteWidth == 11)
+  {
+    uint32_t u = ConvertToR11G11B10(Vec3f(value.f32v[0], value.f32v[1], value.f32v[2]));
+    memcpy(d, &u, sizeof(uint32_t));
+  }
+  else if(fmt.byteWidth == 4)
+  {
+    uint32_t *u = (uint32_t *)d;
+
+    for(int c = 0; c < fmt.numComps; c++)
+      u[c] = value.u32v[c];
+  }
+  else if(fmt.byteWidth == 2)
+  {
+    if(fmt.compType == CompType::Float)
+    {
+      uint16_t *u = (uint16_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+        u[c] = ConvertToHalf(value.f32v[c]);
+    }
+    else if(fmt.compType == CompType::UInt)
+    {
+      uint16_t *u = (uint16_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+        u[c] = value.u32v[c] & 0xffff;
+    }
+    else if(fmt.compType == CompType::SInt)
+    {
+      int16_t *i = (int16_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+        i[c] = (int16_t)RDCCLAMP(value.s32v[c], (int32_t)INT16_MIN, (int32_t)INT16_MAX);
+    }
+    else if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB)
+    {
+      uint16_t *u = (uint16_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+      {
+        float f = RDCCLAMP(value.f32v[c], 0.0f, 1.0f) * float(0xffff) + 0.5f;
+        u[c] = uint16_t(f);
+      }
+    }
+    else if(fmt.compType == CompType::SNorm)
+    {
+      int16_t *i = (int16_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+      {
+        float f = RDCCLAMP(value.f32v[c], -1.0f, 1.0f) * 0x7fff;
+
+        if(f < 0.0f)
+          i[c] = int16_t(f - 0.5f);
+        else
+          i[c] = int16_t(f + 0.5f);
+      }
+    }
+    else
+    {
+      RDCERR("Unexpected format type on buffer resource");
+    }
+  }
+  else if(fmt.byteWidth == 1)
+  {
+    if(fmt.compType == CompType::UInt)
+    {
+      uint8_t *u = (uint8_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+        u[c] = value.u32v[c] & 0xff;
+    }
+    else if(fmt.compType == CompType::SInt)
+    {
+      int8_t *i = (int8_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+        i[c] = (int8_t)RDCCLAMP(value.s32v[c], (int32_t)INT8_MIN, (int32_t)INT8_MAX);
+    }
+    else if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB)
+    {
+      uint8_t *u = (uint8_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+      {
+        float f = RDCCLAMP(value.f32v[c], 0.0f, 1.0f) * float(0xff) + 0.5f;
+        u[c] = uint8_t(f);
+      }
+    }
+    else if(fmt.compType == CompType::SNorm)
+    {
+      int8_t *i = (int8_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+      {
+        float f = RDCCLAMP(value.f32v[c], -1.0f, 1.0f) * 0x7f;
+
+        if(f < 0.0f)
+          i[c] = int8_t(f - 0.5f);
+        else
+          i[c] = int8_t(f + 0.5f);
+      }
+    }
+    else
+    {
+      RDCERR("Unexpected format type on buffer resource");
+    }
+  }
+}
+
+static ShaderValue TypedUAVLoad(DXILDebug::GlobalState::ViewFmt &fmt, const byte *d)
+{
+  ShaderValue result;
+  result.f32v[0] = 0.0f;
+  result.f32v[1] = 0.0f;
+  result.f32v[2] = 0.0f;
+  result.f32v[3] = 0.0f;
+
+  if(fmt.byteWidth == 10)
+  {
+    uint32_t u;
+    memcpy(&u, d, sizeof(uint32_t));
+
+    if(fmt.compType == CompType::UInt)
+    {
+      result.u32v[0] = (u >> 0) & 0x3ff;
+      result.u32v[1] = (u >> 10) & 0x3ff;
+      result.u32v[2] = (u >> 20) & 0x3ff;
+      result.u32v[3] = (u >> 30) & 0x003;
+    }
+    else if(fmt.compType == CompType::UNorm)
+    {
+      Vec4f res = ConvertFromR10G10B10A2(u);
+      result.f32v[0] = res.x;
+      result.f32v[1] = res.y;
+      result.f32v[2] = res.z;
+      result.f32v[3] = res.w;
+    }
+    else
+    {
+      RDCERR("Unexpected format type on buffer resource");
+    }
+  }
+  else if(fmt.byteWidth == 11)
+  {
+    uint32_t u;
+    memcpy(&u, d, sizeof(uint32_t));
+
+    Vec3f res = ConvertFromR11G11B10(u);
+    result.f32v[0] = res.x;
+    result.f32v[1] = res.y;
+    result.f32v[2] = res.z;
+    result.f32v[3] = 1.0f;
+  }
+  else
+  {
+    if(fmt.byteWidth == 4)
+    {
+      const uint32_t *u = (const uint32_t *)d;
+
+      for(int c = 0; c < fmt.numComps; c++)
+        result.u32v[c] = u[c];
+    }
+    else if(fmt.byteWidth == 2)
+    {
+      if(fmt.compType == CompType::Float)
+      {
+        const uint16_t *u = (const uint16_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.f32v[c] = ConvertFromHalf(u[c]);
+      }
+      else if(fmt.compType == CompType::UInt)
+      {
+        const uint16_t *u = (const uint16_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.u32v[c] = u[c];
+      }
+      else if(fmt.compType == CompType::SInt)
+      {
+        const int16_t *in = (const int16_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.s32v[c] = in[c];
+      }
+      else if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB)
+      {
+        const uint16_t *u = (const uint16_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.f32v[c] = float(u[c]) / float(0xffff);
+      }
+      else if(fmt.compType == CompType::SNorm)
+      {
+        const int16_t *in = (const int16_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+        {
+          // -32768 is mapped to -1, then -32767 to -32767 are mapped to -1 to 1
+          if(in[c] == -32768)
+            result.f32v[c] = -1.0f;
+          else
+            result.f32v[c] = float(in[c]) / 32767.0f;
+        }
+      }
+      else
+      {
+        RDCERR("Unexpected format type on buffer resource");
+      }
+    }
+    else if(fmt.byteWidth == 1)
+    {
+      if(fmt.compType == CompType::UInt)
+      {
+        const uint8_t *u = (const uint8_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.u32v[c] = u[c];
+      }
+      else if(fmt.compType == CompType::SInt)
+      {
+        const int8_t *in = (const int8_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.s32v[c] = in[c];
+      }
+      else if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB)
+      {
+        const uint8_t *u = (const uint8_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+          result.f32v[c] = float(u[c]) / float(0xff);
+      }
+      else if(fmt.compType == CompType::SNorm)
+      {
+        const int8_t *in = (const int8_t *)d;
+
+        for(int c = 0; c < fmt.numComps; c++)
+        {
+          // -128 is mapped to -1, then -127 to -127 are mapped to -1 to 1
+          if(in[c] == -128)
+            result.f32v[c] = -1.0f;
+          else
+            result.f32v[c] = float(in[c]) / 127.0f;
+        }
+      }
+      else
+      {
+        RDCERR("Unexpected format type on buffer resource");
+      }
+    }
+
+    // fill in alpha with 1.0 or 1 as appropriate
+    if(fmt.numComps < 4)
+    {
+      if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB ||
+         fmt.compType == CompType::SNorm || fmt.compType == CompType::Float)
+        result.f32v[3] = 1.0f;
+      else
+        result.u32v[3] = 1;
+    }
+  }
+
+  return result;
+}
+
+void ConvertTypeToViewFormat(const DXIL::Type *type, DXILDebug::GlobalState::ViewFmt &fmt)
 {
   // variable should be a pointer to the underlying type
   RDCASSERTEQUAL(type->type, Type::Pointer);
@@ -1303,7 +1375,7 @@ void ConvertTypeToViewFormat(const DXIL::Type *type, DXILDebug::ViewFmt &fmt)
   }
 }
 
-static void FillViewFmtFromVarType(VarType type, DXILDebug::ViewFmt &fmt)
+static void FillViewFmtFromVarType(VarType type, DXILDebug::GlobalState::ViewFmt &fmt)
 {
   switch(type)
   {
@@ -1357,12 +1429,166 @@ static void FillViewFmtFromVarType(VarType type, DXILDebug::ViewFmt &fmt)
 
 namespace DXILDebug
 {
-bool ExecPointReference::IsAfter(const ExecPointReference &from,
-                                 const DXIL::ControlFlow &controlFlow) const
+bool ExecutionPoint::IsAfter(const ExecutionPoint &from, const ControlFlow &controlFlow) const
 {
   if(block == from.block)
     return instruction > from.instruction;
-  return controlFlow.IsConnected(from.block, block);
+  return controlFlow.IsForwardConnection(from.block, block);
+}
+static void ApplyDerivatives(GlobalState &global, rdcarray<ThreadState> &quad, int input,
+                             int numWords, float *data, float signmul, int32_t quadIdxA,
+                             int32_t quadIdxB)
+{
+  for(int w = 0; w < numWords; w++)
+  {
+    quad[quadIdxA].m_Input.members[input].value.f32v[w] += signmul * data[w];
+    if(quadIdxB >= 0)
+      quad[quadIdxB].m_Input.members[input].value.f32v[w] += signmul * data[w];
+  }
+
+  // TODO: SAMPLE EVALUATE
+#if 0
+  // quick check to see if this register was evaluated
+  if(global.sampleEvalRegisterMask & (1ULL << reg))
+  {
+    // apply derivative to any cached sample evaluations on these quad indices
+    for(auto it = global.sampleEvalCache.begin(); it != global.sampleEvalCache.end(); ++it)
+    {
+      if((it->first.quadIndex == quadIdxA || it->first.quadIndex == quadIdxB) &&
+         reg == it->first.inputRegisterIndex)
+      {
+        for(int w = 0; w < numWords; w++)
+          it->second.value.f32v[w] += data[w];
+      }
+    }
+  }
+#endif
+}
+
+void ApplyAllDerivatives(GlobalState &global, rdcarray<ThreadState> &quad, int destIdx,
+                         const rdcarray<PSInputData> &psInputs, float *data)
+{
+  // We make the assumption that the coarse derivatives are generated from (0,0) in the quad, and
+  // fine derivatives are generated from the destination index and its neighbours in X and Y.
+  // This isn't spec'd but we must assume something and this will hopefully get us closest to
+  // reproducing actual results.
+  //
+  // For debugging, we need members of the quad to be able to generate coarse and fine
+  // derivatives.
+  //
+  // For (0,0) we only need the coarse derivatives to get our neighbours (1,0) and (0,1) which
+  // will give us coarse and fine derivatives being identical.
+  //
+  // For the others we will need to use a combination of coarse and fine derivatives to get the
+  // diagonal element in the quad. In the examples below, remember that the quad indices are:
+  //
+  // +---+---+
+  // | 0 | 1 |
+  // +---+---+
+  // | 2 | 3 |
+  // +---+---+
+  //
+  // And that we have definitions of the derivatives:
+  //
+  // ddx_coarse = (1,0) - (0,0)
+  // ddy_coarse = (0,1) - (0,0)
+  //
+  // i.e. the same for all members of the quad
+  //
+  // ddx_fine   = (x,y) - (1-x,y)
+  // ddy_fine   = (x,y) - (x,1-y)
+  //
+  // i.e. the difference to the neighbour of our desired invocation (the one we have the actual
+  // inputs for, from gathering above).
+  //
+  // So e.g. if our thread is at (1,1) destIdx = 3
+  //
+  // (1,0) = (1,1) - ddx_fine
+  // (0,1) = (1,1) - ddy_fine
+  // (0,0) = (1,1) - ddy_fine - ddx_coarse
+  //
+  // and ddy_coarse is unused. For (1,0) destIdx = 1:
+  //
+  // (1,1) = (1,0) + ddy_fine
+  // (0,1) = (1,0) - ddx_coarse + ddy_coarse
+  // (0,0) = (1,0) - ddx_coarse
+  //
+  // and ddx_fine is unused (it's identical to ddx_coarse anyway)
+
+  // this is the value of input[1] - input[0]
+  float *ddx_coarse = (float *)data;
+
+  for(const PSInputData &psInput : psInputs)
+  {
+    if(!psInput.included)
+      continue;
+
+    const int input = psInput.input;
+    const int numWords = psInput.numwords;
+    if(destIdx == 0)
+      ApplyDerivatives(global, quad, input, numWords, ddx_coarse, 1.0f, 1, 3);
+    else if(destIdx == 1)
+      ApplyDerivatives(global, quad, input, numWords, ddx_coarse, -1.0f, 0, 2);
+    else if(destIdx == 2)
+      ApplyDerivatives(global, quad, input, numWords, ddx_coarse, 1.0f, 1, -1);
+    else if(destIdx == 3)
+      ApplyDerivatives(global, quad, input, numWords, ddx_coarse, -1.0f, 0, -1);
+
+    ddx_coarse += numWords;
+  }
+
+  // this is the value of input[2] - input[0]
+  float *ddy_coarse = ddx_coarse;
+
+  for(const PSInputData &psInput : psInputs)
+  {
+    if(!psInput.included)
+      continue;
+    const int input = psInput.input;
+    const int numWords = psInput.numwords;
+    if(destIdx == 0)
+      ApplyDerivatives(global, quad, input, numWords, ddy_coarse, 1.0f, 2, 3);
+    else if(destIdx == 1)
+      ApplyDerivatives(global, quad, input, numWords, ddy_coarse, 1.0f, 2, -1);
+    else if(destIdx == 2)
+      ApplyDerivatives(global, quad, input, numWords, ddy_coarse, -1.0f, 0, 1);
+
+    ddy_coarse += numWords;
+  }
+
+  float *ddxfine = ddy_coarse;
+
+  for(const PSInputData &psInput : psInputs)
+  {
+    if(!psInput.included)
+      continue;
+    const int input = psInput.input;
+    const int numWords = psInput.numwords;
+
+    if(destIdx == 2)
+      ApplyDerivatives(global, quad, input, numWords, ddxfine, 1.0f, 3, -1);
+    else if(destIdx == 3)
+      ApplyDerivatives(global, quad, input, numWords, ddxfine, -1.0f, 2, -1);
+
+    ddxfine += numWords;
+  }
+
+  float *ddyfine = ddxfine;
+
+  for(const PSInputData &psInput : psInputs)
+  {
+    if(!psInput.included)
+      continue;
+    const int input = psInput.input;
+    const int numWords = psInput.numwords;
+
+    if(destIdx == 1)
+      ApplyDerivatives(global, quad, input, numWords, ddyfine, 1.0f, 3, -1);
+    else if(destIdx == 3)
+      ApplyDerivatives(global, quad, input, numWords, ddyfine, -1.0f, 0, 1);
+
+    ddyfine += numWords;
+  }
 }
 
 void ResourceReferenceInfo::Create(const DXIL::ResourceReference *resRef, uint32_t arrayIndex)
@@ -1378,90 +1604,36 @@ void ResourceReferenceInfo::Create(const DXIL::ResourceReference *resRef, uint32
       srvData.sampleCount = resRef->resourceBase.srvData.sampleCount;
       srvData.compType = (DXDebug::ResourceRetType)ConvertComponentTypeToResourceRetType(
           resRef->resourceBase.srvData.compType);
-      varType = VarType::ReadOnlyResource;
-
-      switch(resRef->resourceBase.srvData.shape)
-      {
-        default:
-          RDCERR("Unexpected resource shape");
-          descType = DescriptorType::Unknown;
-          break;
-        case ResourceKind::Texture1D:
-        case ResourceKind::Texture2D:
-        case ResourceKind::Texture2DMS:
-        case ResourceKind::Texture3D:
-        case ResourceKind::TextureCube:
-        case ResourceKind::Texture1DArray:
-        case ResourceKind::Texture2DArray:
-        case ResourceKind::Texture2DMSArray:
-        case ResourceKind::TextureCubeArray:
-        case ResourceKind::FeedbackTexture2D:
-        case ResourceKind::FeedbackTexture2DArray: descType = DescriptorType::Image; break;
-        case ResourceKind::TypedBuffer:
-        case ResourceKind::TBuffer: descType = DescriptorType::TypedBuffer; break;
-        case ResourceKind::RawBuffer:
-        case ResourceKind::StructuredBuffer:
-        case ResourceKind::StructuredBufferWithCounter: descType = DescriptorType::Buffer; break;
-        case ResourceKind::RTAccelerationStructure:
-          descType = DescriptorType::AccelerationStructure;
-          break;
-      }
+      type = VarType::ReadOnlyResource;
+      category = DescriptorCategory::ReadOnlyResource;
       break;
     }
     case DXIL::ResourceClass::UAV:
     {
-      varType = VarType::ReadWriteResource;
-
-      switch(resRef->resourceBase.uavData.shape)
-      {
-        default:
-          RDCERR("Unexpected resource shape");
-          descType = DescriptorType::Unknown;
-          break;
-        case ResourceKind::Texture1D:
-        case ResourceKind::Texture2D:
-        case ResourceKind::Texture2DMS:
-        case ResourceKind::Texture3D:
-        case ResourceKind::TextureCube:
-        case ResourceKind::Texture1DArray:
-        case ResourceKind::Texture2DArray:
-        case ResourceKind::Texture2DMSArray:
-        case ResourceKind::TextureCubeArray:
-        case ResourceKind::FeedbackTexture2D:
-        case ResourceKind::FeedbackTexture2DArray: descType = DescriptorType::ReadWriteImage; break;
-        case ResourceKind::TypedBuffer:
-        case ResourceKind::TBuffer: descType = DescriptorType::ReadWriteTypedBuffer; break;
-        case ResourceKind::RawBuffer:
-        case ResourceKind::StructuredBuffer:
-        case ResourceKind::StructuredBufferWithCounter:
-          descType = DescriptorType::ReadWriteBuffer;
-          break;
-        case ResourceKind::RTAccelerationStructure:
-          descType = DescriptorType::AccelerationStructure;
-          break;
-      }
+      type = VarType::ReadWriteResource;
+      category = DescriptorCategory::ReadWriteResource;
       break;
     }
     case DXIL::ResourceClass::CBuffer:
     {
-      varType = VarType::ConstantBlock;
-      descType = DescriptorType::ConstantBuffer;
+      type = VarType::ConstantBlock;
+      category = DescriptorCategory::ConstantBlock;
       break;
     }
     case DXIL::ResourceClass::Sampler:
     {
       samplerData.samplerMode =
           ConvertSamplerKindToSamplerMode(resRef->resourceBase.samplerData.samplerType);
-      varType = VarType::Sampler;
-      descType = DescriptorType::Sampler;
+      type = VarType::Sampler;
+      category = DescriptorCategory::Sampler;
       break;
     }
     default: RDCERR("Unexpected resource class %s", ToStr(resClass).c_str()); break;
   }
 }
 
-void MemoryTracking::AllocateMemoryForType(const DXIL::Type *type, Id allocId, bool globalVar,
-                                           bool gsm, ShaderVariable &var)
+void MemoryTracking::AllocateMemoryForType(const DXIL::Type *type, Id allocId, bool global,
+                                           ShaderVariable &var)
 {
   RDCASSERTEQUAL(type->type, Type::TypeKind::Pointer);
   ConvertDXILTypeToShaderVariable(type->inner, var);
@@ -1470,89 +1642,56 @@ void MemoryTracking::AllocateMemoryForType(const DXIL::Type *type, Id allocId, b
   size_t byteSize = ComputeDXILTypeByteSize(type->inner);
   void *backingMem = malloc(byteSize);
   memset(backingMem, 0, byteSize);
-  // Invalid: gsm = false and globalVar = true
-  RDCASSERT(!gsm || globalVar);
-  m_Allocations[allocId] = {backingMem, byteSize, globalVar, gsm, !globalVar};
+  m_Allocations[allocId] = {backingMem, byteSize, global};
 
   // Create a pointer to represent this allocation
   m_Pointers[allocId] = {allocId, backingMem, byteSize};
 }
 
-void MemoryTracking::ConvertGlobalAllocToLocal(Id allocId)
-{
-  MemoryTracking::Allocation &alloc = m_Allocations[allocId];
-  RDCASSERT(alloc.globalVarAlloc);
-  RDCASSERT(!alloc.localMemory);
-  void *globalBackingMemory = alloc.backingMemory;
-  const size_t allocSize = (size_t)alloc.size;
-  void *localBackingMemory = malloc(allocSize);
-  memcpy(localBackingMemory, globalBackingMemory, allocSize);
-  alloc.backingMemory = localBackingMemory;
-  alloc.localMemory = true;
-
-  // Update the pointer for the base memory allocation
-  MemoryTracking::Pointer &allocPtr = m_Pointers[allocId];
-  allocPtr.memory = localBackingMemory;
-  RDCASSERTEQUAL(allocPtr.baseMemoryId, allocId);
-  RDCASSERTEQUAL(allocPtr.size, alloc.size);
-
-  // Update pointers which pointed to within the memory allocation
-  for(auto &itPtr : m_Pointers)
-  {
-    MemoryTracking::Pointer &ptr = itPtr.second;
-    Id baseMemoryId = ptr.baseMemoryId;
-    if(baseMemoryId != allocId)
-      continue;
-
-    Id ptrId = itPtr.first;
-    // pointers for backing allocations have already have been updated
-    if(ptrId == baseMemoryId)
-      continue;
-
-    ptrdiff_t offset = (uintptr_t)ptr.memory - (uintptr_t)globalBackingMemory;
-    if(offset < 0)
-    {
-      RDCERR("Invalid memory allocation offset ptrId %u BaseMemoryId %u", ptrId, baseMemoryId);
-      continue;
-    }
-    void *localMemory = (void *)((uintptr_t)localBackingMemory + offset);
-    RDCASSERTEQUAL(ptr.baseMemoryId, baseMemoryId);
-    ptr.memory = localMemory;
-  }
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-ThreadState::ThreadState(Debugger &debugger, const GlobalState &globalState, uint32_t maxSSAId,
-                         uint32_t laneIndex, uint32_t numThreads, ShaderFeatures shaderFeatures)
+ThreadState::ThreadState(uint32_t workgroupIndex, Debugger &debugger,
+                         const GlobalState &globalState, uint32_t maxSSAId)
     : m_Debugger(debugger),
       m_GlobalState(globalState),
       m_Program(debugger.GetProgram()),
-      m_MaxSSAId(maxSSAId),
-      m_WorkgroupIndex(laneIndex),
-      m_Features(shaderFeatures)
+      m_MaxSSAId(maxSSAId)
 {
-  THREADSTATE_CHECK_DEBUGGER_THREAD();
+  m_WorkgroupIndex = workgroupIndex;
+  m_FunctionInfo = NULL;
+  m_FunctionInstructionIdx = 0;
+  m_ActiveGlobalInstructionIdx = 0;
+  m_Killed = false;
+  m_Ended = false;
+  m_Callstack.clear();
   m_ShaderType = m_Program.GetShaderType();
+  m_Semantics.coverage = ~0U;
+  m_Semantics.isFrontFace = false;
+  m_Semantics.primID = ~0U;
   m_Assigned.resize(maxSSAId);
   m_Live.resize(maxSSAId);
-  m_Variables.resize(maxSSAId);
-  m_ActiveMask.resize(numThreads);
 }
 
-// Must be called from the replay manager thread (the debugger thread)
 ThreadState::~ThreadState()
 {
-  THREADSTATE_CHECK_DEBUGGER_THREAD();
   for(auto it : m_Memory.m_Allocations)
   {
-    if(it.second.localMemory)
+    if(!it.second.global)
       free(it.second.backingMemory);
   }
 }
 
+void ThreadState::InitialiseHelper(const ThreadState &activeState)
+{
+  m_Input = activeState.m_Input;
+  m_Semantics = activeState.m_Semantics;
+  m_Variables = activeState.m_Variables;
+  m_Assigned = activeState.m_Assigned;
+  m_Live = activeState.m_Live;
+  m_IsGlobal = activeState.m_IsGlobal;
+}
+
 bool ThreadState::Finished() const
 {
-  return m_Dead || m_Ended || m_Callstack.empty();
+  return m_Killed || m_Ended || m_Callstack.empty();
 }
 
 bool ThreadState::InUniformBlock() const
@@ -1560,14 +1699,11 @@ bool ThreadState::InUniformBlock() const
   return m_FunctionInfo->uniformBlocks.contains(m_Block);
 }
 
-// Must run on the device thread for the active simulation thread
 void ThreadState::ProcessScopeChange(const rdcarray<bool> &oldLive, const rdcarray<bool> &newLive)
 {
   // nothing to do if we aren't tracking into a state
-  if(!m_HasDebugState)
+  if(!m_State)
     return;
-
-  THREADSTATE_CHECK_DEBUGGER_THREAD();
 
   // all oldLive (except globals) are going out of scope. all newLive (except globals) are coming
   // into scope
@@ -1579,7 +1715,7 @@ void ThreadState::ProcessScopeChange(const rdcarray<bool> &oldLive, const rdcarr
     if(liveGlobals[id])
       continue;
 
-    m_PendingDebugState.changes.push_back({m_Variables[id]});
+    m_State->changes.push_back({m_Variables[id]});
   }
 
   for(uint32_t id = 0; id < newLive.size(); id++)
@@ -1587,16 +1723,12 @@ void ThreadState::ProcessScopeChange(const rdcarray<bool> &oldLive, const rdcarr
     if(liveGlobals[id])
       continue;
 
-    m_PendingDebugState.changes.push_back({ShaderVariable(), m_Variables[id]});
+    m_State->changes.push_back({ShaderVariable(), m_Variables[id]});
   }
 }
 
-// Must run on the device thread for the active simulation thread
 void ThreadState::EnterFunction(const Function *function, const rdcarray<Value *> &args)
 {
-  if(m_HasDebugState)
-    THREADSTATE_CHECK_DEBUGGER_THREAD();
-
   StackFrame *frame = new StackFrame(function);
   m_FunctionInstructionIdx = 0;
   m_FunctionInfo = m_Debugger.GetFunctionInfo(function);
@@ -1620,14 +1752,14 @@ void ThreadState::EnterFunction(const Function *function, const rdcarray<Value *
   m_ActiveGlobalInstructionIdx = m_FunctionInfo->globalInstructionOffset + m_FunctionInstructionIdx;
   m_Callstack.push_back(frame);
 
+  ShaderDebugState *state = m_State;
+  m_State = state;
   StepOverNopInstructions();
 }
 
-// Must be called from the replay manager thread (the debugger thread)
-void ThreadState::EnterEntryPoint(const Function *function, bool hasDebugState)
+void ThreadState::EnterEntryPoint(const Function *function, ShaderDebugState *state)
 {
-  THREADSTATE_CHECK_DEBUGGER_THREAD();
-  m_HasDebugState = hasDebugState;
+  m_State = state;
 
   EnterFunction(function, {});
 
@@ -1645,26 +1777,7 @@ void ThreadState::EnterEntryPoint(const Function *function, bool hasDebugState)
   // Start with the global memory allocations
   m_Memory = m_GlobalState.memory;
 
-  // Create per thread memory for non-groupshared global memory
-  for(auto &it : m_Memory.m_Allocations)
-  {
-    Id allocId = it.first;
-    MemoryTracking::Allocation &alloc = it.second;
-
-    RDCASSERT(alloc.globalVarAlloc);
-    if(!alloc.gsm)
-      m_Memory.ConvertGlobalAllocToLocal(allocId);
-  }
-
-  // active lane : needs it own local backing memory for GSM
-  if(m_HasDebugState)
-  {
-    for(Id id : m_GlobalState.groupSharedMemoryIds)
-      m_Memory.ConvertGlobalAllocToLocal(id);
-  }
-
-  m_HasDebugState = false;
-  UpdateCurrentInstruction();
+  m_State = NULL;
 }
 
 void ThreadState::FillCallstack(ShaderDebugState &state)
@@ -1678,6 +1791,7 @@ void ThreadState::FillCallstack(ShaderDebugState &state)
   auto it = m_FunctionInfo->callstacks.upper_bound(state.nextInstruction);
   if(it == m_FunctionInfo->callstacks.end())
   {
+    RDCWARN("No callstack entry found for instruction %u", state.nextInstruction);
     state.callstack.clear();
     state.callstack.push_back(m_FunctionInfo->function->name);
     return;
@@ -1692,6 +1806,7 @@ void ThreadState::FillCallstack(ShaderDebugState &state)
   }
   else
   {
+    RDCWARN("No callstack entry found for instruction %u", state.nextInstruction);
     state.callstack.clear();
     state.callstack.push_back(m_FunctionInfo->function->name);
     return;
@@ -1715,85 +1830,8 @@ bool IsNopInstruction(const Instruction &inst)
   return false;
 }
 
-bool ThreadState::JumpToBlock(const Block *target, bool divergencePoint)
-{
-  m_PreviousBlock = m_Block;
-  m_PhiVariables.clear();
-  auto it = m_FunctionInfo->phiReferencedIdsPerBlock.find(m_PreviousBlock);
-  if(it != m_FunctionInfo->phiReferencedIdsPerBlock.end())
-  {
-    const FunctionInfo::ReferencedIds &phiIds = it->second;
-    for(Id id : phiIds)
-      m_PhiVariables[id] = m_Variables[id];
-  }
-
-  RDCASSERT(target);
-  uint32_t blockId = target->id;
-  if(blockId < m_FunctionInfo->function->blocks.size())
-  {
-    m_Block = blockId;
-    m_FunctionInstructionIdx = m_FunctionInfo->function->blocks[m_Block]->startInstructionIdx;
-  }
-  else
-  {
-    return false;
-  }
-
-  uint32_t nextInstruction = m_FunctionInfo->globalInstructionOffset + m_FunctionInstructionIdx;
-  if(m_HasDebugState && !m_Ended)
-    m_PendingDebugState.nextInstruction = nextInstruction;
-
-  m_EnteredPoints.push_back(m_Block);
-  RDCASSERTEQUAL(m_FunctionInfo->divergentBlocks.contains(m_PreviousBlock), divergencePoint);
-  if(divergencePoint)
-  {
-    m_Diverged = true;
-    RDCASSERTEQUAL(m_ConvergencePoint, INVALID_EXECUTION_POINT);
-    for(const ConvergentBlockData &data : m_FunctionInfo->convergentBlocks)
-    {
-      if(data.first == m_PreviousBlock)
-      {
-        m_ConvergencePoint = data.second;
-        break;
-      }
-    }
-    RDCASSERTNOTEQUAL(m_ConvergencePoint, INVALID_EXECUTION_POINT);
-
-    RDCASSERT(m_PartialConvergencePoints.empty());
-    for(const PartialConvergentBlockData &data : m_FunctionInfo->partialConvergentBlocks)
-    {
-      if(data.first == m_PreviousBlock)
-      {
-        m_PartialConvergencePoints = data.second;
-        RDCASSERT(!m_PartialConvergencePoints.empty());
-        break;
-      }
-    }
-  }
-
-  return true;
-}
-
-uint32_t ThreadState::GetSubgroupActiveLanes(const rdcarray<ThreadState> &workgroup,
-                                             rdcarray<uint32_t> &activeLanes) const
-{
-  const uint32_t firstLaneInSub = m_WorkgroupIndex - m_SubgroupIdx;
-  for(uint32_t lane = firstLaneInSub; lane < firstLaneInSub + m_GlobalState.subgroupSize; lane++)
-  {
-    RDCASSERT(lane < m_ActiveMask.size(), lane, m_ActiveMask.size());
-    // wave operations exclude helpers
-    if(m_ActiveMask[lane])
-    {
-      RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-      if(!m_GlobalState.waveOpsIncludeHelpers && workgroup[lane].m_Helper)
-        continue;
-      activeLanes.push_back(lane);
-    }
-  }
-  return firstLaneInSub;
-}
-
-bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
+bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
+                                     const rdcarray<ThreadState> &workgroups)
 {
   m_CurrentInstruction = m_FunctionInfo->function->instructions[m_FunctionInstructionIdx];
   const Instruction &inst = *m_CurrentInstruction;
@@ -1809,7 +1847,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
   const Type *retType = inst.type;
   // Sensible defaults
   ShaderVariable result;
-  m_Program.GetSSAName(resultId, result.name);
+  Program::MakeResultId(inst, result.name);
   result.rows = 1;
   result.columns = 1;
   result.type = ConvertDXILTypeToVarType(retType);
@@ -1839,13 +1877,11 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             uint32_t rowIdx = arg.value.u32v[0];
             RDCASSERT(GetShaderVariable(inst.args[3], opCode, dxOpCode, arg));
             uint32_t colIdx = arg.value.u32v[0];
-
             const ShaderVariable &var = m_Input.members[inputIdx];
-            if(var.rows == 0)
-              RDCASSERT(rowIdx < var.members.size(), rowIdx, var.members.size());
-
-            const ShaderVariable &a = (var.rows != 0) ? var : var.members[rowIdx];
-            RDCASSERT(colIdx < a.columns, colIdx, a.columns);
+            RDCASSERT(rowIdx < var.rows, rowIdx, var.rows);
+            RDCASSERT(colIdx < var.columns, colIdx, var.columns);
+            ShaderVariable &a = (var.rows <= 1) ? m_Input.members[inputIdx]
+                                                : m_Input.members[inputIdx].members[rowIdx];
             const uint32_t c = colIdx;
 
 #undef _IMPL
@@ -1871,14 +1907,13 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             RDCASSERT(GetShaderVariable(inst.args[4], opCode, dxOpCode, arg));
 
             // Only the active lane stores outputs
-            if(m_HasDebugState)
+            if(m_State)
             {
-              ShaderVariable &var = m_Output.var.members[outputIdx];
-              if(var.rows == 0)
-                RDCASSERT(rowIdx < var.members.size(), rowIdx, var.members.size());
-
-              ShaderVariable &a = (var.rows != 0) ? var : var.members[rowIdx];
-              RDCASSERT(colIdx < a.columns, colIdx, a.columns);
+              const ShaderVariable &var = m_Output.var.members[outputIdx];
+              RDCASSERT(rowIdx < var.rows, rowIdx, var.rows);
+              RDCASSERT(colIdx < var.columns, colIdx, var.columns);
+              ShaderVariable &a = (var.rows <= 1) ? m_Output.var.members[outputIdx]
+                                                  : m_Output.var.members[outputIdx].members[rowIdx];
               const uint32_t c = colIdx;
 #undef _IMPL
 #define _IMPL(I, S, U) comp<I>(a, c) = comp<I>(arg, 0)
@@ -1904,8 +1939,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             // GetDimensions(handle,mipLevel)
             Id handleId = GetArgumentId(1);
             bool annotatedHandle;
-            ShaderVariable handleVar;
-            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle, handleVar);
+            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle);
             if(!resRefInfo.Valid())
               break;
 
@@ -1918,14 +1952,9 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
               mipLevel = arg.value.u32v[0];
             }
-            if(m_Debugger.GetResourceInfo(resRefInfo.resClass, binding, mipLevel, data) ==
-               DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
-            MarkResourceAccess(handleVar);
-
+            int dim;
+            data = apiWrapper->GetResourceInfo(resRefInfo.resClass, binding, mipLevel, m_ShaderType,
+                                               dim);
             // Returns a vector with: w, h, d, numLevels
             result.value = data.value;
             // DXIL reports the vector result as a struct of 4 x int.
@@ -1944,22 +1973,15 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             // Texture2DMSGetSamplePosition(srv,index)
             Id handleId = GetArgumentId(1);
             bool annotatedHandle;
-            ShaderVariable handleVar;
-            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle, handleVar);
+            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle);
             if(!resRefInfo.Valid())
               break;
 
             ShaderVariable arg;
             RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
             const char *opString = ToStr(dxOpCode).c_str();
-            ShaderVariable data;
-            if(m_Debugger.GetSampleInfo(resRefInfo.resClass, resRefInfo.binding, opString, data) ==
-               DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
-            MarkResourceAccess(handleVar);
+            ShaderVariable data = apiWrapper->GetSampleInfo(resRefInfo.resClass, resRefInfo.binding,
+                                                            m_ShaderType, opString);
 
             uint32_t sampleCount = data.value.u32v[0];
             uint32_t sampleIndex = arg.value.u32v[0];
@@ -1979,24 +2001,14 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::RenderTargetGetSampleCount:
           {
             const char *opString = ToStr(dxOpCode).c_str();
-            ShaderVariable data;
-            if(m_Debugger.GetRenderTargetSampleInfo(opString, data) == DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
+            ShaderVariable data = apiWrapper->GetRenderTargetSampleInfo(m_ShaderType, opString);
             result.value.u32v[0] = data.value.u32v[0];
             break;
           }
           case DXOp::RenderTargetGetSamplePosition:
           {
             const char *opString = ToStr(dxOpCode).c_str();
-            ShaderVariable data;
-            if(m_Debugger.GetRenderTargetSampleInfo(opString, data) == DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
+            ShaderVariable data = apiWrapper->GetRenderTargetSampleInfo(m_ShaderType, opString);
             ShaderVariable arg;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, arg));
 
@@ -2028,34 +2040,14 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::TextureGatherCmp:
           case DXOp::CalculateLOD:
           {
-            if(IsPendingResultReady())
-            {
-              const ShaderVariable &data = GetPendingResult();
-              ConvertSampleGatherReturn(dxOpCode, inst, data, result);
-              if(dxOpCode == DXOp::CalculateLOD)
-              {
-                // clamped is in arg 6
-                ShaderVariable arg;
-                RDCASSERT(GetShaderVariable(inst.args[6], opCode, dxOpCode, arg, false));
-                // CalculateSampleGather returns {CalculateLevelOfDetail(), CalculateLevelOfDetailUnclamped()}
-                if(arg.value.u32v[0] == 0)
-                  result.value.u32v[0] = data.value.u32v[1];
-              }
-              eventFlags |= ShaderEvents::SampleLoadGather;
-              break;
-            }
             Id handleId = GetArgumentId(1);
             bool annotatedHandle;
-            ShaderVariable handleVar;
-            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle, handleVar);
+            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle);
             if(!resRefInfo.Valid())
               break;
-            MarkResourceAccess(handleVar);
 
-            if(!PerformGPUResourceOp(workgroup, opCode, dxOpCode, resRefInfo, inst, result))
-              break;
-
-            DXIL_DEBUG_RDCASSERT(IsPendingResultPending());
+            PerformGPUResourceOp(workgroups, opCode, dxOpCode, resRefInfo, apiWrapper, inst, result);
+            eventFlags |= ShaderEvents::SampleLoadGather;
             break;
           }
           case DXOp::TextureLoad:
@@ -2073,8 +2065,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             // RawBufferStore(uav,index,elementOffset,value0,value1,value2,value3,mask,alignment)
             const Id handleId = GetArgumentId(1);
             bool annotatedHandle;
-            ShaderVariable handleVar;
-            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle, handleVar);
+            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle);
             if(!resRefInfo.Valid())
               break;
 
@@ -2082,20 +2073,9 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             // SRV TextureLoad is done on the GPU
             if((dxOpCode == DXOp::TextureLoad) && (resClass == ResourceClass::SRV))
             {
-              if(IsPendingResultReady())
-              {
-                const ShaderVariable &data = GetPendingResult();
-                ConvertSampleGatherReturn(dxOpCode, inst, data, result);
-                MarkResourceAccess(handleVar);
-                eventFlags |= ShaderEvents::SampleLoadGather;
-              }
-              else
-              {
-                if(PerformGPUResourceOp(workgroup, opCode, dxOpCode, resRefInfo, inst, result))
-                {
-                  DXIL_DEBUG_RDCASSERT(IsPendingResultPending());
-                }
-              }
+              PerformGPUResourceOp(workgroups, opCode, dxOpCode, resRefInfo, apiWrapper, inst,
+                                   result);
+              eventFlags |= ShaderEvents::SampleLoadGather;
               break;
             }
 
@@ -2155,56 +2135,54 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             }
 
             uint32_t structOffset = 0;
+            const byte *data = NULL;
+            size_t dataSize = 0;
             bool texData = false;
             uint32_t rowPitch = 0;
             uint32_t depthPitch = 0;
             uint32_t firstElem = 0;
             uint32_t numElems = 0;
-            ViewFmt fmt;
-
-            // Helper lanes can't modify UAVs
-            if(!load && (resClass == ResourceClass::UAV) && m_Helper)
-              break;
+            GlobalState::ViewFmt fmt;
 
             RDCASSERT((resClass == ResourceClass::SRV || resClass == ResourceClass::UAV), resClass);
-            ResourceInfo resInfo;
-            DeviceOpResult opResult = DeviceOpResult::Unknown;
-            const BindingSlot &slot = resRefInfo.binding;
+            GlobalState::ResourceInfo resInfo;
             switch(resClass)
             {
               case ResourceClass::UAV:
               {
-                UAVInfo uav;
-                opResult = m_Debugger.GetUAV(slot, uav);
-                if(opResult == DeviceOpResult::Succeeded)
+                GlobalState::UAVIterator uavIter = m_GlobalState.uavs.find(resRefInfo.binding);
+                if(uavIter == m_GlobalState.uavs.end())
                 {
-                  resInfo = uav.resInfo;
-                  texData = uav.tex;
-                  rowPitch = uav.rowPitch;
-                  depthPitch = uav.depthPitch;
+                  apiWrapper->FetchUAV(resRefInfo.binding);
+                  uavIter = m_GlobalState.uavs.find(resRefInfo.binding);
                 }
+                const GlobalState::UAVData &uav = uavIter->second;
+                resInfo = uav.resInfo;
+                data = uav.data.data();
+                dataSize = uav.data.size();
+                texData = uav.tex;
+                rowPitch = uav.rowPitch;
+                depthPitch = uav.depthPitch;
                 break;
               }
               case ResourceClass::SRV:
               {
-                SRVInfo srv;
-                opResult = m_Debugger.GetSRV(slot, srv);
-                if(opResult == DeviceOpResult::Succeeded)
+                GlobalState::SRVIterator srvIter = m_GlobalState.srvs.find(resRefInfo.binding);
+                if(srvIter == m_GlobalState.srvs.end())
                 {
-                  resInfo = srv.resInfo;
+                  apiWrapper->FetchSRV(resRefInfo.binding);
+                  srvIter = m_GlobalState.srvs.find(resRefInfo.binding);
                 }
+                const GlobalState::SRVData &srv = srvIter->second;
+                resInfo = srv.resInfo;
+                data = srv.data.data();
+                dataSize = srv.data.size();
                 break;
               }
               default: RDCERR("Unexpected ResourceClass %s", ToStr(resClass).c_str()); break;
             }
-            if(opResult == DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
-            MarkResourceAccess(handleVar);
             // Unbound resource
-            if(!resInfo.hasData)
+            if(data == NULL)
             {
               if(load)
               {
@@ -2308,7 +2286,6 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               dataOffset += structOffset;
             }
 
-            const uint64_t dataSize = resInfo.dataSize;
             // NULL resource or out of bounds
             if((!texData && elemIdx >= numElems) || (texData && dataOffset >= dataSize))
             {
@@ -2322,6 +2299,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             }
             else
             {
+              data += dataOffset;
               int numComps = fmt.numComps;
               int maxNumComps = fmt.numComps;
               // Clamp the number of components to read based on the amount of data in the buffer
@@ -2337,7 +2315,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
 
               // For stores load the whole data, update the component, save the whole data back
               // This is to support per component writes to packed formats
-              result.value = m_Debugger.TypedResourceLoad(resClass, slot, fmt, dataOffset);
+              result.value = TypedUAVLoad(fmt, data);
 
               // Zero out any out of bounds components
               if(fmt.numComps < numComps)
@@ -2363,7 +2341,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
                   }
                 }
                 fmt.numComps = RDCMIN(numComps, maxNumComps);
-                m_Debugger.TypedResourceStore(resClass, slot, fmt, dataOffset, result.value);
+                TypedUAVStore(fmt, (byte *)data, result.value);
               }
             }
             break;
@@ -2382,54 +2360,43 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
 
             // convert the direct heap access binding into ResourceReferenceIndo
             BindingSlot slot(heapType, descriptorIndex);
-            ResourceReferenceInfo resRefInfo;
-            if(m_Debugger.GetResourceReferenceInfo(slot, resRefInfo) == DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
-            ShaderDirectAccess access;
-            if(m_Debugger.GetShaderDirectAccess(resRefInfo.descType, slot, access) ==
-               DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
+            ResourceReferenceInfo resRefInfo = apiWrapper->GetResourceReferenceInfo(slot);
             RDCASSERT(m_DirectHeapAccessBindings.count(resultId) == 0);
             m_DirectHeapAccessBindings[resultId] = resRefInfo;
 
+            ShaderDirectAccess access = apiWrapper->GetShaderDirectAccess(resRefInfo.category, slot);
             // Default to unannotated handle
             ClearAnnotatedHandle(result);
-            result.type = resRefInfo.varType;
+            rdcstr resName = m_Program.GetHandleAlias(result.name);
+            result.type = resRefInfo.type;
+            result.name = resName;
             result.SetDirectAccess(access);
             break;
           }
           case DXOp::AnnotateHandle:
           {
             // AnnotateHandle(res,props)
-            rdcstr resultSSAName = result.name;
-            rdcstr baseResource;
-            Id baseResourceId = GetSSAId(inst.args[1]);
-            m_Program.GetSSAName(baseResourceId, baseResource);
+            rdcstr baseResource = GetArgumentName(1);
 
             ShaderVariable resource;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, resource));
             rdcstr resName;
             if(resource.IsDirectAccess())
             {
-              resName = result.name;
+              resName = m_Program.GetHandleAlias(result.name);
               // Update m_DirectHeapAccessBindings for the annotated handle
               // to use the data from the source resource
+              Id baseResourceId = GetSSAId(inst.args[1]);
               RDCASSERT(m_DirectHeapAccessBindings.count(baseResourceId) > 0);
               RDCASSERT(m_DirectHeapAccessBindings.count(resultId) == 0);
               m_DirectHeapAccessBindings[resultId] = m_DirectHeapAccessBindings.at(baseResourceId);
             }
             else
             {
-              resName = baseResource;
+              resName = m_Program.GetHandleAlias(baseResource);
             }
             result = resource;
-            result.name = resultSSAName;
+            result.name = resName;
 
             // Parse the packed annotate handle properties
             // resKind : {compType, compCount} | {structStride}
@@ -2473,20 +2440,6 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               uint32_t byteWidth = GetElementByteSize(compType);
               structStride = compCount * byteWidth;
             }
-            else if(resKind == ResourceKind::CBuffer)
-            {
-              // Create the cbuffer handle reference for the annotated handle
-              auto it = m_ConstantBlockHandles.find(baseResourceId);
-              if(it != m_ConstantBlockHandles.end())
-              {
-                m_ConstantBlockHandles[resultId] = it->second;
-              }
-              else
-              {
-                RDCERR("Annotated handle resName:%s %s has no cbuffer handle reference %u",
-                       resName.c_str(), baseResource.c_str(), baseResourceId);
-              }
-            }
             // Store the annotate properties for the result
             auto it = m_AnnotatedProperties.find(resultId);
             if(it == m_AnnotatedProperties.end())
@@ -2507,7 +2460,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           {
             // CreateHandle(resourceClass,rangeId,index,nonUniformIndex
             // CreateHandleFromBinding(bind,index,nonUniformIndex)
-            rdcstr resultSSAName = result.name;
+            rdcstr baseResource = result.name;
             uint32_t resIndexArgId = ~0U;
             if(dxOpCode == DXOp::CreateHandle)
               resIndexArgId = 3;
@@ -2533,16 +2486,13 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               };
               RDCASSERT(list);
 
-              rdcstr resName = Debugger::GetResourceBaseName(&m_Program, resRef);
-
+              rdcstr resName = m_Program.GetHandleAlias(baseResource);
               const rdcarray<ShaderVariable> &resources = *list;
               result.name.clear();
-              size_t constantBlockIndex = ~0U;
               for(uint32_t i = 0; i < resources.size(); ++i)
               {
                 if(resources[i].name == resName)
                 {
-                  constantBlockIndex = i;
                   result = resources[i];
                   break;
                 }
@@ -2550,8 +2500,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               if(result.name.isEmpty())
               {
                 if((resRef->resourceBase.resClass == ResourceClass::SRV) ||
-                   (resRef->resourceBase.resClass == ResourceClass::UAV) ||
-                   (resRef->resourceBase.resClass == ResourceClass::Sampler))
+                   (resRef->resourceBase.resClass == ResourceClass::UAV))
                 {
                   if(resIndexArgId < inst.args.size())
                   {
@@ -2560,12 +2509,11 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
                     ShaderVariable arg;
                     RDCASSERT(GetShaderVariable(inst.args[resIndexArgId], opCode, dxOpCode, arg));
                     uint32_t arrayIndex = arg.value.u32v[0];
-                    RDCASSERT(arrayIndex >= resRef->resourceBase.regBase);
-                    arrayIndex -= resRef->resourceBase.regBase;
                     bool isSRV = (resRef->resourceBase.resClass == ResourceClass::SRV);
                     DescriptorCategory category = isSRV ? DescriptorCategory::ReadOnlyResource
                                                         : DescriptorCategory::ReadWriteResource;
                     result.SetBindIndex(ShaderBindIndex(category, resRef->resourceIndex, arrayIndex));
+                    result.name = baseResource;
                     result.type = isSRV ? VarType::ReadOnlyResource : VarType::ReadWriteResource;
                     // Default to unannotated handle
                     ClearAnnotatedHandle(result);
@@ -2582,95 +2530,11 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
                          ToStr(resRef->resourceBase.resClass).c_str());
                 }
               }
-              else
-              {
-                if(resRef->resourceBase.resClass == ResourceClass::CBuffer)
-                {
-                  uint32_t arrayIndex = 0;
-                  // Look up the correct cbuffer variable for cbuffer arrays
-                  if(resRef->resourceBase.regCount > 1)
-                  {
-                    if(resIndexArgId < inst.args.size())
-                    {
-                      ShaderVariable arg;
-                      RDCASSERT(GetShaderVariable(inst.args[resIndexArgId], opCode, dxOpCode, arg));
-                      arrayIndex = arg.value.u32v[0];
-                      RDCASSERT(arrayIndex >= resRef->resourceBase.regBase);
-                      if(arrayIndex >= resRef->resourceBase.regBase)
-                      {
-                        arrayIndex -= resRef->resourceBase.regBase;
-                        RDCASSERT(arrayIndex < result.members.size(), arrayIndex,
-                                  result.members.size());
-                        if(arrayIndex < result.members.size())
-                          RDCASSERT(!result.members[arrayIndex].members.empty());
-                      }
-                    }
-                    else
-                    {
-                      RDCERR("Unhandled cbuffer handle %s with invalid resIndexArgId",
-                             resName.c_str(), resIndexArgId);
-                    }
-                  }
-                  // Create the cbuffer handle reference
-                  ConstantBlockReference constantBlockRef = {constantBlockIndex, arrayIndex};
-                  m_ConstantBlockHandles[resultId] = constantBlockRef;
-
-                  // Create cbuffer struct variable of N uint4's : N comes from resource metadata
-                  const size_t structSize = AlignUp16(resRef->resourceBase.cbufferData.sizeInBytes);
-                  ShaderVariable cbufferVar;
-                  cbufferVar.members.resize(structSize / 16);
-                  cbufferVar.rows = 0;
-                  cbufferVar.columns = 0;
-                  cbufferVar.type = VarType::Unknown;
-                  cbufferVar.name = resultSSAName;
-                  for(size_t i = 0; i < cbufferVar.members.size(); ++i)
-                  {
-                    ShaderVariable &var = cbufferVar.members[i];
-                    var.type = VarType::UInt;
-                    var.columns = 4;
-                    var.name = StringFormat::Fmt("[%u]", i);
-                    var.rows = 1;
-                    // Initialise to 0xCC to aid determinism and show unset values
-                    memset(&var.value, 0XCC, sizeof(var.value));
-                  }
-
-                  // Memory copy from the cbuffer data into the cbuffer variable
-                  auto it = m_GlobalState.constantBlocksDatas.find(constantBlockRef);
-                  if(it != m_GlobalState.constantBlocksDatas.end())
-                  {
-                    const bytebuf &cbufferData = it->second;
-                    if(cbufferData.size() != 0)
-                    {
-                      size_t offset = 0;
-                      const byte *data = cbufferData.data();
-                      for(size_t i = 0; i < cbufferVar.members.size(); ++i)
-                      {
-                        ShaderVariable &var = cbufferVar.members[i];
-                        size_t countBytes = RDCMIN((size_t)16, cbufferData.size() - offset);
-                        memcpy(var.value.u32v.data(), data + offset, countBytes);
-                        offset += 16;
-                        if(offset >= cbufferData.size())
-                          break;
-                      }
-                    }
-                    else
-                    {
-                      RDCERR("No data for constant block %s", result.name.c_str());
-                    }
-                  }
-                  else
-                  {
-                    RDCERR("Can't find the data for constant block %s", result.name.c_str());
-                  }
-                  result = cbufferVar;
-                }
-              }
             }
             else
             {
-              RDCERR("Unknown Base Resource for %s", resultSSAName.c_str());
+              RDCERR("Unknown Base Resource %s", baseResource.c_str());
             }
-            result.name = resultSSAName;
             break;
           }
           case DXOp::CBufferLoadLegacy:
@@ -2681,7 +2545,8 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               break;
 
             // Find the cbuffer variable from the handleId
-            if(!IsVariableAssigned(handleId))
+            auto itVar = m_Variables.find(handleId);
+            if(itVar == m_Variables.end())
             {
               RDCERR("Unknown cbuffer handle %u", handleId);
               break;
@@ -2692,42 +2557,47 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             uint32_t regIndex = arg.value.u32v[0];
 
             RDCASSERT(m_Live[handleId]);
-            const ShaderVariable &handleVar = m_Variables[handleId];
+            RDCASSERT(IsVariableAssigned(handleId));
+            const ShaderVariable &cbufferVar = itVar->second;
 
+            // Find the cbuffer index in the global state (matching by name)
+            uint32_t cbufferIndex = ~0U;
+            for(uint32_t i = 0; i < m_GlobalState.constantBlocks.size(); ++i)
+            {
+              if(m_GlobalState.constantBlocks[i].name == cbufferVar.name)
+              {
+                cbufferIndex = i;
+                break;
+              }
+            }
             result.value.u32v[0] = 0;
             result.value.u32v[1] = 0;
             result.value.u32v[2] = 0;
             result.value.u32v[3] = 0;
-            auto constantBlockRefIt = m_ConstantBlockHandles.find(handleId);
-            if(constantBlockRefIt != m_ConstantBlockHandles.end())
+            if(cbufferIndex != ~0U)
             {
-              const ConstantBlockReference &constantBlockRef = constantBlockRefIt->second;
-              auto it = m_GlobalState.constantBlocksDatas.find(constantBlockRef);
-              if(it != m_GlobalState.constantBlocksDatas.end())
+              const bytebuf &cbufferData = m_GlobalState.constantBlocksData[cbufferIndex];
+              const uint32_t bufferSize = (uint32_t)cbufferData.size();
+              const uint32_t maxIndex = AlignUp16(bufferSize) / 16;
+              RDCASSERTMSG("Out of bounds cbuffer load", regIndex < maxIndex, regIndex, maxIndex);
+              if(regIndex < maxIndex)
               {
-                const bytebuf &cbufferData = it->second;
-                const uint32_t bufferSize = (uint32_t)cbufferData.size();
-                const uint32_t maxIndex = AlignUp16(bufferSize) / 16;
-                RDCASSERTMSG("Out of bounds cbuffer load", regIndex < maxIndex, regIndex, maxIndex);
-                if(regIndex < maxIndex)
-                {
-                  const uint32_t dataOffset = regIndex * 16;
-                  const uint32_t byteWidth = 4;
-                  const byte *base = cbufferData.data() + dataOffset;
-                  const uint32_t *data = (const uint32_t *)base;
-                  const uint32_t numComps = RDCMIN(4U, (bufferSize - dataOffset) / byteWidth);
-                  for(uint32_t c = 0; c < numComps; c++)
-                    result.value.u32v[c] = data[c];
-                }
-              }
-              else
-              {
-                RDCERR("Failed to find data for constant block data for %s", handleVar.name.c_str());
+                const uint32_t dataOffset = regIndex * 16;
+                const uint32_t byteWidth = 4;
+                const byte *data = cbufferData.data() + dataOffset;
+                const uint32_t numComps = RDCMIN(4U, (bufferSize - dataOffset) / byteWidth);
+                GlobalState::ViewFmt cbufferFmt;
+                cbufferFmt.byteWidth = byteWidth;
+                cbufferFmt.numComps = numComps;
+                cbufferFmt.compType = CompType::Float;
+                cbufferFmt.stride = 16;
+
+                result.value = TypedUAVLoad(cbufferFmt, data);
               }
             }
             else
             {
-              RDCERR("Failed to find data for cbuffer %s", handleVar.name.c_str());
+              RDCERR("Failed to find data for cbuffer %s", cbufferVar.name.c_str());
             }
 
             // DXIL will create a vector of a single type with total size of 16-bytes
@@ -2768,16 +2638,9 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::Sqrt:
           case DXOp::Rsqrt:
           {
-            if(IsPendingResultReady())
-            {
-              result = GetPendingResult();
-            }
-            else
-            {
-              ShaderVariable arg;
-              RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, arg));
-              QueueMathOp(dxOpCode, arg, result);
-            }
+            ShaderVariable arg;
+            RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, arg));
+            apiWrapper->CalculateMathIntrinsic(dxOpCode, arg, result);
             break;
           }
           case DXOp::Round_ne:
@@ -2829,13 +2692,9 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           {
             ShaderVariable arg;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, arg));
-            RDCASSERT(IsFloatingPointType(arg.type));
-            RDCASSERTEQUAL(result.type, arg.type);
-            const uint32_t c = 0;
-#undef _IMPL
-#define _IMPL(T) comp<T>(result, c) = fabs(comp<T>(arg, c));
-
-            IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, arg.type);
+            RDCASSERTEQUAL(arg.type, VarType::Float);
+            RDCASSERTEQUAL(result.type, VarType::Float);
+            result.value.f32v[0] = fabsf(arg.value.f32v[0]);
             break;
           }
           case DXOp::IMin:
@@ -2847,24 +2706,13 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             ShaderVariable b;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, a));
             RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, b));
-            RDCASSERT(IsSignedIntegerType(a.type));
-            RDCASSERTEQUAL(a.type, b.type);
-            RDCASSERTEQUAL(result.type, a.type);
-            const uint32_t c = 0;
+            RDCASSERTEQUAL(a.type, VarType::SInt);
+            RDCASSERTEQUAL(b.type, VarType::SInt);
+            RDCASSERTEQUAL(result.type, VarType::SInt);
             if(dxOpCode == DXOp::IMin)
-            {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(result, c) = RDCMIN(comp<S>(a, c), comp<S>(b, c));
-
-              IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
-            }
+              result.value.s32v[0] = RDCMIN(a.value.s32v[0], b.value.s32v[0]);
             else if(dxOpCode == DXOp::IMax)
-            {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(result, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
-              IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
-            }
-            break;
+              result.value.s32v[0] = RDCMAX(a.value.s32v[0], b.value.s32v[0]);
           }
           case DXOp::UMin:
           case DXOp::UMax:
@@ -2875,24 +2723,13 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             ShaderVariable b;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, a));
             RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, b));
-            // LLVM does not make unsigned types
-            RDCASSERT(IsIntegerType(a.type));
-            RDCASSERTEQUAL(a.type, b.type);
-            RDCASSERTEQUAL(result.type, a.type);
-            const uint32_t c = 0;
+            RDCASSERTEQUAL(a.type, VarType::SInt);
+            RDCASSERTEQUAL(b.type, VarType::SInt);
+            RDCASSERTEQUAL(result.type, VarType::SInt);
             if(dxOpCode == DXOp::UMin)
-            {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(result, c) = RDCMIN(comp<U>(a, c), comp<U>(b, c));
-
-              IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
-            }
+              result.value.u32v[0] = RDCMIN(a.value.u32v[0], b.value.u32v[0]);
             else if(dxOpCode == DXOp::UMax)
-            {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(result, c) = RDCMAX(comp<U>(a, c), comp<U>(b, c));
-              IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
-            }
+              result.value.u32v[0] = RDCMAX(a.value.u32v[0], b.value.u32v[0]);
             break;
           }
           case DXOp::FMin:
@@ -2904,24 +2741,13 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             ShaderVariable b;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, a));
             RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, b));
-            RDCASSERT(IsFloatingPointType(a.type));
-            RDCASSERTEQUAL(a.type, b.type);
-            RDCASSERTEQUAL(result.type, a.type);
-            const uint32_t c = 0;
+            RDCASSERTEQUAL(a.type, VarType::Float);
+            RDCASSERTEQUAL(b.type, VarType::Float);
+            RDCASSERTEQUAL(result.type, VarType::Float);
             if(dxOpCode == DXOp::FMin)
-            {
-#undef _IMPL
-#define _IMPL(T) comp<T>(result, c) = dxbc_min(comp<T>(a, c), comp<T>(b, c));
-
-              IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, result.type);
-            }
+              result.value.f32v[0] = dxbc_min(a.value.f32v[0], b.value.f32v[0]);
             else if(dxOpCode == DXOp::FMax)
-            {
-#undef _IMPL
-#define _IMPL(T) comp<T>(result, c) = dxbc_max(comp<T>(a, c), comp<T>(b, c));
-
-              IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, result.type);
-            }
+              result.value.f32v[0] = dxbc_max(a.value.f32v[0], b.value.f32v[0]);
             break;
           }
           case DXOp::Fma:
@@ -2936,57 +2762,29 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, a));
             RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, b));
             RDCASSERT(GetShaderVariable(inst.args[3], opCode, dxOpCode, c));
-            RDCASSERT(IsFloatingPointType(a.type));
-            RDCASSERTEQUAL(a.type, b.type);
-            RDCASSERTEQUAL(a.type, c.type);
-            RDCASSERTEQUAL(result.type, a.type);
-            if(result.type == VarType::Double)
-            {
-              result.value.f64v[0] = a.value.f64v[0] * b.value.f64v[0] + c.value.f64v[0];
-            }
-            else if(result.type == VarType::Float)
-            {
-              const double fma = ((double)(a.value.f32v[0]) * (double)(b.value.f32v[0])) +
-                                 (double)(c.value.f32v[0]);
-              result.value.f32v[0] = (float)fma;
-            }
-            else if(result.type == VarType::Half)
-            {
-              const double fma = ((double)ConvertFromHalf(a.value.u16v[0]) *
-                                  (double)ConvertFromHalf(b.value.u16v[0])) +
-                                 (double)ConvertFromHalf(c.value.u16v[0]);
-              result.value.u16v[0] = ConvertToHalf((float)fma);
-            }
+            RDCASSERTEQUAL(a.type, VarType::Float);
+            RDCASSERTEQUAL(b.type, VarType::Float);
+            RDCASSERTEQUAL(c.type, VarType::Float);
+            RDCASSERTEQUAL(result.type, VarType::Float);
+            const double fma =
+                ((double)a.value.f32v[0] * (double)b.value.f32v[0]) + (double)c.value.f32v[0];
+            result.value.f32v[0] = (float)fma;
             break;
           }
           case DXOp::Saturate:
           {
             ShaderVariable arg;
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, arg));
-            RDCASSERT(IsFloatingPointType(arg.type));
-            RDCASSERTEQUAL(result.type, arg.type);
-            if(result.type == VarType::Double)
-            {
-              result.value.f64v[0] = dxbc_min(1.0, dxbc_max(0.0, arg.value.f64v[0]));
-              break;
-            }
-            else if(result.type == VarType::Float)
-            {
-              result.value.f32v[0] = dxbc_min(1.0f, dxbc_max(0.0f, arg.value.f32v[0]));
-              break;
-            }
-            else if(result.type == VarType::Half)
-            {
-              result.value.u16v[0] =
-                  ConvertToHalf(dxbc_min(1.0f, dxbc_max(0.0f, ConvertFromHalf(arg.value.u16v[0]))));
-              break;
-            }
+            RDCASSERTEQUAL(arg.type, VarType::Float);
+            RDCASSERTEQUAL(result.type, VarType::Float);
+            result.value.f32v[0] = dxbc_min(1.0f, dxbc_max(0.0f, arg.value.f32v[0]));
             break;
           }
           case DXOp::Dot2:
           case DXOp::Dot3:
           case DXOp::Dot4:
           {
+            // Float or Int
             // 2/3/4 Vector
             // Result type must match input types
             uint32_t numComps = 4;
@@ -2997,24 +2795,27 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               numComps = 3;
             uint32_t argBStart = argAStart + numComps;
 
-            result.value.s64v[0] = 0L;
-            for(uint32_t c = 0; c < numComps; ++c)
+            result.value.f32v[0] = 0.0f;
+            bool isFloat = (result.type == VarType::Float);
+            if(isFloat || result.type == VarType::SInt)
             {
-              ShaderVariable a;
-              ShaderVariable b;
-              RDCASSERT(GetShaderVariable(inst.args[argAStart + c], opCode, dxOpCode, a));
-              RDCASSERT(GetShaderVariable(inst.args[argBStart + c], opCode, dxOpCode, b));
-              RDCASSERTEQUAL(a.type, b.type);
-              RDCASSERTEQUAL(result.type, a.type);
-
-#undef _IMPL
-#define _IMPL(I, S, U) comp<I>(result, 0) += (comp<I>(a, 0) * comp<I>(b, 0));
-              IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(result, 0) += (comp<T>(a, 0) * comp<T>(b, 0));
-
-              IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, result.type);
+              for(uint32_t c = 0; c < numComps; ++c)
+              {
+                ShaderVariable a;
+                ShaderVariable b;
+                RDCASSERT(GetShaderVariable(inst.args[argAStart + c], opCode, dxOpCode, a));
+                RDCASSERT(GetShaderVariable(inst.args[argBStart + c], opCode, dxOpCode, b));
+                RDCASSERTEQUAL(result.type, a.type);
+                RDCASSERTEQUAL(result.type, b.type);
+                if(isFloat)
+                  result.value.f32v[0] += a.value.f32v[0] * b.value.f32v[0];
+                else
+                  result.value.s32v[0] += a.value.s32v[0] * b.value.s32v[0];
+              }
+            }
+            else
+            {
+              RDCERR("Unhandled result type %s", ToStr(result.type).c_str());
             }
             break;
           }
@@ -3064,8 +2865,9 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             RDCASSERTEQUAL(arg.type, VarType::SInt);
             RDCASSERTEQUAL(result.type, VarType::SInt);
             uint32_t component = arg.value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::DispatchThreadIndex) != 0);
             result.value.u32v[0] =
-                GetBuiltin(ShaderBuiltin::DispatchThreadIndex).value.u32v[component];
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::DispatchThreadIndex).value.u32v[component];
             break;
           }
           case DXOp::GroupId:
@@ -3076,7 +2878,9 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             RDCASSERTEQUAL(arg.type, VarType::SInt);
             RDCASSERTEQUAL(result.type, VarType::SInt);
             uint32_t component = arg.value.u32v[0];
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::GroupIndex).value.u32v[component];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::GroupIndex) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::GroupIndex).value.u32v[component];
             break;
           }
           case DXOp::ThreadIdInGroup:
@@ -3087,14 +2891,18 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             RDCASSERTEQUAL(arg.type, VarType::SInt);
             RDCASSERTEQUAL(result.type, VarType::SInt);
             uint32_t component = arg.value.u32v[0];
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::GroupThreadIndex).value.u32v[component];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::GroupThreadIndex) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::GroupThreadIndex).value.u32v[component];
             break;
           }
           case DXOp::FlattenedThreadIdInGroup:
           {
             // FlattenedThreadIdInGroup()->SV_GroupIndex
             RDCASSERTEQUAL(result.type, VarType::SInt);
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::GroupFlatIndex).value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::GroupFlatIndex) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::GroupFlatIndex).value.u32v[0];
             break;
           }
           case DXOp::DerivCoarseX:
@@ -3102,24 +2910,21 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::DerivFineX:
           case DXOp::DerivFineY:
           {
-            if(!(m_Features & ShaderFeatures::Derivatives) || (workgroup.size() < 4) ||
-               m_QuadNeighbours.contains(~0U))
+            if(m_ShaderType != DXBC::ShaderType::Pixel || workgroups.size() != 4)
             {
-              RDCERR(
-                  "Undefined results using derivative instruction in shader without support for "
-                  "derivatives");
+              RDCERR("Undefined results using derivative instruction outside of a pixel shader.");
             }
             else
             {
-              RDCASSERT(!QuadIsDiverged(workgroup, m_QuadNeighbours));
+              RDCASSERT(!ThreadsAreDiverged(workgroups));
               if(dxOpCode == DXOp::DerivCoarseX)
-                result.value = DDX(false, opCode, dxOpCode, workgroup, inst.args[1]);
+                result.value = DDX(false, opCode, dxOpCode, workgroups, inst.args[1]);
               else if(dxOpCode == DXOp::DerivCoarseY)
-                result.value = DDY(false, opCode, dxOpCode, workgroup, inst.args[1]);
+                result.value = DDY(false, opCode, dxOpCode, workgroups, inst.args[1]);
               else if(dxOpCode == DXOp::DerivFineX)
-                result.value = DDX(true, opCode, dxOpCode, workgroup, inst.args[1]);
+                result.value = DDX(true, opCode, dxOpCode, workgroups, inst.args[1]);
               else if(dxOpCode == DXOp::DerivFineY)
-                result.value = DDY(true, opCode, dxOpCode, workgroup, inst.args[1]);
+                result.value = DDY(true, opCode, dxOpCode, workgroups, inst.args[1]);
             }
             break;
           }
@@ -3263,9 +3068,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             BarrierMode barrierMode = (BarrierMode)arg.value.u32v[0];
             // For thread barriers the threads must be converged
             if(barrierMode & BarrierMode::SyncThreadGroup)
-              RDCASSERT(!WorkgroupIsDiverged(workgroup));
-            if(barrierMode & BarrierMode::TGSMFence)
-              ExecuteMemoryBarrier();
+              RDCASSERT(!ThreadsAreDiverged(workgroups));
             break;
           }
           case DXOp::Discard:
@@ -3274,12 +3077,8 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, cond));
             if(cond.value.u32v[0] != 0)
             {
-              // Active lane is demoted to helper invocation which for pixel debug terminates the debug
-              if(m_HasDebugState)
-              {
-                m_Dead = true;
-                return true;
-              }
+              m_Killed = true;
+              return true;
             }
             break;
           }
@@ -3325,13 +3124,11 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::AtomicBinOp:
           case DXOp::AtomicCompareExchange:
           {
-            SCOPED_LOCK(m_Debugger.GetAtomicMemoryLock());
             // AtomicBinOp(handle, atomicOp, offset0, offset1, offset2, newValue)
             // AtomicCompareExchange(handle,offset0,offset1,offset2,compareValue,newValue)
             const Id handleId = GetArgumentId(1);
             bool annotatedHandle;
-            ShaderVariable handleVar;
-            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle, handleVar);
+            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle);
             if(!resRefInfo.Valid())
               break;
 
@@ -3347,29 +3144,32 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             ShaderVariable a;
 
             uint32_t structOffset = 0;
+            const byte *data = NULL;
+            size_t dataSize = 0;
             bool texData = false;
             uint32_t rowPitch = 0;
             uint32_t depthPitch = 0;
             uint32_t firstElem = 0;
             uint32_t numElems = 0;
-            ViewFmt fmt;
+            GlobalState::ViewFmt fmt;
 
-            const BindingSlot &slot = resRefInfo.binding;
-            UAVInfo uavInfo;
-            if(m_Debugger.GetUAV(slot, uavInfo) == DeviceOpResult::NeedsDevice)
+            GlobalState::ResourceInfo resInfo;
+            GlobalState::UAVIterator uavIter = m_GlobalState.uavs.find(resRefInfo.binding);
+            if(uavIter == m_GlobalState.uavs.end())
             {
-              SetStepNeedsDeviceThread();
-              break;
+              apiWrapper->FetchUAV(resRefInfo.binding);
+              uavIter = m_GlobalState.uavs.find(resRefInfo.binding);
             }
-            MarkResourceAccess(handleVar);
-
-            const ResourceInfo resInfo = uavInfo.resInfo;
-            texData = uavInfo.tex;
-            rowPitch = uavInfo.rowPitch;
-            depthPitch = uavInfo.depthPitch;
+            const GlobalState::UAVData &uav = uavIter->second;
+            resInfo = uav.resInfo;
+            data = uav.data.data();
+            dataSize = uav.data.size();
+            texData = uav.tex;
+            rowPitch = uav.rowPitch;
+            depthPitch = uav.depthPitch;
 
             // Unbound resource
-            if(!resInfo.hasData)
+            if(data == NULL)
             {
               RDCERR("Unbound resource %s", GetArgumentName(1).c_str());
               a.value.u32v[0] = 0;
@@ -3415,7 +3215,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               RDCASSERTNOTEQUAL(stride, 1);
 
             RDCASSERTEQUAL(result.columns, 1);
-            RDCASSERTEQUAL(fmt.numComps * fmt.byteWidth, GetElementByteSize(result.type));
+            RDCASSERTEQUAL(fmt.numComps, result.columns);
             RDCASSERTNOTEQUAL(stride, 0);
             RDCASSERTNOTEQUAL(fmt.compType, CompType::Typeless);
 
@@ -3463,7 +3263,6 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               dataOffset += (firstElem + elemIdx) * stride;
             }
 
-            const uint64_t dataSize = resInfo.dataSize;
             // NULL resource or out of bounds
             if((!texData && elemIdx >= numElems) || (texData && dataOffset >= dataSize))
             {
@@ -3474,6 +3273,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             }
             else
             {
+              data += dataOffset;
               // Clamp the number of components to read based on the amount of data in the buffer
               if(!texData)
               {
@@ -3484,7 +3284,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
                 maxNumComps = (int)((maxOffset - dataOffset) / fmt.byteWidth);
                 fmt.numComps = RDCMIN(fmt.numComps, maxNumComps);
               }
-              a.value = m_Debugger.TypedResourceLoad(resClass, slot, fmt, dataOffset);
+              a.value = TypedUAVLoad(fmt, data);
             }
 
             ShaderVariable b;
@@ -3594,20 +3394,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
               RDCERR("Unhandled dxOpCode %s", ToStr(dxOpCode).c_str());
             }
 
-            // Helper lanes don't modify UAVs
-            if(!((resClass == ResourceClass::UAV) && m_Helper))
-            {
-              // NULL resource or out of bounds
-              if((!texData && elemIdx >= numElems) || (texData && dataOffset >= dataSize))
-              {
-                RDCWARN("Ignoring store to unbound resource or out of bounds store %s",
-                        GetArgumentName(1).c_str());
-              }
-              else
-              {
-                m_Debugger.TypedResourceStore(resClass, slot, fmt, dataOffset, res.value);
-              }
-            }
+            TypedUAVStore(fmt, (byte *)data, res.value);
 
             // result is the original value
             result.value = a.value;
@@ -3616,36 +3403,47 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::SampleIndex:
           {
             // SV_SampleIndex
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::MSAASampleIndex).value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::MSAASampleIndex) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::MSAASampleIndex).value.u32v[0];
             break;
           }
           case DXOp::Coverage:
           {
             // SV_Coverage
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::MSAACoverage).value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::MSAACoverage) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::MSAACoverage).value.u32v[0];
             break;
           }
           case DXOp::InnerCoverage:
           {
             // SV_InnerCoverage
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::IsFullyCovered).value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::IsFullyCovered) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::IsFullyCovered).value.u32v[0];
             break;
           }
           case DXOp::ViewID:
           {
             // SV_ViewportArrayIndex
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::ViewportIndex).value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::ViewportIndex) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::ViewportIndex).value.u32v[0];
             break;
           }
           case DXOp::PrimitiveID:
           {
             // SV_PrimitiveID
-            result.value.u32v[0] = GetBuiltin(ShaderBuiltin::PrimitiveIndex).value.u32v[0];
+            RDCASSERT(m_GlobalState.builtinInputs.count(ShaderBuiltin::PrimitiveIndex) != 0);
+            result.value.u32v[0] =
+                m_GlobalState.builtinInputs.at(ShaderBuiltin::PrimitiveIndex).value.u32v[0];
             break;
           }
           case DXOp::IsHelperLane:
           {
-            result.value.u32v[0] = m_Helper ? 0 : 1;
+            // Helper lanes don't have state
+            result.value.u32v[0] = m_State ? 0 : 1;
             break;
           }
           case DXOp::UAddc:
@@ -3918,866 +3716,76 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             result.value.u64v[0] = a.value.u64v[0];
             break;
           }
-          // Wave/Subgroup Operations
-          case DXOp::WaveGetLaneCount:
-          {
-            result.value.u32v[0] = m_GlobalState.subgroupSize;
-            break;
-          }
-          case DXOp::WaveGetLaneIndex:
-          {
-            result.value.u32v[0] = m_SubgroupIdx;
-            break;
-          }
-          case DXOp::WaveIsFirstLane:
-          {
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            const uint32_t firstLaneInSub = m_WorkgroupIndex - m_SubgroupIdx;
-            for(uint32_t lane = firstLaneInSub; lane < firstLaneInSub + m_GlobalState.subgroupSize;
-                lane++)
-            {
-              RDCASSERT(lane < m_ActiveMask.size(), lane, m_ActiveMask.size());
-              // helper lanes are considered active for this instruction
-              if(m_ActiveMask[lane])
-              {
-                RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-                activeLanes.push_back(lane);
-              }
-            }
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-            result.value.u32v[0] = (m_WorkgroupIndex == activeLanes[0]) ? 1 : 0;
-            break;
-          }
-          case DXOp::WaveReadLaneAt:
-          {
-            // WaveReadLaneAt(value,lane)
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
-            const uint32_t firstLaneInSub = m_WorkgroupIndex - m_SubgroupIdx;
-            uint32_t lane = firstLaneInSub + arg.value.u32v[0];
-
-            if(lane < workgroup.size())
-            {
-              ShaderVariable var;
-              RDCASSERT(
-                  GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, var));
-              result.value = var.value;
-            }
-            else
-            {
-              RDCERR("Invalid workgroup lane %u", lane);
-            }
-            break;
-          }
-          case DXOp::WaveReadLaneFirst:
-          {
-            // WaveReadLaneFirst(value)
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-            uint32_t lane = activeLanes[0];
-            if(lane < workgroup.size())
-            {
-              ShaderVariable var;
-              RDCASSERT(
-                  GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, var));
-              result.value = var.value;
-            }
-            else
-            {
-              RDCERR("Invalid workgroup lane %u", lane);
-            }
-            break;
-          }
-          case DXOp::WavePrefixOp:
-          {
-            // WavePrefixOp(value,op,sop)
-
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
-            WaveOpCode waveOpCode = (WaveOpCode)arg.value.u32v[0];
-
-            RDCASSERT(GetShaderVariable(inst.args[3], opCode, dxOpCode, arg));
-            bool isUnsigned = (arg.value.u32v[0] != (uint32_t)SignedOpKind::Signed);
-
-            // set the initial value
-            ShaderVariable accum(result);
-            switch(waveOpCode)
-            {
-              case WaveOpCode::Sum: SetShaderValueZero(accum); break;
-              case WaveOpCode::Product: SetShaderValueOne(accum); break;
-              default:
-                RDCERR("Unhandled PrefixOp wave opcode %s", ToStr(waveOpCode).c_str());
-                accum.value = {};
-                break;
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-            for(uint32_t lane : activeLanes)
-            {
-              // stop before processing our lane
-              if(lane == m_WorkgroupIndex)
-                break;
-
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-
-              for(uint8_t c = 0; c < x.columns; c++)
-              {
-                switch(waveOpCode)
-                {
-                  case WaveOpCode::Sum:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = comp<U>(accum, c) + comp<U>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<S>(accum, c) + comp<S>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = comp<T>(accum, c) + comp<T>(x, c)
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  case WaveOpCode::Product:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = comp<U>(accum, c) * comp<U>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<S>(accum, c) * comp<S>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = comp<T>(accum, c) * comp<T>(x, c)
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  default: RDCERR("Unhandled PrefixOp wave opcode %s", ToStr(waveOpCode).c_str());
-                }
-              }
-            }
-            result.value = accum.value;
-            break;
-          }
-          case DXOp::WavePrefixBitCount:
-          case DXOp::WaveAllBitCount:
-          {
-            // WavePrefixBitCount(cond)
-            // WaveAllBitCount(cond)
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            uint32_t maxLane = (dxOpCode == DXOp::WavePrefixBitCount) ? m_WorkgroupIndex : UINT32_MAX;
-
-            uint32_t count = 0;
-            for(uint32_t lane : activeLanes)
-            {
-              // stop before processing our lane
-              if(lane == maxLane)
-                break;
-
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-              count += x.value.u32v[0];
-            }
-
-            result.value.u32v[0] = count;
-            break;
-          }
-          case DXOp::WaveAnyTrue:
-          case DXOp::WaveAllTrue:
-          case DXOp::WaveActiveBallot:
-          case DXOp::WaveActiveAllEqual:
-          {
-            // WaveActiveBallot returns struct of int x 4, convert this to a vector
-            if(dxOpCode == DXOp::WaveActiveBallot)
-            {
-              if(!ConvertShaderVariableStructToVector(retType, result))
-              {
-                break;
-              }
-              if(result.type != VarType::SInt && result.type != VarType::UInt)
-              {
-                RDCERR("Expected WaveActiveBallot result struct member type %s to be SInt or UInt",
-                       ToStr(result.type).c_str());
-                break;
-              }
-            }
-
-            ShaderVariable accum(result);
-
-            ShaderVariable refValue;
-            RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, refValue));
-
-            if(dxOpCode == DXOp::WaveAnyTrue)
-            {
-              // WaveAnyTrue(cond)
-              accum.value.u32v[0] = 0;
-            }
-            else if(dxOpCode == DXOp::WaveAllTrue)
-            {
-              // WaveAllTrue(cond)
-              accum.value.u32v[0] = 1;
-            }
-            else if(dxOpCode == DXOp::WaveActiveAllEqual)
-            {
-              // WaveActiveAllEqual(value)
-              accum.value.u32v[0] = 1;
-            }
-            else if(dxOpCode == DXOp::WaveActiveBallot)
-            {
-              // WaveActiveBallot(value)
-              accum.value.u32v[0] = 0;
-            }
-            else
-            {
-              RDCERR("Unhandled dxOpCode %s", ToStr(dxOpCode).c_str());
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            const uint32_t firstLaneInSub = GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            for(uint32_t lane : activeLanes)
-            {
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-
-              if(dxOpCode == DXOp::WaveAnyTrue)
-              {
-                accum.value.u32v[0] |= x.value.u32v[0];
-              }
-              else if(dxOpCode == DXOp::WaveAllTrue)
-              {
-                accum.value.u32v[0] &= x.value.u32v[0];
-              }
-              else if(dxOpCode == DXOp::WaveActiveBallot)
-              {
-                uint32_t c = (lane - firstLaneInSub) / 32;
-                uint32_t bit = 1U << ((lane - firstLaneInSub) % 32U);
-
-                if(x.value.u32v[0])
-                  accum.value.u32v[c] |= bit;
-              }
-              else if(dxOpCode == DXOp::WaveActiveAllEqual)
-              {
-                for(uint8_t c = 0; c < x.columns; c++)
-                {
-                  bool matches = false;
-#undef _IMPL
-#define _IMPL(I, S, U) matches = (comp<I>(x, c) == comp<I>(refValue, c));
-
-                  IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) matches = (comp<T>(x, c) == comp<T>(refValue, c));
-
-                  IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-                  accum.value.u32v[c] &= (matches ? 1 : 0);
-                }
-              }
-            }
-
-            result.value = accum.value;
-            break;
-          }
-          case DXOp::WaveActiveOp:
-          {
-            // WaveActiveOp(value,op,sop)
-            ShaderVariable accum(result);
-
-            ShaderVariable refValue;
-            RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, refValue));
-
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
-            WaveOpCode waveOpCode = (WaveOpCode)arg.value.u32v[0];
-
-            RDCASSERT(GetShaderVariable(inst.args[3], opCode, dxOpCode, arg));
-            bool isUnsigned = (arg.value.u32v[0] != (uint32_t)SignedOpKind::Signed);
-
-            // set the initial value
-            switch(waveOpCode)
-            {
-              case WaveOpCode::Sum: SetShaderValueZero(accum); break;
-              case WaveOpCode::Product: SetShaderValueOne(accum); break;
-              case WaveOpCode::Min:
-              case WaveOpCode::Max:
-              {
-                accum.value = refValue.value;
-                break;
-              }
-              default:
-                RDCERR("Unhandled ActiveOp wave opcode %s", ToStr(waveOpCode).c_str());
-                accum.value = {};
-                break;
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            for(uint32_t lane : activeLanes)
-            {
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-
-              for(uint8_t c = 0; c < x.columns; c++)
-              {
-                switch(waveOpCode)
-                {
-                  case WaveOpCode::Sum:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = comp<U>(accum, c) + comp<U>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<S>(accum, c) + comp<S>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = comp<T>(accum, c) + comp<T>(x, c)
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  case WaveOpCode::Product:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = comp<U>(accum, c) * comp<U>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<S>(accum, c) * comp<S>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = comp<T>(accum, c) * comp<T>(x, c)
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  case WaveOpCode::Min:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = RDCMIN(comp<U>(accum, c), comp<U>(x, c))
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = RDCMIN(comp<S>(accum, c), comp<S>(x, c))
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = RDCMIN(comp<T>(accum, c), comp<T>(x, c))
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  case WaveOpCode::Max:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = RDCMAX(comp<U>(accum, c), comp<U>(x, c))
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = RDCMAX(comp<S>(accum, c), comp<S>(x, c))
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = RDCMAX(comp<T>(accum, c), comp<T>(x, c))
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  default: RDCERR("Unhandled ActiveOp wave opcode %s", ToStr(waveOpCode).c_str());
-                }
-              }
-            }
-
-            result.value = accum.value;
-            break;
-          }
-          case DXOp::WaveActiveBit:
-          {
-            // WaveActiveBit(value,op)
-            ShaderVariable accum(result);
-
-            ShaderVariable refValue;
-            RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, refValue));
-
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
-            WaveBitOpCode waveBitOpCode = (WaveBitOpCode)arg.value.u32v[0];
-
-            // set the initial value
-            switch(waveBitOpCode)
-            {
-              case WaveBitOpCode::Or: SetShaderValueZero(accum); break;
-              case WaveBitOpCode::Xor: SetShaderValueZero(accum); break;
-              case WaveBitOpCode::And: SetUIntValue(UINT64_MAX, accum); break;
-              default:
-                RDCERR("Unhandled ActiveBitOp wave opcode %s", ToStr(waveBitOpCode).c_str());
-                accum.value = {};
-                break;
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            for(uint32_t lane : activeLanes)
-            {
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-
-              for(uint8_t c = 0; c < x.columns; c++)
-              {
-                switch(waveBitOpCode)
-                {
-                  case WaveBitOpCode::And:
-                  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<I>(accum, c) & comp<I>(x, c)
-                    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    break;
-                  }
-                  case WaveBitOpCode::Or:
-                  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<I>(accum, c) | comp<I>(x, c)
-                    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    break;
-                  }
-                  case WaveBitOpCode::Xor:
-                  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<I>(accum, c) ^ comp<I>(x, c)
-                    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    break;
-                  }
-                  default:
-                    RDCERR("Unhandled ActiveBitOp wave opcode %s", ToStr(waveBitOpCode).c_str());
-                    break;
-                }
-              }
-            }
-
-            result.value = accum.value;
-            break;
-          }
-          case DXOp::WaveMatch:
-          {
-            // SM6.5
-            // WaveMatch(value)
-            ShaderVariable refValue;
-            RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, refValue));
-
-            // convert return result struct of four members into a vector
-            if(!ConvertShaderVariableStructToVector(retType, result))
-            {
-              break;
-            }
-            if(result.type != VarType::SInt && result.type != VarType::UInt)
-            {
-              RDCERR("Expected WaveMatch result struct member type %s to be SInt or UInt",
-                     ToStr(result.type).c_str());
-              break;
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            const uint32_t firstLaneInSub = GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            for(uint32_t lane : activeLanes)
-            {
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-
-              bool matches = true;
-              for(uint8_t c = 0; c < x.columns; c++)
-              {
-#undef _IMPL
-#define _IMPL(I, S, U) matches &= (comp<I>(x, c) == comp<I>(refValue, c));
-
-                IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) matches &= (comp<T>(x, c) == comp<T>(refValue, c));
-
-                IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-              }
-              if(matches)
-              {
-                uint32_t c = (lane - firstLaneInSub) / 32;
-                uint32_t bit = 1U << ((lane - firstLaneInSub) % 32U);
-
-                result.value.u32v[c] |= bit;
-              }
-            }
-            break;
-          }
-          case DXOp::WaveMultiPrefixOp:
-          {
-            // SM6.5
-            // WaveMultiPrefixOp(value,mask0,mask1,mask2,mask3,op,sop)
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[6], opCode, dxOpCode, arg));
-            WaveMultiPrefixOpCode waveMultiPrefixOpCode = (WaveMultiPrefixOpCode)arg.value.u32v[0];
-
-            RDCASSERT(GetShaderVariable(inst.args[7], opCode, dxOpCode, arg));
-            bool isUnsigned = (arg.value.u32v[0] != (uint32_t)SignedOpKind::Signed);
-
-            uint32_t mask[4];
-            for(uint32_t i = 0; i < 4; ++i)
-            {
-              RDCASSERT(GetShaderVariable(inst.args[2 + i], opCode, dxOpCode, arg));
-              mask[i] = arg.value.u32v[0];
-            }
-
-            // set the initial value
-            ShaderVariable accum(result);
-            switch(waveMultiPrefixOpCode)
-            {
-              case WaveMultiPrefixOpCode::Sum: SetShaderValueZero(accum); break;
-              case WaveMultiPrefixOpCode::Product: SetShaderValueOne(accum); break;
-              case WaveMultiPrefixOpCode::Or: SetShaderValueZero(accum); break;
-              case WaveMultiPrefixOpCode::Xor: SetShaderValueZero(accum); break;
-              case WaveMultiPrefixOpCode::And: SetUIntValue(UINT64_MAX, accum); break;
-              default:
-                RDCERR("Unhandled WaveMultiPrefixOp wave opcode %s",
-                       ToStr(waveMultiPrefixOpCode).c_str());
-                accum.value = {};
-                break;
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            const uint32_t firstLaneInSub = GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            uint32_t maxLane = m_WorkgroupIndex;
-
-            for(uint32_t lane : activeLanes)
-            {
-              // stop before processing our lane
-              if(lane == maxLane)
-                break;
-
-              uint32_t maskCol = (lane - firstLaneInSub) / 32;
-              uint32_t bit = 1U << ((lane - firstLaneInSub) % 32U);
-
-              if((mask[maskCol] & bit) == 0)
-                continue;
-
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-              for(uint8_t c = 0; c < x.columns; c++)
-              {
-                switch(waveMultiPrefixOpCode)
-                {
-                  case WaveMultiPrefixOpCode::And:
-                  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<I>(accum, c) & comp<I>(x, c)
-                    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    break;
-                  }
-                  case WaveMultiPrefixOpCode::Or:
-                  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<I>(accum, c) | comp<I>(x, c)
-                    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    break;
-                  }
-                  case WaveMultiPrefixOpCode::Xor:
-                  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<I>(accum, c) ^ comp<I>(x, c)
-                    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    break;
-                  }
-                  case WaveMultiPrefixOpCode::Sum:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = comp<U>(accum, c) + comp<U>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<S>(accum, c) + comp<S>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = comp<T>(accum, c) + comp<T>(x, c)
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  case WaveMultiPrefixOpCode::Product:
-                  {
-                    if(isUnsigned)
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(accum, c) = comp<U>(accum, c) * comp<U>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    else
-                    {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(accum, c) = comp<S>(accum, c) * comp<S>(x, c)
-                      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, x.type);
-
-#undef _IMPL
-#define _IMPL(T) comp<T>(accum, c) = comp<T>(accum, c) * comp<T>(x, c)
-
-                      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, x.type);
-                    }
-                    break;
-                  }
-                  default:
-                    RDCERR("Unhandled WaveMultiPrefixOp wave opcode %s",
-                           ToStr(waveMultiPrefixOpCode).c_str());
-                    break;
-                }
-              }
-            }
-            result.value = accum.value;
-            break;
-          }
-          case DXOp::WaveMultiPrefixBitCount:
-          {
-            // SM6.5
-            // WaveMultiPrefixBitCount(value,mask0,mask1,mask2,mask3)
-
-            uint32_t mask[4];
-            for(uint32_t i = 0; i < 4; ++i)
-            {
-              ShaderVariable arg;
-              RDCASSERT(GetShaderVariable(inst.args[2 + i], opCode, dxOpCode, arg));
-              mask[i] = arg.value.u32v[0];
-            }
-
-            // determine active lane indices in our subgroup
-            rdcarray<uint32_t> activeLanes;
-            const uint32_t firstLaneInSub = GetSubgroupActiveLanes(workgroup, activeLanes);
-            RDCASSERT(!SubgroupIsDiverged(workgroup, activeLanes));
-
-            uint32_t maxLane = m_WorkgroupIndex;
-
-            uint32_t count = 0;
-            for(uint32_t lane : activeLanes)
-            {
-              // stop before processing our lane
-              if(lane == maxLane)
-                break;
-
-              uint32_t maskCol = (lane - firstLaneInSub) / 32;
-              uint32_t bit = 1U << ((lane - firstLaneInSub) % 32U);
-
-              if((mask[maskCol] & bit) == 0)
-                continue;
-
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-              count += x.value.u32v[0];
-            }
-
-            result.value.u32v[0] = count;
-            break;
-          }
           // Quad Operations
           case DXOp::QuadReadLaneAt:
           case DXOp::QuadOp:
           {
-            RDCASSERT(!QuadIsDiverged(workgroup, m_QuadNeighbours));
+            RDCASSERT(!ThreadsAreDiverged(workgroups));
             // QuadOp(value,op)
             // QuadReadLaneAt(value,quadLane)
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
-            uint32_t lane = ~0U;
+            ShaderVariable b;
+            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, b));
+            uint32_t lane = UINT32_MAX;
             if(dxOpCode == DXOp::QuadOp)
             {
-              if(m_QuadLaneIndex == ~0U)
+              QuadOpKind quadOp = (QuadOpKind)b.value.u32v[0];
+              switch(quadOp)
               {
-                RDCERR("Quad operation without proper quad neighbours");
-                lane = m_WorkgroupIndex;
-              }
-              else
-              {
-                QuadOpKind quadOp = (QuadOpKind)arg.value.u32v[0];
-                switch(quadOp)
+                case QuadOpKind::ReadAcrossX:
                 {
-                  case QuadOpKind::ReadAcrossX:
-                  {
-                    // 0->1
-                    // 1->0
-                    // 2->3
-                    // 3->2
-                    lane = m_QuadLaneIndex ^ 1;
-                    break;
-                  }
-                  case QuadOpKind::ReadAcrossY:
-                  {
-                    // 0->2
-                    // 1->3
-                    // 2->0
-                    // 3->1
-                    lane = m_QuadLaneIndex ^ 2;
-                    break;
-                  }
-                  case QuadOpKind::ReadAcrossDiagonal:
-                  {
-                    // 0->3
-                    // 1->2
-                    // 2->1
-                    // 3->0
-                    lane = m_QuadLaneIndex ^ 3;
-                    break;
-                  }
-                  default: RDCERR("Unhandled QuadOpKind %s", ToStr(quadOp).c_str()); break;
+                  // 0->1
+                  // 1->0
+                  // 2->3
+                  // 3->2
+                  if(m_WorkgroupIndex % 2 == 0)
+                    lane = m_WorkgroupIndex + 1;
+                  else
+                    lane = m_WorkgroupIndex - 1;
+                  break;
                 }
-                if(lane < 4)
-                  lane = m_QuadNeighbours[lane];
-
-                if(lane == ~0U)
+                case QuadOpKind::ReadAcrossY:
                 {
-                  RDCERR("QuadOp %s without proper quad neighbours", ToStr(quadOp).c_str());
-                  lane = m_WorkgroupIndex;
+                  // 0->2
+                  // 1->3
+                  // 2->0
+                  // 3->1
+                  if(m_WorkgroupIndex < 2)
+                    lane = m_WorkgroupIndex + 2;
+                  else
+                    lane = m_WorkgroupIndex - 2;
+                  break;
                 }
+                case QuadOpKind::ReadAcrossDiagonal:
+                {
+                  // 0->3
+                  // 1->2
+                  // 2->1
+                  // 3->0
+                  lane = 3 - m_WorkgroupIndex;
+                  break;
+                }
+                default: RDCERR("Unhandled QuadOpKind %s", ToStr(quadOp).c_str()); break;
               }
             }
             else if(dxOpCode == DXOp::QuadReadLaneAt)
             {
               // QuadReadLaneAt(value,quadLane)
-              lane = arg.value.u32v[0];
-              RDCASSERT(lane < 4, lane);
-              lane = RDCMIN(lane, 3U);
-              lane = m_QuadNeighbours[lane];
-
-              if(lane == ~0U)
-              {
-                RDCERR("QuadReadLaneAt without proper quad neighbours");
-                lane = m_WorkgroupIndex;
-              }
+              lane = b.value.u32v[0];
             }
             else
             {
               RDCERR("Unhandled dxOpCode %s", ToStr(dxOpCode).c_str());
             }
-            if(lane < workgroup.size())
+            if(lane < workgroups.size())
             {
               ShaderVariable var;
-              RDCASSERT(
-                  GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, var));
+              RDCASSERT(workgroups[lane].GetShaderVariable(inst.args[1], opCode, dxOpCode, var));
               result.value = var.value;
             }
             else
             {
               RDCERR("Invalid workgroup lane %u", lane);
             }
-            break;
-          }
-          case DXOp::QuadVote:
-          {
-            // SM6.7 QuadVote(cond,op)
-            RDCASSERT(!QuadIsDiverged(workgroup, m_QuadNeighbours));
-
-            ShaderVariable arg;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, arg));
-            QuadVoteOpKind quadVoteOp = (QuadVoteOpKind)arg.value.u32v[0];
-
-            ShaderVariable accum(result);
-
-            switch(quadVoteOp)
-            {
-              case QuadVoteOpKind::Any: accum.value.u32v[0] = 0; break;
-              case QuadVoteOpKind::All: accum.value.u32v[0] = 1; break;
-              default: RDCERR("Unhandled QuadVoteOpKind %s", ToStr(quadVoteOp).c_str()); break;
-            };
-
-            for(uint32_t i = 0; i < 4; ++i)
-            {
-              uint32_t lane = m_QuadNeighbours[i];
-              if(lane == ~0U)
-              {
-                RDCERR("QuadVote %s without proper quad neighbours", ToStr(quadVoteOp).c_str());
-                lane = m_WorkgroupIndex;
-              }
-
-              RDCASSERT(lane < workgroup.size(), lane, workgroup.size());
-              ShaderVariable x;
-              RDCASSERT(GetShaderVariableFromLane(workgroup[lane], inst.args[1], opCode, dxOpCode, x));
-
-              switch(quadVoteOp)
-              {
-                case QuadVoteOpKind::Any: accum.value.u32v[0] |= x.value.u32v[0]; break;
-                case QuadVoteOpKind::All: accum.value.u32v[0] &= x.value.u32v[0]; break;
-                default: RDCERR("Unhandled QuadVoteOpKind %s", ToStr(quadVoteOp).c_str()); break;
-              }
-            }
-            result.value = accum.value;
             break;
           }
           case DXOp::Dot2AddHalf:
@@ -4934,54 +3942,14 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             }
             break;
           }
+          // Likely to implement when required
           case DXOp::BufferUpdateCounter:
-          {
-            // HLSL: DecrementCounter, IncrementCounter
-            // BufferUpdateCounter(uav,inc)
-            // Treat as an atomic operation on the UAV's hidden counter
-            SCOPED_LOCK(m_Debugger.GetAtomicMemoryLock());
-            const Id handleId = GetArgumentId(1);
-            bool annotatedHandle;
-            ShaderVariable handleVar;
-            ResourceReferenceInfo resRefInfo = GetResource(handleId, annotatedHandle, handleVar);
-            if(!resRefInfo.Valid())
-              break;
-
-            ResourceClass resClass = resRefInfo.resClass;
-            // handle must be a UAV
-            if(resClass != ResourceClass::UAV)
-            {
-              RDCERR("BufferUpdateCounter on non-UAV resource %s", ToStr(resClass).c_str());
-              break;
-            }
-
-            const BindingSlot &slot = resRefInfo.binding;
-            UAVInfo uavInfo;
-            if(m_Debugger.GetUAV(slot, uavInfo) == DeviceOpResult::NeedsDevice)
-            {
-              SetStepNeedsDeviceThread();
-              break;
-            }
-
-            RDCASSERTEQUAL(inst.args[2]->type->type, Type::TypeKind::Scalar);
-            RDCASSERTEQUAL(inst.args[2]->type->scalarType, Type::Int);
-
-            ShaderVariable value;
-            RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, value));
-
-            RDCASSERT(IsIntegerType(value.type));
-            RDCASSERT(IsIntegerType(result.type));
-
-            // Returns the pre-increment value of the hidden counter
-            result.value.s32v[0] = uavInfo.hiddenCounter;
-
-            uavInfo.hiddenCounter += value.value.s32v[0];
-            break;
-          }
-
-          // Implement when required
           case DXOp::CBufferLoad:
-            // loads single value from byte offset in constant buffer, 8-byte alignment on the offset
+
+          // MSAA
+          case DXOp::EvalSnapped:
+          case DXOp::EvalSampleIndex:
+          case DXOp::EvalCentroid:
 
           // SM6.1
           case DXOp::AttributeAtVertex:
@@ -4992,30 +3960,22 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
             // stores texel data at specified sample index
           case DXOp::TextureGatherRaw:
             // Gather raw elements from 4 texels with no type conversions (SRV type is constrained)
+          case DXOp::QuadVote:
+            // QuadVote(cond,op)
 
-          // SM 6.8 : when SM6.8 is supporting by RenderDoc
+          // SM 6.8
           case DXOp::StartVertexLocation:
             // SV_BaseVertexLocation
             // BaseVertexLocation from DrawIndexedInstanced or StartVertexLocation from DrawInstanced
           case DXOp::StartInstanceLocation:
             // SV_StartInstanceLocation
             // StartInstanceLocation from Draw*Instanced
+
+          // Needed for debugger support of multi-threaded compute execution
           case DXOp::BarrierByMemoryType:
           case DXOp::BarrierByMemoryHandle:
 
           // No plans to implement
-
-          // MSAA
-          case DXOp::EvalSnapped:
-            // HLSL : EvaluateAttributeSnapped
-          case DXOp::EvalSampleIndex:
-            // HLSL : EvaluateAttributeAtSample
-          case DXOp::EvalCentroid:
-            // HLSL : EvaluateAttributeCentroid
-
-          case DXOp::CycleCounterLegacy:
-            // DXBC Shader-Internal Cycle Counter (Debug Only)
-
           case DXOp::CheckAccessFullyMapped:
             // determines whether all values from a Sample, Gather, or Load operation
             // accessed mapped tiles in a tiled resource
@@ -5023,12 +3983,6 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::WriteSamplerFeedbackBias:
           case DXOp::WriteSamplerFeedbackLevel:
           case DXOp::WriteSamplerFeedbackGrad:
-
-          // DXIL Internal operations used during DXBC conversion
-          case DXOp::TempRegLoad:
-          case DXOp::TempRegStore:
-          case DXOp::MinPrecXRegLoad:
-          case DXOp::MinPrecXRegStore:
 
           // Mesh Shaders
           case DXOp::SetMeshOutputCounts:
@@ -5049,7 +4003,24 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::CutStream:
           case DXOp::EmitThenCutStream:
 
-          // Wave Matrix Operations
+          // Wave/Subgroup Operations
+          case DXOp::WaveIsFirstLane:
+          case DXOp::WaveGetLaneIndex:
+          case DXOp::WaveGetLaneCount:
+          case DXOp::WaveAnyTrue:
+          case DXOp::WaveAllTrue:
+          case DXOp::WaveActiveAllEqual:
+          case DXOp::WaveActiveBallot:
+          case DXOp::WaveReadLaneAt:
+          case DXOp::WaveReadLaneFirst:
+          case DXOp::WaveActiveOp:
+          case DXOp::WaveActiveBit:
+          case DXOp::WavePrefixOp:
+          case DXOp::WaveAllBitCount:
+          case DXOp::WavePrefixBitCount:
+          case DXOp::WaveMatch:
+          case DXOp::WaveMultiPrefixOp:
+          case DXOp::WaveMultiPrefixBitCount:
           case DXOp::WaveMatrix_Annotate:
           case DXOp::WaveMatrix_Depth:
           case DXOp::WaveMatrix_Fill:
@@ -5140,6 +4111,13 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
           case DXOp::FinishedCrossGroupSharing:
           case DXOp::BarrierByNodeRecordHandle:
 
+          // Unknown Instructions
+          case DXOp::TempRegLoad:
+          case DXOp::TempRegStore:
+          case DXOp::MinPrecXRegLoad:
+          case DXOp::MinPrecXRegStore:
+          case DXOp::CycleCounterLegacy:
+
           case DXOp::NumOpCodes:
             RDCERR("Unhandled dx.op method `%s` %s", callFunc->name.c_str(), ToStr(dxOpCode).c_str());
             break;
@@ -5161,28 +4139,46 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
     case Operation::NoOp: RDCERR("NoOp instructions should not be executed"); return false;
     case Operation::Unreachable:
     {
-      m_Dead = true;
+      m_Killed = true;
       RDCERR("Operation::Unreachable reached, terminating debugging!");
       return true;
     }
     case Operation::Branch:
     {
+      m_PreviousBlock = m_Block;
+      m_PhiVariables.clear();
+      auto it = m_FunctionInfo->phiReferencedIdsPerBlock.find(m_PreviousBlock);
+      if(it != m_FunctionInfo->phiReferencedIdsPerBlock.end())
+      {
+        const FunctionInfo::ReferencedIds &phiIds = it->second;
+        for(Id id : phiIds)
+          m_PhiVariables[id] = m_Variables[id];
+      }
+
       // Branch <label>
       // Branch <label_true> <label_false> <BOOL_VAR>
       uint32_t targetArg = 0;
-      bool divergencePoint = false;
       if(inst.args.size() > 1)
       {
-        divergencePoint = cast<Block>(inst.args[0])->id != cast<Block>(inst.args[1])->id;
         ShaderVariable cond;
         RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, cond));
         if(!cond.value.u32v[0])
           targetArg = 1;
       }
-
-      const Block *target = cast<Block>(inst.args[targetArg]);
-      if(!JumpToBlock(target, divergencePoint))
+      const Block *block = cast<Block>(inst.args[targetArg]);
+      RDCASSERT(block);
+      uint32_t blockId = block->id;
+      if(blockId < m_FunctionInfo->function->blocks.size())
+      {
+        m_Block = blockId;
+        m_FunctionInstructionIdx = m_FunctionInfo->function->blocks[m_Block]->startInstructionIdx;
+      }
+      else
+      {
         RDCERR("Unknown branch target %u '%s'", m_Block, GetArgumentName(targetArg).c_str());
+      }
+      if(m_State && !m_Ended)
+        m_State->nextInstruction = m_FunctionInfo->globalInstructionOffset + m_FunctionInstructionIdx;
       break;
     }
     case Operation::Phi:
@@ -5221,35 +4217,19 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
       Id src = GetArgumentId(0);
       if(src == DXILDebug::INVALID_ID)
         break;
-      if(!IsVariableAssigned(src))
+      auto itVar = m_Variables.find(src);
+      if(itVar == m_Variables.end())
       {
         RDCERR("Unknown variable Id %u", src);
         break;
       }
-      const ShaderVariable &srcVal = m_Variables[src];
+      RDCASSERT(IsVariableAssigned(src));
+      const ShaderVariable &srcVal = itVar->second;
       RDCASSERT(srcVal.members.empty());
       RDCASSERTEQUAL(inst.args.size(), 2);
       uint32_t idx = ~0U;
       RDCASSERT(getival(inst.args[1], idx));
-      ShaderVariable sourceData;
-      if(srcVal.type == VarType::Struct)
-      {
-        if(idx < srcVal.members.size())
-        {
-          sourceData = srcVal.members[idx];
-          idx = 0;
-        }
-        else
-        {
-          RDCERR("Invalid struct variable Id %u idx %u Members %d", src, idx, srcVal.members.count());
-          break;
-        }
-      }
-      else
-      {
-        sourceData = srcVal;
-      }
-      RDCASSERT(idx < sourceData.columns);
+      RDCASSERT(idx < srcVal.columns);
 
       RDCASSERTEQUAL(result.type, srcVal.type);
       switch(result.type)
@@ -5276,33 +4256,102 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
       result.value = arg.value;
       break;
     }
-    case Operation::Load: OperationLoad(false, inst, opCode, dxOpCode, resultId, result); break;
+    case Operation::Load:
     case Operation::LoadAtomic:
     {
-      SCOPED_LOCK(m_Debugger.GetAtomicMemoryLock());
-      OperationLoad(true, inst, opCode, dxOpCode, resultId, result);
+      // Load(ptr)
+      Id ptrId = GetArgumentId(0);
+      if(ptrId == DXILDebug::INVALID_ID)
+        break;
+
+      auto itPtr = m_Memory.m_Pointers.find(ptrId);
+      if(itPtr == m_Memory.m_Pointers.end())
+      {
+        RDCERR("Unknown memory pointer Id %u", ptrId);
+        break;
+      }
+
+      const MemoryTracking::Pointer &ptr = itPtr->second;
+      Id baseMemoryId = ptr.baseMemoryId;
+
+      auto itAlloc = m_Memory.m_Allocations.find(baseMemoryId);
+      if(itAlloc == m_Memory.m_Allocations.end())
+      {
+        RDCERR("Unknown memory allocation Id %u", baseMemoryId);
+        break;
+      }
+      const MemoryTracking::Allocation &allocation = itAlloc->second;
+      ShaderVariable arg;
+      if(allocation.global)
+      {
+        RDCASSERT(IsVariableAssigned(baseMemoryId));
+        arg = m_Variables[baseMemoryId];
+      }
+      else
+      {
+        RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, arg));
+      }
+      result.value = arg.value;
       break;
     }
     case Operation::Store:
-    {
-      OperationStore(inst, opCode, dxOpCode);
-      RDCASSERTEQUAL(resultId, DXILDebug::INVALID_ID);
-      result.name.clear();
-      resultId = INVALID_ID;
-      break;
-    }
     case Operation::StoreAtomic:
     {
-      SCOPED_LOCK(m_Debugger.GetAtomicMemoryLock());
-      OperationStore(inst, opCode, dxOpCode);
+      // Store(ptr, value)
+      Id ptrId = GetArgumentId(0);
+      if(ptrId == DXILDebug::INVALID_ID)
+        break;
+      auto itPtr = m_Memory.m_Pointers.find(ptrId);
+      if(itPtr == m_Memory.m_Pointers.end())
+      {
+        RDCERR("Unknown memory pointer Id %u", ptrId);
+        break;
+      }
+
+      const MemoryTracking::Pointer &ptr = itPtr->second;
+      Id baseMemoryId = ptr.baseMemoryId;
+      void *memory = ptr.memory;
+      uint64_t allocSize = ptr.size;
+
+      RDCASSERT(memory);
+      RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
+
+      ShaderVariable val;
+      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, val));
       RDCASSERTEQUAL(resultId, DXILDebug::INVALID_ID);
-      result.name.clear();
-      resultId = INVALID_ID;
+
+      UpdateBackingMemoryFromVariable(memory, allocSize, val);
+
+      ShaderVariableChange change;
+      RDCASSERT(IsVariableAssigned(baseMemoryId));
+      change.before = m_Variables[baseMemoryId];
+
+      auto itAlloc = m_Memory.m_Allocations.find(baseMemoryId);
+      if(itAlloc == m_Memory.m_Allocations.end())
+      {
+        RDCERR("Unknown memory allocation Id %u", baseMemoryId);
+        break;
+      }
+      const MemoryTracking::Allocation &allocation = itAlloc->second;
+      UpdateMemoryVariableFromBackingMemory(baseMemoryId, allocation.backingMemory);
+
+      // record the change to the base memory variable
+      change.after = m_Variables[baseMemoryId];
+      if(m_State)
+        m_State->changes.push_back(change);
+
+      // Update the ptr variable value
+      // Set the result to be the ptr variable which will then be recorded as a change
+      RDCASSERT(IsVariableAssigned(ptrId));
+      result = m_Variables[ptrId];
+      result.value = val.value;
+      resultId = ptrId;
       break;
     }
     case Operation::Alloca:
     {
-      m_Memory.AllocateMemoryForType(inst.type, resultId, false, false, result);
+      result.name = DXBC::BasicDemangle(result.name);
+      m_Memory.AllocateMemoryForType(inst.type, resultId, false, result);
       break;
     }
     case Operation::GetElementPtr:
@@ -5311,12 +4360,14 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
       Id ptrId = GetArgumentId(0);
       if(ptrId == DXILDebug::INVALID_ID)
         break;
-      if(!IsVariableAssigned(ptrId))
+      auto itVar = m_Variables.find(ptrId);
+      if(itVar == m_Variables.end())
       {
         RDCERR("Unknown variable Id %u", ptrId);
         break;
       }
 
+      RDCASSERT(IsVariableAssigned(ptrId));
       if(m_Memory.m_Allocations.count(ptrId) == 0)
       {
         RDCERR("Unknown memory allocation Id %u", ptrId);
@@ -5339,7 +4390,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
 
       const ShaderVariable &basePtr = m_Variables[ptrId];
       if(indexes.size() > 1)
-        offset += indexes[1] * GetShaderVariableElementByteSize(basePtr);
+        offset += indexes[1] * GetElementByteSize(basePtr.type);
       RDCASSERT(indexes.size() <= 2);
 
       VarType baseType = ConvertDXILTypeToVarType(resultType);
@@ -5355,7 +4406,7 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
 
       // Ensure global variables use global memory
       // Ensure non-global variables do not use global memory
-      if(allocation.globalVarAlloc)
+      if(allocation.global)
         RDCASSERT(cast<GlobalVar>(inst.args[0]));
       else
         RDCASSERT(!cast<GlobalVar>(inst.args[0]));
@@ -5384,11 +4435,6 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
     case Operation::Bitcast:
     {
       RDCASSERTEQUAL(retType->bitWidth, inst.args[0]->type->bitWidth);
-      Id argId = GetArgumentId(0);
-      auto itPtr = m_Memory.m_Pointers.find(argId);
-      if(itPtr != m_Memory.m_Pointers.end())
-        m_Memory.m_Pointers[resultId] = itPtr->second;
-
       ShaderVariable a;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
       result.value = a.value;
@@ -6176,21 +5222,20 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
     }
     case Operation::Switch:
     {
+      m_PreviousBlock = m_Block;
+      m_PhiVariables.clear();
+      auto it = m_FunctionInfo->phiReferencedIdsPerBlock.find(m_PreviousBlock);
+      if(it != m_FunctionInfo->phiReferencedIdsPerBlock.end())
+      {
+        const FunctionInfo::ReferencedIds &phiIds = it->second;
+        for(Id id : phiIds)
+          m_PhiVariables[id] = m_Variables[id];
+      }
+
       // Value, Default_Label then Pairs of { targetValue, label }
       ShaderVariable val;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, val));
       uint32_t targetArg = 1;
-      bool divergencePoint = false;
-      const uint32_t defaultBlockId = cast<Block>(inst.args[1])->id;
-      for(uint32_t a = 2; a < inst.args.size(); a += 2)
-      {
-        const uint32_t targetBlockId = cast<Block>(inst.args[a + 1])->id;
-        if(targetBlockId != defaultBlockId)
-        {
-          divergencePoint = true;
-          break;
-        }
-      }
       for(uint32_t a = 2; a < inst.args.size(); a += 2)
       {
         ShaderVariable targetVal;
@@ -6210,8 +5255,17 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
       }
 
       const Block *target = cast<Block>(inst.args[targetArg]);
-      if(!JumpToBlock(target, divergencePoint))
+      RDCASSERT(target);
+      uint32_t blockId = target->id;
+      if(blockId < m_FunctionInfo->function->blocks.size())
+      {
+        m_Block = blockId;
+        m_FunctionInstructionIdx = m_FunctionInfo->function->blocks[m_Block]->startInstructionIdx;
+      }
+      else
+      {
         RDCERR("Unknown switch target %u '%s'", m_Block, GetArgumentName(targetArg).c_str());
+      }
       break;
     }
     case Operation::Fence:
@@ -6229,31 +5283,186 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
     case Operation::AtomicMin:
     case Operation::AtomicUMax:
     case Operation::AtomicUMin:
-    {
-      SCOPED_LOCK(m_Debugger.GetAtomicMemoryLock());
-      OperationAtomic(inst, opCode, dxOpCode, resultId, result);
-      break;
-    }
     case Operation::CompareExchange:
     {
-      OperationAtomic(inst, opCode, dxOpCode, resultId, result);
+      Id ptrId = GetArgumentId(0);
+      if(ptrId == DXILDebug::INVALID_ID)
+        break;
+
+      auto itPtr = m_Memory.m_Pointers.find(ptrId);
+      if(itPtr == m_Memory.m_Pointers.end())
+      {
+        RDCERR("Unknown memory pointer Id %u", ptrId);
+        break;
+      }
+
+      const MemoryTracking::Pointer &ptr = itPtr->second;
+      Id baseMemoryId = ptr.baseMemoryId;
+
+      RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
+
+      void *memory = ptr.memory;
+      RDCASSERT(memory);
+      uint64_t allocSize = ptr.size;
+
+      auto itAlloc = m_Memory.m_Allocations.find(baseMemoryId);
+      if(itAlloc == m_Memory.m_Allocations.end())
+      {
+        RDCERR("Unknown memory allocation Id %u", ptrId);
+        break;
+      }
+      const MemoryTracking::Allocation &allocation = itAlloc->second;
+      void *allocMemoryBackingPtr = allocation.backingMemory;
+
+      RDCASSERTNOTEQUAL(resultId, DXILDebug::INVALID_ID);
+      RDCASSERT(IsVariableAssigned(ptrId));
+      const ShaderVariable a = m_Variables[ptrId];
+
+      size_t newValueArgIdx = (opCode == Operation::CompareExchange) ? 2 : 1;
+      ShaderVariable b;
+      RDCASSERT(GetShaderVariable(inst.args[newValueArgIdx], opCode, dxOpCode, b));
+      const uint32_t c = 0;
+
+      ShaderVariable res = a;
+
+      if(opCode == Operation::AtomicExchange)
+      {
+        // *ptr = val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicAdd)
+      {
+        // *ptr = *ptr + val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(a, c) + comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicSub)
+      {
+        // *ptr = *ptr - val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(a, c) - comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicAnd)
+      {
+        // *ptr = *ptr & val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) & comp<U>(b, c);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicNand)
+      {
+        // *ptr = ~(*ptr & val)
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = ~(comp<U>(a, c) & comp<U>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicOr)
+      {
+        // *ptr = *ptr | val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) | comp<U>(b, c);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicXor)
+      {
+        // *ptr = *ptr ^ val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) ^ comp<U>(b, c);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicMax)
+      {
+        // *ptr = max(*ptr, val)
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(res, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicMin)
+      {
+        // *ptr = min(*ptr, val)
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(res, c) = RDCMIN(comp<S>(a, c), comp<S>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicUMax)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(res, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicUMin)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = RDCMIN(comp<U>(a, c), comp<U>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::CompareExchange)
+      {
+        ShaderVariable cmp;
+        RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, cmp));
+
+#undef _IMPL
+#define _IMPL(I, S, U) \
+  comp<I>(res, c) = comp<I>(a, c) == comp<I>(cmp, c) ? comp<I>(b, c) : comp<I>(a, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
+
+      // Save the result back to the backing memory of the pointer
+      UpdateBackingMemoryFromVariable(memory, allocSize, res);
+
+      ShaderVariableChange change;
+      if(m_State)
+        change.before = a;
+
+      UpdateMemoryVariableFromBackingMemory(baseMemoryId, allocMemoryBackingPtr);
+
+      // record the change to the base memory variable
+      if(m_State)
+      {
+        change.after = m_Variables[baseMemoryId];
+        m_State->changes.push_back(change);
+      }
+
+      // record the change to the ptr variable value
+      RDCASSERT(IsVariableAssigned(ptrId));
+      if(m_State)
+        change.before = m_Variables[ptrId];
+      // Update the ptr variable value
+      m_Variables[ptrId].value = res.value;
+
+      if(m_State)
+      {
+        change.after = m_Variables[ptrId];
+        m_State->changes.push_back(change);
+      }
+
+      RDCASSERT(IsVariableAssigned(ptrId));
+      result.value = res.value;
       break;
     }
     case Operation::AddrSpaceCast:
     case Operation::InsertValue: RDCERR("Unhandled LLVM opcode %s", ToStr(opCode).c_str()); break;
   };
-
-  // Waiting for result i.e. from the GPU or replay thread
-  if(IsPendingResultPending())
-  {
-    m_FunctionInstructionIdx--;
-    // This instruction is being deferred clear the pending debug state
-    if(m_HasDebugState)
-      ClearPendingDebugState();
-    m_HasDebugState = false;
-    return true;
-  }
-  SetPendingResultUnknown();
 
   // Update the result variable
   if(resultId == DXILDebug::INVALID_ID)
@@ -6263,14 +5472,14 @@ bool ThreadState::ExecuteInstruction(const rdcarray<ThreadState> &workgroup)
 
   if(!result.name.empty() && resultId != DXILDebug::INVALID_ID)
   {
-    SetResult(resultId, result, opCode, dxOpCode, eventFlags);
+    if(m_State)
+      SetResult(resultId, result, opCode, dxOpCode, eventFlags);
 
     // Fake Output results won't be in the referencedIds
     RDCASSERT(resultId == m_Output.id || m_FunctionInfo->referencedIds.count(resultId) == 1);
 
     RDCASSERT(resultId < m_Live.size());
     m_Live[resultId] = true;
-    RDCASSERT(resultId < m_Variables.size());
     m_Variables[resultId] = result;
     RDCASSERT(resultId < m_Assigned.size());
     m_Assigned[resultId] = true;
@@ -6298,65 +5507,53 @@ void ThreadState::StepOverNopInstructions()
   } while(true);
 }
 
-void ThreadState::RetireLiveIDs()
+void ThreadState::StepNext(ShaderDebugState *state, DebugAPIWrapper *apiWrapper,
+                           const rdcarray<ThreadState> &workgroups)
 {
-  m_PendingDebugState.flags = ShaderEvents::NoEvent;
-  m_PendingDebugState.changes.clear();
-
-  // Remove variables which have gone out of scope
-  ExecPointReference current(m_Block, m_FunctionInstructionIdx);
-  for(uint32_t id = 0; id < m_Live.size(); ++id)
-  {
-    if(!m_Live[id])
-      continue;
-    // The fake output variable is always in scope
-    if(id == m_Output.id)
-      continue;
-    // Globals are always in scope
-    if(m_IsGlobal[id])
-      continue;
-
-    RDCASSERT(id < m_FunctionInfo->maxExecPointPerId.size());
-    const ExecPointReference maxPoint = m_FunctionInfo->maxExecPointPerId[id];
-    RDCASSERT(maxPoint.IsValid());
-    // Use control flow to determine if the current execution point is after the maximum point
-    if(current.IsAfter(maxPoint, m_FunctionInfo->controlFlow))
-    {
-      m_Live[id] = false;
-
-      ShaderVariableChange change;
-      change.before = m_Variables[id];
-      m_PendingDebugState.changes.push_back(change);
-    }
-  }
-}
-
-void ThreadState::StepNext(bool hasDebugState, const rdcarray<ThreadState> &workgroup)
-{
-  m_HasDebugState = hasDebugState;
-  m_Diverged = false;
-  m_EnteredPoints.clear();
-  m_ConvergencePoint = INVALID_EXECUTION_POINT;
-  m_PartialConvergencePoints.clear();
+  m_State = state;
 
   RDCASSERTEQUAL(m_ActiveGlobalInstructionIdx,
                  m_FunctionInfo->globalInstructionOffset + m_FunctionInstructionIdx);
-  if(m_HasDebugState)
+  if(m_State)
   {
-    m_PendingDebugState.flags = ShaderEvents::NoEvent;
-    m_PendingDebugState.changes.clear();
-  }
-  ExecuteInstruction(workgroup);
-  StepOverNopInstructions();
+    m_State->flags = ShaderEvents::NoEvent;
+    m_State->changes.clear();
 
-  m_HasDebugState = false;
+    // Remove variables which have gone out of scope
+    ExecutionPoint current(m_Block, m_FunctionInstructionIdx);
+    for(uint32_t id = 0; id < m_Live.size(); ++id)
+    {
+      if(!m_Live[id])
+        continue;
+      // The fake output variable is always in scope
+      if(id == m_Output.id)
+        continue;
+      // Global are always in scope
+      if(m_IsGlobal[id])
+        continue;
+
+      auto itRange = m_FunctionInfo->maxExecPointPerId.find(id);
+      RDCASSERT(itRange != m_FunctionInfo->maxExecPointPerId.end());
+      const ExecutionPoint maxPoint = itRange->second;
+      // Use control flow to determine if the current execution point is after the maximum point
+      if(current.IsAfter(maxPoint, m_FunctionInfo->controlFlow))
+      {
+        m_Live[id] = false;
+
+        ShaderVariableChange change;
+        change.before = m_Variables[id];
+        m_State->changes.push_back(change);
+      }
+    }
+  }
+  ExecuteInstruction(apiWrapper, workgroups);
+
+  m_State = NULL;
 }
 
-// When getting live variables : this must be a thread safe operation using only thread safe containers
 bool ThreadState::GetShaderVariableHelper(const DXIL::Value *dxilValue, DXIL::Operation op,
                                           DXIL::DXOp dxOpCode, ShaderVariable &var,
-                                          bool flushDenormInput, bool isLive,
-                                          bool ignoreLiveCheck) const
+                                          bool flushDenormInput, bool isLive) const
 {
   var.name.clear();
   var.members.clear();
@@ -6452,16 +5649,18 @@ bool ThreadState::GetShaderVariableHelper(const DXIL::Value *dxilValue, DXIL::Op
   else if(const GlobalVar *gv = cast<GlobalVar>(dxilValue))
   {
     if(gv->initialiser)
+    {
       var.value.u64v[0] = gv->initialiser->getU64();
-    else
-      memset(&var.value, 0, sizeof(var.value));
-    return true;
+      return true;
+    }
+    RDCERR("Unhandled DXIL GlobalVar no initialiser");
+    return false;
   }
 
   if(const Instruction *inst = cast<Instruction>(dxilValue))
   {
     if(isLive)
-      return GetLiveVariable(inst->slot, op, dxOpCode, ignoreLiveCheck, var);
+      return GetLiveVariable(inst->slot, op, dxOpCode, var);
     else
       return GetPhiVariable(inst->slot, op, dxOpCode, var);
   }
@@ -6483,35 +5682,22 @@ bool ThreadState::IsVariableAssigned(const Id id) const
   }
 }
 
-ShaderVariable ThreadState::GetBuiltin(ShaderBuiltin builtin) const
-{
-  auto local = m_Builtins.find(builtin);
-  if(local != m_Builtins.end())
-    return local->second;
-
-  auto global = m_GlobalState.builtins.find(builtin);
-  if(global != m_GlobalState.builtins.end())
-    return global->second;
-
-  RDCERR("Couldn't find data for builtin %s", ToStr(builtin).c_str());
-  return {};
-}
-
-// This must be a thread safe operation using only thread safe containers
-bool ThreadState::GetLiveVariable(const Id &id, Operation op, DXOp dxOpCode, bool ignoreLiveCheck,
-                                  ShaderVariable &var) const
+bool ThreadState::GetLiveVariable(const Id &id, Operation op, DXOp dxOpCode, ShaderVariable &var) const
 {
   if(id < m_Live.size())
   {
-    RDCASSERT(ignoreLiveCheck || m_Live[id]);
+    RDCASSERT(m_Live[id]);
   }
   else
   {
     RDCERR("Unknown Live Variable Id %d", id);
   }
-  if(IsVariableAssigned(id))
+  RDCASSERT(IsVariableAssigned(id));
+
+  auto it = m_Variables.find(id);
+  if(it != m_Variables.end())
   {
-    var = m_Variables[id];
+    var = it->second;
     return GetVariableHelper(op, dxOpCode, var);
   }
   RDCERR("Unknown Variable %d", id);
@@ -6547,37 +5733,65 @@ void ThreadState::SetResult(const Id &id, ShaderVariable &result, Operation op, 
                             ShaderEvents flags)
 {
   RDCASSERT((result.rows > 0 && result.columns > 0) || !result.members.empty());
-  RDCASSERT(result.columns <= 16);
-  RDCASSERT(result.type != VarType::Unknown || !result.members.empty());
+  RDCASSERT(result.columns <= 4);
+  RDCASSERTNOTEQUAL(result.type, VarType::Unknown);
 
   // Can only flush denorms for float types
   bool flushDenorm = OperationFlushing(op, dxOpCode) && (result.type == VarType::Float);
 
-  flags |= AssignValue(result, flushDenorm);
+  flags |= AssignValue(result, result, flushDenorm);
 
-  if(m_HasDebugState)
+  if(m_State)
   {
     ShaderVariableChange change;
-    m_PendingDebugState.flags |= flags;
+    m_State->flags |= flags;
     change.before = m_Variables[id];
     change.after = result;
-    m_PendingDebugState.changes.push_back(change);
+    m_State->changes.push_back(change);
   }
 }
 
-void ThreadState::MarkResourceAccess(const ShaderVariable &var)
+void ThreadState::MarkResourceAccess(const rdcstr &name, const ResourceReferenceInfo &resRefInfo,
+                                     bool directAccess, const ShaderDirectAccess &access,
+                                     const ShaderBindIndex &bindIndex)
 {
-  if(!m_HasDebugState)
+  if(m_State == NULL)
     return;
 
-  if(var.type != VarType::ReadOnlyResource && var.type != VarType::ReadWriteResource)
+  if(resRefInfo.category != DescriptorCategory::ReadOnlyResource &&
+     resRefInfo.category != DescriptorCategory::ReadWriteResource)
     return;
 
-  ShaderVariableChange change;
-  change.before = var;
-  change.after = var;
+  bool isSRV = (resRefInfo.category == DescriptorCategory::ReadOnlyResource);
 
-  m_PendingDebugState.changes.push_back(change);
+  m_State->changes.push_back(ShaderVariableChange());
+
+  ShaderVariableChange &change = m_State->changes.back();
+  change.after.rows = change.after.columns = 1;
+  change.after.type = resRefInfo.type;
+  if(!directAccess)
+    change.after.SetBindIndex(bindIndex);
+  else
+    change.after.SetDirectAccess(access);
+  // The resource name will already have the array index appended to it (perhaps unresolved)
+  change.after.name = name;
+
+  // Check whether this resource was visited before
+  bool found = false;
+  rdcarray<BindingSlot> &accessed = isSRV ? m_accessedSRVs : m_accessedUAVs;
+  for(size_t i = 0; i < accessed.size(); ++i)
+  {
+    if(accessed[i] == resRefInfo.binding)
+    {
+      found = true;
+      break;
+    }
+  }
+
+  if(found)
+    change.before = change.after;
+  else
+    accessed.push_back(resRefInfo.binding);
 }
 
 void ThreadState::UpdateBackingMemoryFromVariable(void *ptr, uint64_t &allocSize,
@@ -6610,75 +5824,38 @@ void ThreadState::UpdateBackingMemoryFromVariable(void *ptr, uint64_t &allocSize
 void ThreadState::UpdateMemoryVariableFromBackingMemory(Id memoryId, const void *ptr)
 {
   ShaderVariable &baseMemory = m_Variables[memoryId];
-  UpdateShaderVariableFromBackingMemory(baseMemory, ptr);
-}
-
-void ThreadState::UpdateGlobalBackingMemory(Id ptrId, const MemoryTracking::Pointer &ptr,
-                                            const MemoryTracking::Allocation &allocation,
-                                            const ShaderVariable &val)
-{
-  Id baseMemoryId = ptr.baseMemoryId;
-  if(m_GlobalState.groupSharedMemoryIds.contains(baseMemoryId))
+  // Memory copy from backing memory to base memory variable
+  size_t elementSize = GetElementByteSize(baseMemory.type);
+  const uint8_t *src = (const uint8_t *)ptr;
+  if(baseMemory.members.size() == 0)
   {
-    void *const memory = ptr.memory;
-
-    // Compute the local pointer offset and apply it to the global base memory
-    ptrdiff_t offset = (uintptr_t)memory - (uintptr_t)allocation.backingMemory;
-    if(offset < 0)
-    {
-      RDCERR("Invalid global memory allocation offset ptrId %u Id %u", ptrId, baseMemoryId);
-      return;
-    }
-    auto globalMem = m_GlobalState.memory.m_Allocations.find(baseMemoryId);
-    if(globalMem == m_GlobalState.memory.m_Allocations.end())
-    {
-      RDCERR("Unknown global memory allocation Id %u", baseMemoryId);
-      return;
-      ;
-    }
-    void *globalMemory = (void *)((uintptr_t)globalMem->second.backingMemory + offset);
-    uint64_t allocSize = ptr.size;
-    UpdateBackingMemoryFromVariable(globalMemory, allocSize, val);
-  }
-}
-
-bool ThreadState::LoadGSMFromGlobalBackingMemory(const MemoryTracking::Pointer &ptr,
-                                                 const MemoryTracking::Allocation &allocation,
-                                                 ShaderVariable &var)
-{
-  const Id baseMemoryId = ptr.baseMemoryId;
-  auto globalMem = m_GlobalState.memory.m_Allocations.find(baseMemoryId);
-  if(globalMem != m_GlobalState.memory.m_Allocations.end())
-  {
-    // Compute the local pointer offset and apply it to the global base memory
-    ptrdiff_t offset = (uintptr_t)ptr.memory - (uintptr_t)allocation.backingMemory;
-    if(offset >= 0)
-    {
-      const void *globalBackingMemory = globalMem->second.backingMemory;
-      void *globalMemory = (void *)((uintptr_t)globalBackingMemory + offset);
-      RDCASSERT(ptr.size <= sizeof(ShaderValue));
-      if(ptr.size <= sizeof(ShaderValue))
-        memcpy(&var.value, globalMemory, (size_t)ptr.size);
-    }
+    RDCASSERTEQUAL(baseMemory.rows, 1);
+    RDCASSERTEQUAL(baseMemory.columns, 1);
+    if(elementSize <= sizeof(ShaderValue))
+      memcpy(&baseMemory.value, src, elementSize);
     else
-    {
-      RDCERR("Invalid memory allocation offset baseMemoryId %u", baseMemoryId);
-      return false;
-    }
+      RDCERR("Updating MemoryVariable elementSize %u too large max %u", elementSize,
+             sizeof(ShaderValue));
   }
   else
   {
-    RDCERR("Invalid GSM baseMemoryId %u", baseMemoryId);
-    return false;
+    for(uint32_t i = 0; i < baseMemory.members.size(); ++i)
+    {
+      if(elementSize <= sizeof(ShaderValue))
+        memcpy(&baseMemory.members[i].value, src, elementSize);
+      else
+        RDCERR("Updating MemoryVariable member %u elementSize %u too large max %u", i, elementSize,
+               sizeof(ShaderValue));
+      src += elementSize;
+    }
   }
-  return true;
 }
 
-bool ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroup, Operation opCode,
+void ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroups, Operation opCode,
                                        DXOp dxOpCode, const ResourceReferenceInfo &resRefInfo,
-                                       const DXIL::Instruction &inst, ShaderVariable &result)
+                                       DebugAPIWrapper *apiWrapper, const DXIL::Instruction &inst,
+                                       ShaderVariable &result)
 {
-  DXIL_DEBUG_RDCASSERT(!IsPendingResultPending());
   // TextureLoad(srv,mipLevelOrSampleCount,coord0,coord1,coord2,offset0,offset1,offset2)
   // Sample(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,offset2,clamp)
   // SampleBias(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,offset2,bias,clamp)
@@ -6693,6 +5870,24 @@ bool ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroup, O
 
   // TextureGather(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,channel)
   // TextureGatherCmp(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,channel,compareValue)
+
+  // DXIL reports the vector result as a struct of N members of Element type, plus an int.
+  const Type *retType = inst.type;
+  if(dxOpCode != DXOp::CalculateLOD)
+  {
+    RDCASSERTEQUAL(retType->type, Type::TypeKind::Struct);
+    const Type *baseType = retType->members[0];
+    RDCASSERTEQUAL(baseType->type, Type::TypeKind::Scalar);
+    result.type = ConvertDXILTypeToVarType(baseType);
+    result.columns = (uint8_t)(retType->members.size() - 1);
+  }
+  else
+  {
+    RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
+    RDCASSERTEQUAL(retType->scalarType, Type::Float);
+    RDCASSERTEQUAL(result.rows, 1);
+    RDCASSERTEQUAL(result.columns, 1);
+  }
 
   // CalculateSampleGather is only valid for SRV resources
   ResourceClass resClass = resRefInfo.resClass;
@@ -6765,11 +5960,9 @@ bool ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroup, O
     // Sampler is in arg 2
     Id samplerId = GetArgumentId(2);
     bool annotatedHandle;
-    ShaderVariable handleVar;
-    ResourceReferenceInfo samplerRef = GetResource(samplerId, annotatedHandle, handleVar);
+    ResourceReferenceInfo samplerRef = GetResource(samplerId, annotatedHandle);
     if(!samplerRef.Valid())
-      return false;
-    MarkResourceAccess(handleVar);
+      return;
 
     RDCASSERTEQUAL(samplerRef.resClass, ResourceClass::Sampler);
     // samplerRef->resourceBase must be a Sampler
@@ -6886,29 +6079,25 @@ bool ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroup, O
 
   ShaderVariable ddx;
   ShaderVariable ddy;
-  // Sample, SampleBias, SampleCmp, CalculateLOD need DDX, DDY
-  if((dxOpCode == DXOp::Sample) || (dxOpCode == DXOp::SampleBias) ||
-     (dxOpCode == DXOp::SampleCmp) || (dxOpCode == DXOp::CalculateLOD))
+  // Sample, SampleBias, CalculateLOD need DDX, DDY
+  if((dxOpCode == DXOp::Sample) || (dxOpCode == DXOp::SampleBias) || (dxOpCode == DXOp::CalculateLOD))
   {
-    if(!(m_Features & ShaderFeatures::Derivatives) || (workgroup.size() < 4) ||
-       m_QuadNeighbours.contains(~0U))
+    if(m_ShaderType != DXBC::ShaderType::Pixel || workgroups.size() != 4)
     {
-      RDCERR(
-          "Undefined results using derivative instruction in shader without support for "
-          "derivatives");
+      RDCERR("Undefined results using derivative instruction outside of a pixel shader.");
     }
     else
     {
-      RDCASSERT(!QuadIsDiverged(workgroup, m_QuadNeighbours));
+      RDCASSERT(!ThreadsAreDiverged(workgroups));
       // texture samples use coarse derivatives
       ShaderValue delta;
       for(uint32_t i = 0; i < 4; i++)
       {
         if(uvDDXY[i])
         {
-          delta = DDX(false, opCode, dxOpCode, workgroup, inst.args[3 + i]);
+          delta = DDX(false, opCode, dxOpCode, workgroups, inst.args[3 + i]);
           ddx.value.f32v[i] = delta.f32v[0];
-          delta = DDY(false, opCode, dxOpCode, workgroup, inst.args[3 + i]);
+          delta = DDY(false, opCode, dxOpCode, workgroups, inst.args[3 + i]);
           ddy.value.f32v[i] = delta.f32v[0];
         }
       }
@@ -6933,7 +6122,10 @@ bool ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroup, O
     }
   }
 
+  uint8_t swizzle[4] = {0, 1, 2, 3};
+
   uint32_t instructionIdx = m_FunctionInstructionIdx - 1;
+  const char *opString = ToStr(dxOpCode).c_str();
 
   // TODO: TextureGatherRaw // SM 6.7
   // Return types for TextureGatherRaw
@@ -6941,32 +6133,10 @@ bool ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroup, O
   // DXGI_FORMAT_R32_UINT : u32
   // DXGI_FORMAT_R32G32_UINT : u32x2
 
-  QueueSampleGather(dxOpCode, resourceData, samplerData, uv, ddx, ddy, texelOffsets, msIndex,
-                    lodValue, compareValue, gatherChannel, instructionIdx, result);
-  return true;
-}
-
-void ThreadState::ConvertSampleGatherReturn(DXIL::DXOp dxOpCode, const DXIL::Instruction &inst,
-                                            const ShaderVariable &data, ShaderVariable &result) const
-{
-  // DXIL reports the vector result as a struct of N
-  // members of Element type, plus an int.
-  const Type *retType = inst.type;
-  if(dxOpCode != DXOp::CalculateLOD)
-  {
-    RDCASSERTEQUAL(retType->type, Type::TypeKind::Struct);
-    const Type *baseType = retType->members[0];
-    RDCASSERTEQUAL(baseType->type, Type::TypeKind::Scalar);
-    result.type = ConvertDXILTypeToVarType(baseType);
-    result.columns = (uint8_t)(retType->members.size() - 1);
-  }
-  else
-  {
-    RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
-    RDCASSERTEQUAL(retType->scalarType, Type::Float);
-    RDCASSERTEQUAL(result.rows, 1);
-    RDCASSERTEQUAL(result.columns, 1);
-  }
+  ShaderVariable data;
+  apiWrapper->CalculateSampleGather(dxOpCode, resourceData, samplerData, uv, ddx, ddy, texelOffsets,
+                                    msIndex, lodValue, compareValue, swizzle, gatherChannel,
+                                    m_ShaderType, instructionIdx, opString, data);
 
   // Do conversion to the return type
   if((result.type == VarType::Float) || (result.type == VarType::SInt) ||
@@ -6994,14 +6164,21 @@ void ThreadState::ConvertSampleGatherReturn(DXIL::DXOp dxOpCode, const DXIL::Ins
     RDCERR("Unhandled return type %s", ToStr(result.type).c_str());
     return;
   }
+
+  if(dxOpCode == DXOp::CalculateLOD)
+  {
+    // clamped is in arg 6
+    ShaderVariable arg;
+    RDCASSERT(GetShaderVariable(inst.args[6], opCode, dxOpCode, arg, false));
+    // CalculateSampleGather returns {CalculateLevelOfDetail(), CalculateLevelOfDetailUnclamped()}
+    if(arg.value.u32v[0] == 0)
+      result.value.u32v[0] = data.value.u32v[1];
+  }
 }
 
 rdcstr ThreadState::GetArgumentName(uint32_t i) const
 {
-  rdcstr name;
-  DXILDebug::Id id = GetArgumentId(i);
-  m_Program.GetSSAName(id, name);
-  return name;
+  return m_Program.GetArgumentName(m_CurrentInstruction->args[i]);
 }
 
 DXILDebug::Id ThreadState::GetArgumentId(uint32_t i) const
@@ -7010,27 +6187,28 @@ DXILDebug::Id ThreadState::GetArgumentId(uint32_t i) const
   return GetSSAId(arg);
 }
 
-ResourceReferenceInfo ThreadState::GetResource(Id handleId, bool &annotatedHandle,
-                                               ShaderVariable &handleVar) const
+ResourceReferenceInfo ThreadState::GetResource(Id handleId, bool &annotatedHandle)
 {
   ResourceReferenceInfo resRefInfo;
-  if(IsVariableAssigned(handleId))
+  auto it = m_Variables.find(handleId);
+  if(it != m_Variables.end())
   {
     RDCASSERT(m_Live[handleId]);
     RDCASSERT(IsVariableAssigned(handleId));
-    handleVar = m_Variables[handleId];
-    bool directAccess = handleVar.IsDirectAccess();
+    const ShaderVariable &var = it->second;
+    bool directAccess = var.IsDirectAccess();
     ShaderBindIndex bindIndex;
     ShaderDirectAccess access;
-    annotatedHandle = IsAnnotatedHandle(handleVar);
+    annotatedHandle = IsAnnotatedHandle(var);
     RDCASSERT(!annotatedHandle || (m_AnnotatedProperties.count(handleId) == 1));
-    rdcstr alias = handleVar.name;
+    rdcstr alias = var.name;
     if(!directAccess)
     {
-      bindIndex = handleVar.GetBindIndex();
+      bindIndex = var.GetBindIndex();
       const ResourceReference *resRef = m_Program.GetResourceReference(handleId);
       if(resRef)
       {
+        alias = m_Program.GetHandleAlias(resRef->handleID);
         resRefInfo.Create(resRef, bindIndex.arrayElement);
       }
       else
@@ -7041,7 +6219,7 @@ ResourceReferenceInfo ThreadState::GetResource(Id handleId, bool &annotatedHandl
     }
     else
     {
-      access = handleVar.GetDirectAccess();
+      access = var.GetDirectAccess();
       // Direct heap access bindings must be annotated
       RDCASSERT(annotatedHandle);
       auto directHeapAccessBinding = m_DirectHeapAccessBindings.find(handleId);
@@ -7052,6 +6230,7 @@ ResourceReferenceInfo ThreadState::GetResource(Id handleId, bool &annotatedHandl
       }
       resRefInfo = directHeapAccessBinding->second;
     }
+    MarkResourceAccess(alias, resRefInfo, directAccess, access, bindIndex);
     return resRefInfo;
   }
 
@@ -7075,25 +6254,12 @@ void ThreadState::Sub(const ShaderVariable &a, const ShaderVariable &b, ShaderVa
 }
 
 ShaderValue ThreadState::DDX(bool fine, Operation opCode, DXOp dxOpCode,
-                             const rdcarray<ThreadState> &workgroup, const DXIL::Value *dxilValue) const
+                             const rdcarray<ThreadState> &quad, const DXIL::Value *dxilValue) const
 {
-  ShaderValue ret = {};
-
-  if(m_QuadNeighbours[0] == ~0U || m_QuadNeighbours[1] == ~0U || m_QuadNeighbours[2] == ~0U ||
-     m_QuadNeighbours[3] == ~0U)
-  {
-    RDCERR("Derivative calculation within non-quad");
-    return ret;
-  }
-
-  RDCASSERT(m_QuadNeighbours[0] < workgroup.size(), m_QuadNeighbours[0], workgroup.size());
-  RDCASSERT(m_QuadNeighbours[1] < workgroup.size(), m_QuadNeighbours[1], workgroup.size());
-  RDCASSERT(m_QuadNeighbours[2] < workgroup.size(), m_QuadNeighbours[2], workgroup.size());
-  RDCASSERT(m_QuadNeighbours[3] < workgroup.size(), m_QuadNeighbours[3], workgroup.size());
-  RDCASSERT(!QuadIsDiverged(workgroup, m_QuadNeighbours));
+  RDCASSERT(!ThreadsAreDiverged(quad));
 
   uint32_t index = ~0U;
-  int quadIndex = m_QuadLaneIndex;
+  int quadIndex = m_WorkgroupIndex;
 
   if(!fine)
   {
@@ -7110,36 +6276,21 @@ ShaderValue ThreadState::DDX(bool fine, Operation opCode, DXOp dxOpCode,
     index = quadIndex - 1;
   }
 
+  ShaderValue ret;
   ShaderVariable a;
   ShaderVariable b;
-  RDCASSERT(GetShaderVariableFromLane(workgroup[m_QuadNeighbours[index + 1]], dxilValue, opCode,
-                                      dxOpCode, a));
-  RDCASSERT(GetShaderVariableFromLane(workgroup[m_QuadNeighbours[index + 0]], dxilValue, opCode,
-                                      dxOpCode, b));
+  RDCASSERT(quad[index + 1].GetShaderVariable(dxilValue, opCode, dxOpCode, a));
+  RDCASSERT(quad[index].GetShaderVariable(dxilValue, opCode, dxOpCode, b));
   Sub(a, b, ret);
   return ret;
 }
 
 ShaderValue ThreadState::DDY(bool fine, Operation opCode, DXOp dxOpCode,
-                             const rdcarray<ThreadState> &workgroup, const DXIL::Value *dxilValue) const
+                             const rdcarray<ThreadState> &quad, const DXIL::Value *dxilValue) const
 {
-  ShaderValue ret = {};
-
-  if(m_QuadNeighbours[0] == ~0U || m_QuadNeighbours[1] == ~0U || m_QuadNeighbours[2] == ~0U ||
-     m_QuadNeighbours[3] == ~0U)
-  {
-    RDCERR("Derivative calculation within non-quad");
-    return ret;
-  }
-
-  RDCASSERT(m_QuadNeighbours[0] < workgroup.size(), m_QuadNeighbours[0], workgroup.size());
-  RDCASSERT(m_QuadNeighbours[1] < workgroup.size(), m_QuadNeighbours[1], workgroup.size());
-  RDCASSERT(m_QuadNeighbours[2] < workgroup.size(), m_QuadNeighbours[2], workgroup.size());
-  RDCASSERT(m_QuadNeighbours[3] < workgroup.size(), m_QuadNeighbours[3], workgroup.size());
-  RDCASSERT(!QuadIsDiverged(workgroup, m_QuadNeighbours));
-
+  RDCASSERT(!ThreadsAreDiverged(quad));
   uint32_t index = ~0U;
-  int quadIndex = m_QuadLaneIndex;
+  int quadIndex = m_WorkgroupIndex;
 
   if(!fine)
   {
@@ -7156,678 +6307,47 @@ ShaderValue ThreadState::DDY(bool fine, Operation opCode, DXOp dxOpCode,
     index = quadIndex - 2;
   }
 
+  ShaderValue ret;
+  memset(&ret, 0, sizeof(ret));
   ShaderVariable a;
   ShaderVariable b;
-  RDCASSERT(GetShaderVariableFromLane(workgroup[m_QuadNeighbours[index + 2]], dxilValue, opCode,
-                                      dxOpCode, a));
-  RDCASSERT(GetShaderVariableFromLane(workgroup[m_QuadNeighbours[index + 0]], dxilValue, opCode,
-                                      dxOpCode, b));
+  RDCASSERT(quad[index + 2].GetShaderVariable(dxilValue, opCode, dxOpCode, a));
+  RDCASSERT(quad[index].GetShaderVariable(dxilValue, opCode, dxOpCode, b));
   Sub(a, b, ret);
   return ret;
-}
-
-void ThreadState::ExecuteMemoryBarrier()
-{
-  // ignore if not the active thread
-  if(!m_HasDebugState)
-    return;
-
-  // copy the global GSM memory into the local GSM cache
-  for(Id id : m_GlobalState.groupSharedMemoryIds)
-  {
-    auto globalMem = m_GlobalState.memory.m_Allocations.find(id);
-    if(globalMem == m_GlobalState.memory.m_Allocations.end())
-    {
-      RDCERR("Unknown global memory allocation for GSM Id %u", id);
-      continue;
-    }
-    RDCASSERT(globalMem->second.globalVarAlloc);
-    RDCASSERT(!globalMem->second.localMemory);
-
-    auto localMem = m_Memory.m_Allocations.find(id);
-    if(localMem == m_Memory.m_Allocations.end())
-    {
-      RDCERR("Unknown local memory allocation for GSM Id %u", id);
-      continue;
-    }
-    RDCASSERT(localMem->second.globalVarAlloc);
-    RDCASSERT(localMem->second.localMemory);
-
-    if(!IsVariableAssigned(id))
-    {
-      RDCERR("Unknown local memory allocation for GSM Id %u", id);
-      continue;
-    }
-    ShaderVariableChange change;
-    const ShaderVariable &local = m_Variables[id];
-    change.before = local;
-    const void *globalBackingMemory = globalMem->second.backingMemory;
-    UpdateMemoryVariableFromBackingMemory(id, globalBackingMemory);
-    change.after = local;
-    if(!(change.after == change.before))
-      m_PendingDebugState.changes.push_back(change);
-
-    // Update local backing memory from the local variable
-    RDCASSERTEQUAL(globalMem->second.size, localMem->second.size);
-    void *localBackingMemory = localMem->second.backingMemory;
-    const size_t allocSize = (size_t)globalMem->second.size;
-    memcpy(localBackingMemory, globalBackingMemory, allocSize);
-  }
 }
 
 GlobalState::~GlobalState()
 {
   for(auto it : memory.m_Allocations)
   {
-    RDCASSERT(!it.second.localMemory);
+    RDCASSERT(it.second.global);
     free(it.second.backingMemory);
   }
 }
 
-bool ThreadState::WorkgroupIsDiverged(const rdcarray<ThreadState> &workgroup)
+bool ThreadState::ThreadsAreDiverged(const rdcarray<ThreadState> &workgroups)
 {
   uint32_t block0 = ~0U;
   uint32_t instr0 = ~0U;
-  for(size_t i = 0; i < workgroup.size(); i++)
+  for(size_t i = 0; i < workgroups.size(); i++)
   {
-    if(workgroup[i].Finished())
+    if(workgroups[i].Finished())
       continue;
     if(block0 == ~0U)
     {
-      block0 = workgroup[i].m_CurrentBlock;
-      instr0 = workgroup[i].m_CurrentGlobalInstructionIdx;
+      block0 = workgroups[i].m_Block;
+      instr0 = workgroups[i].m_ActiveGlobalInstructionIdx;
       continue;
     }
     // not in the same basic block
-    if(workgroup[i].m_CurrentBlock != block0)
+    if(workgroups[i].m_Block != block0)
       return true;
     // not executing the same instruction
-    if(workgroup[i].m_CurrentGlobalInstructionIdx != instr0)
+    if(workgroups[i].m_ActiveGlobalInstructionIdx != instr0)
       return true;
   }
   return false;
-}
-
-bool ThreadState::SubgroupIsDiverged(const rdcarray<ThreadState> &workgroup,
-                                     const rdcarray<uint32_t> &activeLanes)
-{
-  uint32_t block0 = ~0U;
-  uint32_t instr0 = ~0U;
-  for(uint32_t lane : activeLanes)
-  {
-    if(workgroup[lane].Finished())
-      continue;
-    if(block0 == ~0U)
-    {
-      block0 = workgroup[lane].m_CurrentBlock;
-      instr0 = workgroup[lane].m_CurrentGlobalInstructionIdx;
-      continue;
-    }
-    // not in the same basic block
-    if(workgroup[lane].m_CurrentBlock != block0)
-      return true;
-    // not executing the same instruction
-    if(workgroup[lane].m_CurrentGlobalInstructionIdx != instr0)
-      return true;
-  }
-  return false;
-}
-
-bool ThreadState::QuadIsDiverged(const rdcarray<ThreadState> &workgroup,
-                                 const rdcfixedarray<uint32_t, 4> &quadNeighbours)
-{
-  uint32_t block0 = ~0U;
-  uint32_t instr0 = ~0U;
-  for(size_t q = 0; q < quadNeighbours.size(); q++)
-  {
-    uint32_t i = quadNeighbours[q];
-    if(i == ~0U)
-    {
-      RDCERR("Checking quad divergence on non-quad");
-      continue;
-    }
-
-    if(workgroup[i].Finished())
-      continue;
-    if(block0 == ~0U)
-    {
-      block0 = workgroup[i].m_CurrentBlock;
-      instr0 = workgroup[i].m_CurrentGlobalInstructionIdx;
-      continue;
-    }
-    // not in the same basic block
-    if(workgroup[i].m_CurrentBlock != block0)
-      return true;
-    // not executing the same instruction
-    if(workgroup[i].m_CurrentGlobalInstructionIdx != instr0)
-      return true;
-  }
-  return false;
-}
-
-// The conditions where it is not safe to run another step are based on:
-// the current simulation state and the next instruction to simulate
-bool ThreadState::CanRunAnotherStep() const
-{
-  // Thread has finished
-  if(Finished())
-    return false;
-
-  // Current Simulated State that prevents running another step:
-  // Any control flow state changes i.e. branch, convergence point, partial convergence
-  if(m_Diverged)
-    return false;
-  if(!m_EnteredPoints.empty())
-    return false;
-  if(m_ConvergencePoint != INVALID_EXECUTION_POINT)
-    return false;
-  if(!m_PartialConvergencePoints.empty())
-    return false;
-
-  // Any pending result i.e. pending GPU math operation, need to run on the device thread
-  if(IsPendingResultPending())
-    return false;
-
-  // current instructions that require full lockstep
-  const Instruction *inst = m_CurrentInstruction;
-  Operation opCode = inst->op;
-  DXOp dxOpCode = DXOp::NumOpCodes;
-  switch(opCode)
-  {
-    case Operation::Call:
-    {
-      const Function *callFunc = inst->getFuncCall();
-      if(callFunc->family == FunctionFamily::DXOp)
-      {
-        RDCASSERT(getival<DXOp>(inst->args[0], dxOpCode));
-        RDCASSERT(dxOpCode < DXOp::NumOpCodes, dxOpCode, DXOp::NumOpCodes);
-        switch(dxOpCode)
-        {
-          // no thread can continue until all threads execute the barrier
-          case DXOp::Barrier: return false;
-          default: break;
-        }
-      }
-    }
-    default: break;
-  }
-
-  // Next instructions that prevent running another step:
-  // any instruction that requires threads in the tangle to be in lockstep
-  inst = m_FunctionInfo->function->instructions[m_FunctionInstructionIdx];
-  opCode = inst->op;
-  dxOpCode = DXOp::NumOpCodes;
-  switch(opCode)
-  {
-    case Operation::Call:
-    {
-      const Function *callFunc = inst->getFuncCall();
-      if(callFunc->family == FunctionFamily::DXOp)
-      {
-        RDCASSERT(getival<DXOp>(inst->args[0], dxOpCode));
-        RDCASSERT(dxOpCode < DXOp::NumOpCodes, dxOpCode, DXOp::NumOpCodes);
-        switch(dxOpCode)
-        {
-          // thread barriers require threads in the tangle to be in lockstep
-          case DXOp::Barrier:
-            return false;
-            // Image operations require threads in the tangle to be in lockstep
-          case DXOp::Sample:
-          case DXOp::SampleBias:
-          case DXOp::SampleLevel:
-          case DXOp::SampleGrad:
-          case DXOp::SampleCmp:
-          case DXOp::SampleCmpBias:
-          case DXOp::SampleCmpLevel:
-          case DXOp::SampleCmpGrad:
-          case DXOp::SampleCmpLevelZero:
-          case DXOp::TextureGather:
-          case DXOp::TextureGatherCmp:
-          case DXOp::CalculateLOD: return false;
-          case DXOp::TextureLoad:
-            // TextureLoad does not require derivatives, does not have to be in lockstep
-            return true;
-            // derivatives require threads in the tangle to be in lockstep
-          case DXOp::DerivCoarseX:
-          case DXOp::DerivCoarseY:
-          case DXOp::DerivFineX:
-          case DXOp::DerivFineY: return false;
-          // wave/subgroup ops require threads in the tangle to be in lockstep
-          case DXOp::WaveIsFirstLane:
-          case DXOp::WaveReadLaneAt:
-          case DXOp::WaveReadLaneFirst:
-          case DXOp::WavePrefixOp:
-          case DXOp::WavePrefixBitCount:
-          case DXOp::WaveAllBitCount:
-          case DXOp::WaveAnyTrue:
-          case DXOp::WaveAllTrue:
-          case DXOp::WaveActiveBallot:
-          case DXOp::WaveActiveAllEqual:
-          case DXOp::WaveActiveOp:
-          case DXOp::WaveActiveBit:
-          case DXOp::WaveMatch:
-          case DXOp::WaveMultiPrefixOp:
-          case DXOp::WaveMultiPrefixBitCount:
-          case DXOp::QuadReadLaneAt:
-          case DXOp::QuadOp:
-          case DXOp::QuadVote: return false;
-          default: break;
-        }
-      }
-    }
-    default: break;
-  }
-  return true;
-}
-
-void ThreadState::QueueMathOp(DXIL::DXOp dxOp, const ShaderVariable &input, ShaderVariable &result)
-{
-  DXIL_DEBUG_RDCASSERT(!IsPendingResultPending());
-  m_PendingResultData = result;
-  m_QueuedGpuMathOp.workgroupIndex = m_WorkgroupIndex;
-  m_QueuedGpuMathOp.dxOp = dxOp;
-  m_QueuedGpuMathOp.input = input;
-  m_QueuedGpuMathOp.result = &m_PendingResultData;
-  SetStepNeedsGpuMathOp();
-}
-
-void ThreadState::QueueSampleGather(DXIL::DXOp dxOp, const SampleGatherResourceData &resourceData,
-                                    const SampleGatherSamplerData &samplerData,
-                                    const ShaderVariable &uv, const ShaderVariable &ddxCalc,
-                                    const ShaderVariable &ddyCalc, const int8_t texelOffsets[3],
-                                    int multisampleIndex, float lodValue, float compareValue,
-                                    GatherChannel gatherChannel, uint32_t instructionIdx,
-                                    ShaderVariable &result)
-{
-  DXIL_DEBUG_RDCASSERT(!IsPendingResultPending());
-  m_PendingResultData = result;
-  m_QueuedGpuSampleGatherOp.workgroupIndex = m_WorkgroupIndex;
-  m_QueuedGpuSampleGatherOp.dxOp = dxOp;
-  m_QueuedGpuSampleGatherOp.resourceData = resourceData;
-  m_QueuedGpuSampleGatherOp.samplerData = samplerData;
-  m_QueuedGpuSampleGatherOp.uv = uv;
-  m_QueuedGpuSampleGatherOp.ddxCalc = ddxCalc;
-  m_QueuedGpuSampleGatherOp.ddyCalc = ddyCalc;
-  m_QueuedGpuSampleGatherOp.texelOffsets[0] = texelOffsets[0];
-  m_QueuedGpuSampleGatherOp.texelOffsets[1] = texelOffsets[1];
-  m_QueuedGpuSampleGatherOp.texelOffsets[2] = texelOffsets[2];
-  m_QueuedGpuSampleGatherOp.multisampleIndex = multisampleIndex;
-  m_QueuedGpuSampleGatherOp.lodValue = lodValue;
-  m_QueuedGpuSampleGatherOp.compareValue = compareValue;
-  m_QueuedGpuSampleGatherOp.gatherChannel = gatherChannel;
-  m_QueuedGpuSampleGatherOp.instructionIdx = instructionIdx;
-  m_QueuedGpuSampleGatherOp.result = &m_PendingResultData;
-  SetStepNeedsGpuSampleGatherOp();
-}
-
-void ThreadState::OperationLoad(bool isAtomic, const DXIL::Instruction &inst, DXIL::Operation opCode,
-                                DXIL::DXOp dxOpCode, Id &resultId, ShaderVariable &result)
-{
-  if(DXIL::IsDXCNop(inst))
-  {
-    resultId = DXILDebug::INVALID_ID;
-    result.name.clear();
-    return;
-  }
-
-  // Load(ptr)
-  Id ptrId = GetArgumentId(0);
-  if(ptrId == DXILDebug::INVALID_ID)
-    return;
-
-  auto itPtr = m_Memory.m_Pointers.find(ptrId);
-  if(itPtr == m_Memory.m_Pointers.end())
-  {
-    RDCERR("Unknown memory pointer Id %u", ptrId);
-    return;
-  }
-
-  const MemoryTracking::Pointer &ptr = itPtr->second;
-  Id baseMemoryId = ptr.baseMemoryId;
-
-  auto itAlloc = m_Memory.m_Allocations.find(baseMemoryId);
-  if(itAlloc == m_Memory.m_Allocations.end())
-  {
-    RDCERR("Unknown memory allocation Id %u", baseMemoryId);
-    return;
-  }
-
-  const MemoryTracking::Allocation &allocation = itAlloc->second;
-  // active lane: Atomic Load for GSM then read from the global backing memory
-  if(m_HasDebugState && isAtomic && allocation.gsm)
-  {
-    if(!LoadGSMFromGlobalBackingMemory(ptr, allocation, result))
-      RDCERR("OperationLoad: LoadGSMFromGlobalBackingMemory failed ptrId %u", ptrId);
-    return;
-  }
-
-  // Load from local backing memory
-  RDCASSERT(ptr.size <= sizeof(ShaderValue));
-  if(ptr.size <= sizeof(ShaderValue))
-    memcpy(&result.value, ptr.memory, (size_t)ptr.size);
-  else
-    RDCERR("Size %u too large MAX %u for OperationLoad", ptr.size, sizeof(ShaderValue));
-}
-
-void ThreadState::OperationStore(const DXIL::Instruction &inst, DXIL::Operation opCode,
-                                 DXIL::DXOp dxOpCode)
-{
-  // Store(ptr, value)
-  Id ptrId = GetArgumentId(0);
-  if(ptrId == DXILDebug::INVALID_ID)
-    return;
-  auto itPtr = m_Memory.m_Pointers.find(ptrId);
-  if(itPtr == m_Memory.m_Pointers.end())
-  {
-    RDCERR("Unknown memory pointer Id %u", ptrId);
-    return;
-  }
-
-  ShaderVariable originalValue(m_Variables[ptrId]);
-
-  const MemoryTracking::Pointer &ptr = itPtr->second;
-  const Id baseMemoryId = ptr.baseMemoryId;
-  void *const memory = ptr.memory;
-  uint64_t allocSize = ptr.size;
-
-  RDCASSERT(memory);
-  RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
-
-  ShaderVariable val;
-  RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, val));
-
-  UpdateBackingMemoryFromVariable(memory, allocSize, val);
-
-  bool recordBaseMemoryChange = m_HasDebugState && baseMemoryId != ptrId;
-  ShaderVariableChange change;
-  RDCASSERT(IsVariableAssigned(baseMemoryId));
-  if(recordBaseMemoryChange)
-    change.before = m_Variables[baseMemoryId];
-
-  auto itAlloc = m_Memory.m_Allocations.find(baseMemoryId);
-  if(itAlloc == m_Memory.m_Allocations.end())
-  {
-    RDCERR("Unknown memory allocation Id %u", baseMemoryId);
-    return;
-  }
-  const MemoryTracking::Allocation &allocation = itAlloc->second;
-  UpdateMemoryVariableFromBackingMemory(baseMemoryId, allocation.backingMemory);
-
-  // active lane : writes to a GSM variable, write to local and global backing memory
-  if(m_HasDebugState && allocation.gsm)
-    UpdateGlobalBackingMemory(ptrId, ptr, allocation, val);
-
-  // record the change to the base memory variable if it is not the ptrId variable
-  if(recordBaseMemoryChange)
-  {
-    if(!IsVariableAssigned(baseMemoryId))
-    {
-      change.before = {};
-      m_Assigned[baseMemoryId] = true;
-    }
-    change.after = m_Variables[baseMemoryId];
-    m_PendingDebugState.changes.push_back(change);
-  }
-
-  // Update the ptr variable value and manually record the change to the ptr variable
-  RDCASSERT(IsVariableAssigned(ptrId));
-  ShaderVariable newValue(originalValue);
-  newValue.value = val.value;
-
-  m_Live[ptrId] = true;
-  m_Variables[ptrId] = newValue;
-  m_Assigned[ptrId] = true;
-
-  if(m_HasDebugState)
-  {
-    change.before = originalValue;
-    change.after = newValue;
-    m_PendingDebugState.changes.push_back(change);
-  }
-}
-
-void ThreadState::OperationAtomic(const DXIL::Instruction &inst, DXIL::Operation opCode,
-                                  DXIL::DXOp dxOpCode, Id &resultId, ShaderVariable &result)
-{
-  Id ptrId = GetArgumentId(0);
-  if(ptrId == DXILDebug::INVALID_ID)
-    return;
-
-  auto itPtr = m_Memory.m_Pointers.find(ptrId);
-  if(itPtr == m_Memory.m_Pointers.end())
-  {
-    RDCERR("Unknown memory pointer Id %u", ptrId);
-    return;
-  }
-
-  const MemoryTracking::Pointer &ptr = itPtr->second;
-  const Id baseMemoryId = ptr.baseMemoryId;
-
-  RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
-
-  void *const memory = ptr.memory;
-  RDCASSERT(memory);
-  uint64_t allocSize = ptr.size;
-
-  auto itAlloc = m_Memory.m_Allocations.find(baseMemoryId);
-  if(itAlloc == m_Memory.m_Allocations.end())
-  {
-    RDCERR("Unknown memory allocation Id %u", ptrId);
-    return;
-  }
-  const MemoryTracking::Allocation &allocation = itAlloc->second;
-  void *allocMemoryBackingPtr = allocation.backingMemory;
-
-  RDCASSERTNOTEQUAL(resultId, DXILDebug::INVALID_ID);
-  RDCASSERT(IsVariableAssigned(ptrId));
-  ShaderVariable a;
-  if(allocation.globalVarAlloc && !IsVariableAssigned(ptrId))
-  {
-    RDCASSERT(IsVariableAssigned(baseMemoryId));
-    a = m_Variables[baseMemoryId];
-  }
-  else
-  {
-    a = m_Variables[ptrId];
-  }
-
-  // Get the underling type of the GPUPointer
-  if(a.type == VarType::GPUPointer)
-  {
-    Id id;
-    uint64_t offset;
-    uint64_t size;
-    VarType baseType;
-    // Decode the pointer allocation: ptrId, offset, size
-    RDCASSERT(DecodePointer(id, offset, size, baseType, a));
-    RDCASSERTEQUAL(baseMemoryId, id);
-    RDCASSERTEQUAL(allocSize, size);
-    a.type = baseType;
-  }
-
-  // GSM variable, read from the global backing memory
-  if(allocation.gsm)
-  {
-    if(!LoadGSMFromGlobalBackingMemory(ptr, allocation, a))
-    {
-      RDCERR("OperationAtomic: LoadGSMFromGlobalBackingMemory failed ptrId %u", ptrId);
-      return;
-    }
-  }
-
-  size_t newValueArgIdx = (opCode == Operation::CompareExchange) ? 2 : 1;
-  ShaderVariable b;
-  RDCASSERT(GetShaderVariable(inst.args[newValueArgIdx], opCode, dxOpCode, b));
-  const uint32_t c = 0;
-
-  ShaderVariable res = a;
-  bool matched = false;
-
-  if(opCode == Operation::AtomicExchange)
-  {
-    // *ptr = val
-#undef _IMPL
-#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(b, c)
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicAdd)
-  {
-    // *ptr = *ptr + val
-#undef _IMPL
-#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(a, c) + comp<I>(b, c)
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicSub)
-  {
-    // *ptr = *ptr - val
-#undef _IMPL
-#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(a, c) - comp<I>(b, c)
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicAnd)
-  {
-    // *ptr = *ptr & val
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) & comp<U>(b, c);
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicNand)
-  {
-    // *ptr = ~(*ptr & val)
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(res, c) = ~(comp<U>(a, c) & comp<U>(b, c));
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicOr)
-  {
-    // *ptr = *ptr | val
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) | comp<U>(b, c);
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicXor)
-  {
-    // *ptr = *ptr ^ val
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) ^ comp<U>(b, c);
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicMax)
-  {
-    // *ptr = max(*ptr, val)
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(res, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicMin)
-  {
-    // *ptr = min(*ptr, val)
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(res, c) = RDCMIN(comp<S>(a, c), comp<S>(b, c));
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicUMax)
-  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<S>(res, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::AtomicUMin)
-  {
-#undef _IMPL
-#define _IMPL(I, S, U) comp<U>(res, c) = RDCMIN(comp<U>(a, c), comp<U>(b, c));
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else if(opCode == Operation::CompareExchange)
-  {
-    ShaderVariable cmp;
-    RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, cmp));
-
-#undef _IMPL
-#define _IMPL(I, S, U)                        \
-  matched = comp<I>(a, c) == comp<I>(cmp, c); \
-  comp<I>(res, c) = matched ? comp<I>(b, c) : comp<I>(a, c)
-
-    IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
-  }
-  else
-  {
-    RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
-  }
-
-  // Save the result back to the backing memory of the pointer
-  UpdateBackingMemoryFromVariable(memory, allocSize, res);
-
-  bool recordBaseMemoryChange = m_HasDebugState && baseMemoryId != resultId;
-  ShaderVariableChange change;
-  if(recordBaseMemoryChange)
-    change.before = m_Variables[baseMemoryId];
-
-  UpdateMemoryVariableFromBackingMemory(baseMemoryId, allocMemoryBackingPtr);
-
-  // active lane : writes to a GSM variable, write to local and global backing memory
-  if(m_HasDebugState && allocation.gsm)
-    UpdateGlobalBackingMemory(ptrId, ptr, allocation, res);
-
-  // record the change to the base memory variable
-  if(recordBaseMemoryChange)
-  {
-    if(!IsVariableAssigned(baseMemoryId))
-    {
-      change.before = {};
-      m_Assigned[baseMemoryId] = true;
-    }
-    change.after = m_Variables[baseMemoryId];
-    m_PendingDebugState.changes.push_back(change);
-  }
-
-  // record the change to the ptr variable value
-  bool recordPtrMemoryChange = m_HasDebugState && (ptrId != resultId) && (baseMemoryId != ptrId);
-  RDCASSERT(IsVariableAssigned(ptrId));
-  if(recordPtrMemoryChange)
-    change.before = m_Variables[ptrId];
-  // Update the ptr variable value
-  m_Variables[ptrId].value = res.value;
-
-  if(recordPtrMemoryChange)
-  {
-    change.after = m_Variables[ptrId];
-    m_PendingDebugState.changes.push_back(change);
-  }
-
-  RDCASSERTNOTEQUAL(resultId, ptrId);
-  if(opCode == Operation::CompareExchange)
-  {
-    // Returns a struct
-    // { Original Value,  1 (equal) / 0 (not equal)
-    result.rows = 0;
-    result.columns = 0;
-    RDCASSERTEQUAL(result.type, VarType::Struct);
-    result.members.clear();
-    result.members.resize(2);
-    result.members[0] = res;
-    result.members[0].name = "original";
-    result.members[1].rows = 1;
-    result.members[1].columns = 1;
-    result.members[1].type = VarType::Bool;
-    result.members[1].name = "flag";
-    result.members[1].value.u32v[0] = matched ? 1 : 0;
-  }
-  else
-  {
-    result.value = res.value;
-  }
 }
 
 Debugger::DebugInfo::~DebugInfo()
@@ -7835,22 +6355,6 @@ Debugger::DebugInfo::~DebugInfo()
   for(const ScopedDebugData *scope : scopedDebugDatas)
     delete scope;
   scopedDebugDatas.clear();
-}
-
-// static helper function
-rdcstr Debugger::GetResourceBaseName(const DXIL::Program *program,
-                                     const DXIL::ResourceReference *resRef)
-{
-  rdcstr resName = resRef->resourceBase.name;
-  // Special case for cbuffer arrays
-  if((resRef->resourceBase.resClass == ResourceClass::CBuffer) && (resRef->resourceBase.regCount > 1))
-  {
-    // Remove any array suffix that might have been appended to the resource name
-    int offs = resName.find('[');
-    if(offs > 0)
-      resName = resName.substr(0, offs);
-  }
-  return resName;
 }
 
 // static helper function
@@ -7869,22 +6373,48 @@ rdcstr Debugger::GetResourceReferenceName(const DXIL::Program *program,
     if(resRef.resourceBase.regBase + resRef.resourceBase.regCount <= slot.shaderRegister)
       continue;
 
-    return GetResourceBaseName(program, &resRef);
+    return program->GetHandleAlias(resRef.handleID);
   }
   RDCERR("Failed to find DXIL %s Resource Space %d Register %d", ToStr(resClass).c_str(),
          slot.registerSpace, slot.shaderRegister);
   return "UNKNOWN_RESOURCE_HANDLE";
 }
 
-Debugger::Debugger() : DXBCContainerDebugger(true), m_DeviceThreadID(Threading::GetCurrentID()){};
-
-// Must be called from the replay manager thread (the debugger thread)
-Debugger::~Debugger()
+// member functions
+void Debugger::CalcActiveMask(rdcarray<bool> &activeMask)
 {
-  CHECK_DEBUGGER_THREAD();
-  AtomicStore(&atomic_simulationFinished, 1);
-  Threading::JobSystem::SyncAllJobs();
-  SAFE_DELETE(m_ApiWrapper);
+  // one bool per workgroup thread
+  activeMask.resize(m_Workgroups.size());
+
+  // mark any threads that have finished as inactive, otherwise they're active
+  for(size_t i = 0; i < m_Workgroups.size(); i++)
+    activeMask[i] = !m_Workgroups[i].Finished();
+
+  // only pixel shaders automatically converge workgroups, compute shaders need explicit sync
+  if(m_Stage != ShaderStage::Pixel)
+    return;
+
+  // Not diverged then all active
+  if(!ThreadState::ThreadsAreDiverged(m_Workgroups))
+    return;
+
+  bool anyActive = false;
+  for(size_t i = 0; i < m_Workgroups.size(); i++)
+  {
+    if(!activeMask[i])
+      continue;
+    // Run any thread that is not in a uniform block
+    // Stop any thread that is not in a uniform block
+    activeMask[i] = !m_Workgroups[i].InUniformBlock();
+    anyActive |= activeMask[i];
+  }
+  if(!anyActive)
+  {
+    RDCERR("No active threads, forcing all unfinished threads to run");
+    for(size_t i = 0; i < m_Workgroups.size(); i++)
+      activeMask[i] = !m_Workgroups[i].Finished();
+  }
+  return;
 }
 
 ScopedDebugData *Debugger::FindScopedDebugData(const DXIL::Metadata *md) const
@@ -7947,57 +6477,6 @@ ScopedDebugData *Debugger::AddScopedDebugData(const DXIL::Metadata *scopeMD)
     m_DebugInfo.scopedDebugDatas.push_back(scope);
   }
   return scope;
-}
-
-void Debugger::AddStructMembers(const DXIL::DICompositeType *structTypeData, TypeData &structType)
-{
-  if(structTypeData->type != DXIL::DIBase::Type::CompositeType)
-  {
-    RDCERR("Invalid dwarf struct type %s", ToStr(structTypeData->type).c_str());
-    return;
-  }
-
-  if(structTypeData->tag != DXIL::DW_TAG_structure_type &&
-     structTypeData->tag != DXIL::DW_TAG_class_type)
-  {
-    RDCERR("Invalid composite tag %s", ToStr(structTypeData->tag).c_str());
-    return;
-  }
-
-  const Metadata *elementsMD = structTypeData->elements;
-  size_t countMembers = elementsMD->children.size();
-  for(size_t i = 0; i < countMembers; ++i)
-  {
-    const Metadata *memberMD = elementsMD->children[i];
-    const DXIL::DIBase *memberBase = memberMD->dwarf;
-    // Ignore member functions
-    if(memberBase->type == DXIL::DIBase::Subprogram)
-      continue;
-    RDCASSERTEQUAL(memberBase->type, DXIL::DIBase::DerivedType);
-    // Ignore anything that isn't DIBase::DerivedType
-    if(memberBase->type != DXIL::DIBase::DerivedType)
-      continue;
-
-    const DXIL::DIDerivedType *member = memberBase->As<DIDerivedType>();
-    if(member->tag == DXIL::DW_TAG_inheritance)
-    {
-      const Metadata *parentMD = member->base;
-      const DXIL::DIBase *parentBase = parentMD->dwarf;
-      RDCASSERTEQUAL(parentBase->type, DXIL::DIBase::Type::CompositeType);
-      const DICompositeType *parentType = parentBase->As<DICompositeType>();
-      AddStructMembers(parentType, structType);
-      continue;
-    }
-    // Ignore any member tag that isn't DXIL::DW_TAG_member
-    if(member->tag != DXIL::DW_TAG_member)
-      continue;
-    AddDebugType(member->base);
-    RDCASSERT(member->name);
-    rdcstr memberName = member->name ? *member->name : "NULL";
-    structType.structMembers.push_back({memberName, member->base});
-    uint32_t offset = (uint32_t)member->offsetInBits / 8;
-    structType.memberOffsets.push_back(offset);
-  }
 }
 
 const TypeData &Debugger::AddDebugType(const DXIL::Metadata *typeMD)
@@ -8192,7 +6671,31 @@ const TypeData &Debugger::AddDebugType(const DXIL::Metadata *typeMD)
             RDCASSERT(!isVector && !isMatrix, isVector, isMatrix, typeData.name);
 
             typeData.type = VarType::Struct;
-            AddStructMembers(compositeType, typeData);
+            const Metadata *elementsMD = compositeType->elements;
+            size_t countMembers = elementsMD->children.size();
+            for(size_t i = 0; i < countMembers; ++i)
+            {
+              const Metadata *memberMD = elementsMD->children[i];
+              const DXIL::DIBase *memberBase = memberMD->dwarf;
+              // Ignore member functions
+              if(memberBase->type == DXIL::DIBase::Subprogram)
+                continue;
+              RDCASSERTEQUAL(memberBase->type, DXIL::DIBase::DerivedType);
+              // Ignore anything that isn't DIBase::DerivedType
+              if(memberBase->type != DXIL::DIBase::DerivedType)
+                continue;
+
+              const DXIL::DIDerivedType *member = memberBase->As<DIDerivedType>();
+              // Ignore any member tag that isn't DXIL::DW_TAG_member
+              if(member->tag != DXIL::DW_TAG_member)
+                continue;
+              AddDebugType(member->base);
+              RDCASSERT(member->name);
+              rdcstr memberName = member->name ? *member->name : "NULL";
+              typeData.structMembers.push_back({memberName, member->base});
+              uint32_t offset = (uint32_t)member->offsetInBits / 8;
+              typeData.memberOffsets.push_back(offset);
+            }
           }
           break;
         }
@@ -8225,16 +6728,12 @@ const TypeData &Debugger::AddDebugType(const DXIL::Metadata *typeMD)
       const DIDerivedType *derivedType = base->As<DIDerivedType>();
       switch(derivedType->tag)
       {
-        case DW_TAG_restrict_type:
         case DW_TAG_const_type:
-        case DW_TAG_reference_type:
         case DW_TAG_pointer_type:
         case DW_TAG_typedef: typeData = AddDebugType(derivedType->base); break;
         default:
           RDCERR("Unhandled DIDerivedType DIDerivedType Tag type %s",
                  ToStr(derivedType->tag).c_str());
-          if(derivedType->base)
-            typeData = AddDebugType(derivedType->base);
           break;
       }
       break;
@@ -8282,10 +6781,8 @@ void Debugger::ParseDbgOpValue(const DXIL::Instruction &inst, uint32_t instructi
   AddLocalVariable(sourceMappingInfo, instructionIndex);
 }
 
-// Must be called from the replay manager thread (the debugger thread)
 void Debugger::ParseDebugData()
 {
-  CHECK_DEBUGGER_THREAD();
   // The scopes will have been created when parsing to generate the callstack information
   for(const Function *f : m_Program->m_Functions)
   {
@@ -8381,7 +6878,7 @@ void Debugger::ParseDebugData()
           {
             const LocalMapping &mapping = scope->localMappings[m];
 
-            // TODO: this should be using ExecPointReference::IsAfter()
+            // TODO: this should be using ExecutionPoint::IsAfter()
             if(mapping.instIndex > instructionIndex)
               continue;
 
@@ -8397,11 +6894,11 @@ void Debugger::ParseDebugData()
               {
                 const LocalMapping &laterMapping = scope->localMappings[n];
 
-                // TODO: this should be using ExecPointReference::IsAfter()
+                // TODO: this should be using ExecutionPoint::IsAfter()
                 if(laterMapping.instIndex > instructionIndex)
                   continue;
 
-                // TODO: this should be using ExecPointReference::IsAfter()
+                // TODO: this should be using ExecutionPoint::IsAfter()
                 // if this mapping will supercede and starts later
                 if(laterMapping.isSourceSupersetOf(mapping) &&
                    laterMapping.instIndex > mapping.instIndex)
@@ -8679,13 +7176,6 @@ void Debugger::ParseDebugData()
                       break;
                     }
                   }
-                  if(memberIndex >= rows)
-                  {
-                    RDCERR("Invalid memberIndex for source variable %s SSAID %s",
-                           mapping.sourceVarName.c_str(), mapping.debugVarSSAName.c_str());
-                    memberIndex = 0;
-                    byteOffset = 0;
-                  }
 
                   childType = &m_DebugInfo.types[typeWalk->structMembers[memberIndex].second];
 
@@ -8858,6 +7348,7 @@ void Debugger::ParseDebugData()
                         for(uint32_t c = 0; c < columns; ++c)
                           usage->children[row].children[c].emitSourceVar = false;
                       }
+                      usage->children[row].emitSourceVar = true;
                     }
                   }
                   // Assigning to a row/col
@@ -8919,9 +7410,9 @@ void Debugger::ParseDebugData()
                         for(uint32_t c = 0; c < columns; ++c)
                           usage->children[r].children[c].emitSourceVar = false;
                       }
+                      usage->children[r].emitSourceVar = true;
                     }
                   }
-                  usage->emitSourceVar = false;
                 }
                 else
                 {
@@ -8932,7 +7423,7 @@ void Debugger::ParseDebugData()
                   usage->debugVarSuffix.clear();
                 }
               }
-              else if(typeWalk->vecSize > 1)
+              else if(typeWalk->vecSize != 0)
               {
                 // Index into the vector using byte offset and component size
                 const TypeData &scalar = m_DebugInfo.types[typeWalk->baseType];
@@ -8987,6 +7478,7 @@ void Debugger::ParseDebugData()
                     for(uint32_t x = 0; x < columns; ++x)
                       usage->children[x].emitSourceVar = false;
                   }
+                  usage->emitSourceVar = true;
                 }
                 else
                 {
@@ -9004,12 +7496,6 @@ void Debugger::ParseDebugData()
                 while(typeWalk && typeWalk->baseType != NULL && typeWalk->type == VarType::Unknown)
                   typeWalk = &m_DebugInfo.types[typeWalk->baseType];
 
-                if(typeWalk == NULL || typeWalk->baseType == NULL)
-                {
-                  RDCERR("Unexpected type source variable %s SSAID %s",
-                         mapping.sourceVarName.c_str(), mapping.debugVarSSAName.c_str());
-                  continue;
-                }
                 const TypeData &scalar = m_DebugInfo.types[typeWalk->baseType];
                 uint32_t elemCount = 1;
 
@@ -9106,77 +7592,48 @@ void Debugger::ParseDebugData()
   }
 }
 
-// Must be called from the replay manager thread (the debugger thread)
-ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eventId,
-                                       const DXBC::DXBCContainer *dxbcContainer,
-                                       const ShaderReflection &reflection, uint32_t activeLaneIndex,
-                                       uint32_t threadsInWorkgroup)
+ShaderDebugTrace *Debugger::BeginDebug(uint32_t eventId, const DXBC::DXBCContainer *dxbcContainer,
+                                       const ShaderReflection &reflection, uint32_t activeLaneIndex)
 {
-  CHECK_DEBUGGER_THREAD();
-  if(activeLaneIndex >= threadsInWorkgroup)
-  {
-    RDCERR("Invalid active lane index");
-    return NULL;
-  }
-
   ShaderStage shaderStage = reflection.stage;
 
-  m_ApiWrapper = apiWrapper;
   m_Program = dxbcContainer->GetDXILByteCode();
+  m_EventId = eventId;
   m_ActiveLaneIndex = activeLaneIndex;
   m_Steps = 0;
   m_Stage = shaderStage;
-  m_EntryPointInterface = m_Program->GetEntryPointInterface();
-  m_QueuedDeviceThreadSteps.resize(threadsInWorkgroup);
-  m_QueuedGpuMathOps.resize(threadsInWorkgroup);
-  m_QueuedGpuSampleGatherOps.resize(threadsInWorkgroup);
-  m_PendingLanes.resize(threadsInWorkgroup);
-  m_QueuedJobs.resize(threadsInWorkgroup);
 
+  // Ensure the DXIL reflection data is built
+  DXIL::Program *program = ((DXIL::Program *)m_Program);
+  program->BuildReflection();
   uint32_t outputSSAId = m_Program->m_NextSSAId;
-  uint32_t maxSSAId = outputSSAId + 1;
+  uint32_t nextSSAId = outputSSAId + 1;
 
   ShaderDebugTrace *ret = new ShaderDebugTrace;
   ret->stage = shaderStage;
 
-  ShaderFeatures shaderFeatures = ShaderFeatures::None;
-  bool isSM66Plus = (m_Program->GetMajorVersion() > 6) ||
-                    ((m_Program->GetMajorVersion() == 6) && (m_Program->GetMinorVersion() >= 6));
+  uint32_t workgroupSize = shaderStage == ShaderStage::Pixel ? 4 : 1;
+  for(uint32_t i = 0; i < workgroupSize; i++)
+    m_Workgroups.push_back(ThreadState(i, *this, m_GlobalState, nextSSAId));
 
-  if((shaderStage == ShaderStage::Fragment) || ((shaderStage == ShaderStage::Compute) && isSM66Plus))
-    shaderFeatures |= ShaderFeatures::Derivatives;
+  ThreadState &state = GetActiveLane();
 
-  // Get the global state from the API wrapper
-  m_GlobalState.builtins = apiWrapper->GetBuiltins();
-  m_GlobalState.subgroupSize = apiWrapper->GetSubgroupSize();
-  m_GlobalState.constantBlocks = apiWrapper->GetConstantBlocks();
-  m_GlobalState.constantBlocksDatas = apiWrapper->GetConstantBlocksDatas();
-
-  for(uint32_t i = 0; i < threadsInWorkgroup; i++)
+  // Create the storage layout for the constant buffers
+  // The constant buffer data and details are filled in outside of this method
+  size_t count = reflection.constantBlocks.size();
+  m_GlobalState.constantBlocks.resize(count);
+  m_GlobalState.constantBlocksData.resize(count);
+  for(uint32_t i = 0; i < count; i++)
   {
-    m_Workgroup.push_back(
-        ThreadState(*this, m_GlobalState, maxSSAId, i, threadsInWorkgroup, shaderFeatures));
-    m_QueuedDeviceThreadSteps[i] = false;
-    m_QueuedGpuMathOps[i] = false;
-    m_QueuedGpuSampleGatherOps[i] = false;
-    m_PendingLanes[i] = false;
-    m_QueuedJobs[i] = 0;
+    m_GlobalState.constantBlocks[i].type = VarType::ConstantBlock;
+    const ConstantBlock &cbuffer = reflection.constantBlocks[i];
+    uint32_t bindCount = cbuffer.bindArraySize;
+    if(bindCount > 1)
+    {
+      // Create nested structure for constant buffer array
+      m_GlobalState.constantBlocks[i].members.resize(bindCount);
+    }
   }
-
-  // Get the thread state from the API wrapper
-  const rdcarray<rdcflatmap<ShaderBuiltin, ShaderVariable>> &threadsBuiltins =
-      apiWrapper->GetThreadsBuiltins();
-  const rdcarray<ShaderVariable> &threadsInputs = apiWrapper->GetThreadsInputs();
-
-  for(uint32_t i = 0; i < threadsInWorkgroup; i++)
-  {
-    m_Workgroup[i].SetBuiltins(threadsBuiltins[i]);
-    m_Workgroup[i].SetInput(threadsInputs[i]);
-  }
-
-  ret->sourceVars = apiWrapper->GetSourceVars();
-
-  ThreadState &activeState = GetActiveLane();
 
   struct ResourceList
   {
@@ -9246,8 +7703,8 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
   }
 
   // Create the variables for Samplers
-  size_t count = reflection.samplers.size();
-  m_GlobalState.samplers.reserve(count);
+  count = reflection.samplers.size();
+  m_GlobalState.samplers.resize(count);
   for(uint32_t i = 0; i < count; i++)
   {
     ShaderSampler sampler = reflection.samplers[i];
@@ -9275,42 +7732,41 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
     sourceVar.variables.push_back(ref);
   }
 
-  m_LiveGlobals.resize(maxSSAId);
+  m_LiveGlobals.resize(nextSSAId);
   MemoryTracking &globalMemory = m_GlobalState.memory;
   for(const DXIL::GlobalVar *gv : m_Program->m_GlobalVars)
   {
     GlobalVariable globalVar;
-    rdcstr n;
-    m_Program->GetSSAName(gv->ssaId, n);
+    rdcstr n = DXBC::BasicDemangle(gv->name);
+    DXIL::SanitiseName(n);
     globalVar.var.name = n;
     globalVar.id = gv->ssaId;
-    globalVar.gsm = (gv->type->addrSpace == DXIL::Type::PointerAddrSpace::GroupShared);
-    globalMemory.AllocateMemoryForType(gv->type, globalVar.id, true, globalVar.gsm, globalVar.var);
-    if(gv->initialiser)
+    globalMemory.AllocateMemoryForType(gv->type, globalVar.id, true, globalVar.var);
+    if(gv->flags & GlobalFlags::IsConst)
     {
-      const Constant *initialData = gv->initialiser;
-      if(!initialData->isNULL() && !initialData->isUndef())
+      if(gv->initialiser)
       {
-        RDCASSERT(ConvertDXILConstantToShaderVariable(initialData, globalVar.var));
-        // Write ShaderVariable data back to memory
-        auto itAlloc = globalMemory.m_Allocations.find(globalVar.id);
-        if(itAlloc != globalMemory.m_Allocations.end())
+        const Constant *initialData = gv->initialiser;
+        if(!initialData->isNULL())
         {
-          const MemoryTracking::Allocation &allocation = itAlloc->second;
-          void *allocMemoryBackingPtr = allocation.backingMemory;
-          uint64_t allocSize = allocation.size;
-          activeState.UpdateBackingMemoryFromVariable(allocMemoryBackingPtr, allocSize,
-                                                      globalVar.var);
-          RDCASSERTEQUAL(allocSize, 0);
-        }
-        else
-        {
-          RDCERR("Unknown memory allocation for GlobalVariable Id %u", globalVar.id);
+          RDCASSERT(ConvertDXILConstantToShaderVariable(initialData, globalVar.var));
+          // Write ShaderVariable data back to memory
+          auto itAlloc = globalMemory.m_Allocations.find(globalVar.id);
+          if(itAlloc != globalMemory.m_Allocations.end())
+          {
+            const MemoryTracking::Allocation &allocation = itAlloc->second;
+            void *allocMemoryBackingPtr = allocation.backingMemory;
+            uint64_t allocSize = allocation.size;
+            state.UpdateBackingMemoryFromVariable(allocMemoryBackingPtr, allocSize, globalVar.var);
+            RDCASSERTEQUAL(allocSize, 0);
+          }
+          else
+          {
+            RDCERR("Unknown memory allocation for GlobalVariable Id %u", globalVar.id);
+          }
         }
       }
     }
-    if(globalVar.gsm)
-      m_GlobalState.groupSharedMemoryIds.push_back(globalVar.id);
     m_GlobalState.globals.push_back(globalVar);
     m_LiveGlobals[globalVar.id] = true;
   }
@@ -9338,9 +7794,8 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
             ShaderVariable &var = constantVar.var;
             ConvertDXILTypeToShaderVariable(c->type, var);
             ConvertDXILConstantToShaderVariable(c, var);
-            var.name;
+            var.name = m_Program->GetArgumentName(c);
             Id id = c->ssaId;
-            m_Program->GetSSAName(id, var.name);
             RDCASSERTNOTEQUAL(id, DXILDebug::INVALID_ID);
             constantVar.id = id;
             if(var.type == VarType::GPUPointer)
@@ -9348,9 +7803,8 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
               Id ptrId;
               uint64_t offset;
               uint64_t size;
-              VarType baseType;
               // Decode the pointer allocation: ptrId, offset, size
-              RDCASSERT(DecodePointer(ptrId, offset, size, baseType, var));
+              RDCASSERT(DecodePointer(ptrId, offset, size, var));
 
               auto it = globalMemory.m_Allocations.find(ptrId);
               if(it != globalMemory.m_Allocations.end())
@@ -9426,13 +7880,10 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
         }
       }
 
-      DXIL::ControlFlow &controlFlow = info.controlFlow;
+      ControlFlow &controlFlow = info.controlFlow;
 
       controlFlow.Construct(links);
       info.uniformBlocks = controlFlow.GetUniformBlocks();
-      info.divergentBlocks = controlFlow.GetDivergentBlocks();
-      info.convergentBlocks = controlFlow.GetConvergentBlocks();
-      info.partialConvergentBlocks = controlFlow.GetPartialConvergentBlocks();
       const rdcarray<uint32_t> loopBlocks = controlFlow.GetLoopBlocks();
 
       // Handle de-generate case when a single block
@@ -9444,14 +7895,12 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
 
       FunctionInfo::ReferencedIds &ssaRefs = info.referencedIds;
       FunctionInfo::ExecutionPointPerId &ssaMaxExecPoints = info.maxExecPointPerId;
-      ssaMaxExecPoints.resize(maxSSAId);
-      std::set<Id> ssaMaxRefs;
 
       uint32_t curBlock = 0;
       info.instructionToBlock.resize(countInstructions);
       for(uint32_t i = 0; i < countInstructions; ++i)
       {
-        const ExecPointReference current(curBlock, i);
+        const ExecutionPoint current(curBlock, i);
         info.instructionToBlock[i] = current.block;
         const Instruction &inst = *(f->instructions[i]);
         if(IsLLVMDebugCall(inst) || DXIL::IsLLVMIntrinsicCall(inst))
@@ -9467,24 +7916,26 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
           RDCASSERTEQUAL(ssaRefs.count(resultId), 0);
           ssaRefs.insert(resultId);
 
-          auto it = ssaMaxRefs.find(resultId);
-          if(it == ssaMaxRefs.end())
-          {
+          auto it = ssaMaxExecPoints.find(resultId);
+          if(it == ssaMaxExecPoints.end())
             ssaMaxExecPoints[resultId] = current;
-            ssaMaxRefs.insert(resultId);
-          }
           else
-          {
-            // If the result SSA has tracking then that access should be after this assignment
-            RDCASSERT(ssaMaxExecPoints[resultId].IsAfter(current, controlFlow));
-          }
+            // If the result SSA has tracking then this access should be at a later execution point
+            RDCASSERT(it->second.IsAfter(current, controlFlow));
         }
         // Track maximum execution point when an SSA is referenced as an argument
         // Arguments to phi instructions are handled separately
         if(inst.op == Operation::Phi)
           continue;
 
-        ExecPointReference maxPoint(curBlock, maxInst);
+        // If the current block is in a loop, set the execution point to the next uniform block
+        ExecutionPoint maxPoint(curBlock, maxInst);
+        if(loopBlocks.contains(curBlock))
+        {
+          uint32_t nextUniformBlock = controlFlow.GetNextUniformBlock(curBlock);
+          maxPoint.block = nextUniformBlock;
+          maxPoint.instruction = f->blocks[nextUniformBlock]->startInstructionIdx + 1;
+        }
         for(uint32_t a = 0; a < inst.args.size(); ++a)
         {
           DXIL::Value *arg = inst.args[a];
@@ -9497,17 +7948,16 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
             if(ssaRefs.count(argId) == 0)
               ssaRefs.insert(argId);
           }
-          auto it = ssaMaxRefs.find(argId);
-          if(it == ssaMaxRefs.end())
+          auto it = ssaMaxExecPoints.find(argId);
+          if(it == ssaMaxExecPoints.end())
           {
             ssaMaxExecPoints[argId] = maxPoint;
-            ssaMaxRefs.insert(argId);
           }
           else
           {
             // Update the maximum execution point if access is later than the existing access
-            if(maxPoint.IsAfter(ssaMaxExecPoints[argId], controlFlow))
-              ssaMaxExecPoints[argId] = maxPoint;
+            if(maxPoint.IsAfter(it->second, controlFlow))
+              it->second = maxPoint;
           }
         }
         if(inst.op == Operation::Branch || inst.op == Operation::Unreachable ||
@@ -9515,22 +7965,7 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
           ++curBlock;
       }
       // If these do not match in size that means there is a result SSA that is never read
-      RDCASSERTEQUAL(ssaRefs.size(), ssaMaxRefs.size());
-
-      // Update any SSA max points which are inside a loop to the next uniform block
-      // This covers the case of SSA IDs that are assigned to but never accessed
-      for(Id id : ssaMaxRefs)
-      {
-        ExecPointReference &maxPoint = ssaMaxExecPoints[id];
-        uint32_t block = maxPoint.block;
-        // If the current block is in a loop, set the execution point to the next uniform block
-        if(loopBlocks.contains(block))
-        {
-          uint32_t nextUniformBlock = controlFlow.GetNextUniformBlock(block);
-          maxPoint.block = nextUniformBlock;
-          maxPoint.instruction = f->blocks[nextUniformBlock]->startInstructionIdx + 1;
-        }
-      }
+      RDCASSERTEQUAL(ssaRefs.size(), ssaMaxExecPoints.size());
 
       // store the block captured SSA IDs used as arguments to phi nodes
       FunctionInfo::PhiReferencedIdsPerBlock &phiReferencedIdsPerBlock =
@@ -9654,17 +8089,7 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
                   }
                 }
                 scopeMD = compType->scope;
-              }
-              else if(dwarf->type == DIBase::Namespace)
-              {
-                const DINamespace *nameType = dwarf->As<DINamespace>();
-                const rdcstr *typeName = nameType->name;
-                if(typeName && !typeName->empty())
-                {
-                  if(!callstack.empty())
-                    callstack[0] = *typeName + "::" + callstack[0];
-                }
-                scopeMD = nameType->scope;
+                break;
               }
               else
               {
@@ -9692,21 +8117,20 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
   for(auto funcInfosIt = m_FunctionInfos.begin(); funcInfosIt != m_FunctionInfos.end(); ++funcInfosIt)
   {
     FunctionInfo &info = funcInfosIt->second;
-    const DXIL::ControlFlow &controlFlow = info.controlFlow;
+    const ControlFlow &controlFlow = info.controlFlow;
     const rdcarray<uint32_t> loopBlocks = controlFlow.GetLoopBlocks();
     for(ScopedDebugData *scope : m_DebugInfo.scopedDebugDatas)
     {
       for(LocalMapping &localMapping : scope->localMappings)
       {
-        if(localMapping.debugVarSSAId < info.maxExecPointPerId.size())
+        auto it = info.maxExecPointPerId.find(localMapping.debugVarSSAId);
+        if(it != info.maxExecPointPerId.end())
         {
-          const ExecPointReference &current = info.maxExecPointPerId[localMapping.debugVarSSAId];
-          if(!current.IsValid())
-            continue;
-          uint32_t scopeEndInst = scope->maxInstruction;
+          const ExecutionPoint &current = it->second;
+          uint32_t scopeEndInst = scope->maxInstruction + 1;
           scopeEndInst = RDCMIN(scopeEndInst, (uint32_t)info.instructionToBlock.size() - 1);
           const uint32_t scopeEndBlock = info.instructionToBlock[scopeEndInst];
-          ExecPointReference scopeEnd(scopeEndBlock, scopeEndInst);
+          ExecutionPoint scopeEnd(scopeEndBlock, scopeEndInst);
           if(loopBlocks.contains(scopeEnd.block))
           {
             uint32_t nextUniformBlock = controlFlow.GetNextUniformBlock(scopeEnd.block);
@@ -9714,10 +8138,116 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
             scopeEnd.instruction = info.function->blocks[nextUniformBlock]->startInstructionIdx + 1;
           }
           if(scopeEnd.IsAfter(current, controlFlow))
-            info.maxExecPointPerId[localMapping.debugVarSSAId] = scopeEnd;
+            it->second = scopeEnd;
         }
       }
     }
+  }
+
+  // Add inputs to the shader trace
+  // Use the DXIL reflection data to map the input signature to input variables
+  const EntryPointInterface *entryPointIf = NULL;
+  for(size_t e = 0; e < m_Program->m_EntryPointInterfaces.size(); ++e)
+  {
+    if(entryFunction == m_Program->m_EntryPointInterfaces[e].name)
+    {
+      entryPointIf = &m_Program->m_EntryPointInterfaces[e];
+      break;
+    }
+  }
+  RDCASSERT(entryPointIf);
+  m_EntryPointInterface = entryPointIf;
+  const rdcarray<EntryPointInterface::Signature> &inputs = m_EntryPointInterface->inputs;
+
+  const uint32_t countInParams = (uint32_t)inputs.size();
+  if(countInParams)
+  {
+    // Make fake ShaderVariable struct to hold all the inputs
+    ShaderVariable &inStruct = state.m_Input;
+    inStruct.name = DXIL_FAKE_INPUT_STRUCT_NAME;
+    inStruct.rows = 1;
+    inStruct.columns = 1;
+    inStruct.type = VarType::Struct;
+    inStruct.members.resize(countInParams);
+
+    const rdcarray<SigParameter> &dxbcInParams = dxbcContainer->GetReflection()->InputSig;
+    for(uint32_t i = 0; i < countInParams; ++i)
+    {
+      const EntryPointInterface::Signature &sig = inputs[i];
+
+      ShaderVariable &v = inStruct.members[i];
+
+      // Get the name from the DXBC reflection
+      SigParameter sigParam;
+      if(FindSigParameter(dxbcInParams, sig, sigParam))
+      {
+        v.name = sigParam.semanticIdxName;
+        if(sigParam.systemValue != ShaderBuiltin::Undefined)
+        {
+          RDCASSERT(m_GlobalState.builtinInputs.count(sigParam.systemValue) == 0);
+          m_GlobalState.builtinInputs[sigParam.systemValue] = v;
+        }
+      }
+      else
+      {
+        v.name = sig.name;
+      }
+      v.rows = (uint8_t)sig.rows;
+      v.columns = (uint8_t)sig.cols;
+      v.type = VarTypeForComponentType(sig.type);
+      if(v.rows <= 1)
+      {
+        v.rows = 1;
+      }
+      else
+      {
+        v.members.resize(v.rows);
+        for(uint32_t r = 0; r < v.rows; r++)
+        {
+          v.members[r].rows = 1;
+          v.members[r].columns = (uint8_t)sig.cols;
+          v.members[r].type = v.type;
+          v.members[r].name = StringFormat::Fmt("[%u]", r);
+        }
+      }
+
+      SourceVariableMapping inputMapping;
+      inputMapping.name = v.name;
+      inputMapping.type = v.type;
+      inputMapping.rows = sig.rows;
+      inputMapping.columns = sig.cols;
+      inputMapping.variables.reserve(sig.cols);
+      inputMapping.signatureIndex = i;
+      if(v.rows <= 1)
+      {
+        inputMapping.variables.reserve(sig.cols);
+        for(uint32_t c = 0; c < sig.cols; ++c)
+        {
+          DebugVariableReference ref;
+          ref.type = DebugVariableType::Input;
+          ref.name = inStruct.name + "." + v.name;
+          ref.component = c;
+          inputMapping.variables.push_back(ref);
+        }
+      }
+      else
+      {
+        DebugVariableReference ref;
+        ref.type = DebugVariableType::Input;
+        ref.name = inStruct.name + "." + v.name;
+        inputMapping.variables.push_back(ref);
+      }
+    }
+
+    // Make a single source variable mapping for the whole input struct
+    SourceVariableMapping inputMapping;
+    inputMapping.name = inStruct.name;
+    inputMapping.type = VarType::Struct;
+    inputMapping.rows = 1;
+    inputMapping.columns = 1;
+    inputMapping.variables.resize(1);
+    inputMapping.variables.push_back(DebugVariableReference(DebugVariableType::Input, inStruct.name));
+    ret->sourceVars.push_back(inputMapping);
   }
 
   const rdcarray<SigParameter> &dxbcOutParams = dxbcContainer->GetReflection()->OutputSig;
@@ -9725,12 +8255,13 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
   uint32_t countOutputs = (uint32_t)outputs.size();
 
   // Make fake ShaderVariable struct to hold all the outputs
-  ShaderVariable outStruct;
+  ShaderVariable &outStruct = state.m_Output.var;
   outStruct.name = DXIL_FAKE_OUTPUT_STRUCT_NAME;
-  outStruct.rows = 0;
-  outStruct.columns = 0;
+  outStruct.rows = 1;
+  outStruct.columns = 1;
   outStruct.type = VarType::Struct;
   outStruct.members.resize(countOutputs);
+  state.m_Output.id = outputSSAId;
 
   for(uint32_t i = 0; i < countOutputs; ++i)
   {
@@ -9762,9 +8293,6 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
         v.members[r].type = v.type;
         v.members[r].name = StringFormat::Fmt("[%u]", r);
       }
-      v.rows = 0;
-      v.columns = 0;
-      v.type = VarType::Struct;
     }
     // TODO: handle the output of system values
     // ShaderBuiltin::DepthOutput, ShaderBuiltin::DepthOutputLessEqual,
@@ -9772,14 +8300,14 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
     // ShaderBuiltin::StencilReference
 
     // Map the high level variables to the Output DXIL Signature
-    if(v.rows == 1)
+    SourceVariableMapping outputMapping;
+    outputMapping.name = v.name;
+    outputMapping.type = v.type;
+    outputMapping.rows = v.rows;
+    outputMapping.columns = v.columns;
+    outputMapping.signatureIndex = i;
+    if(v.rows <= 1)
     {
-      SourceVariableMapping outputMapping;
-      outputMapping.name = v.name;
-      outputMapping.type = v.type;
-      outputMapping.rows = v.rows;
-      outputMapping.columns = v.columns;
-      outputMapping.signatureIndex = i;
       outputMapping.variables.reserve(sig.cols);
       for(uint32_t c = 0; c < sig.cols; ++c)
       {
@@ -9789,30 +8317,15 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
         ref.component = c;
         outputMapping.variables.push_back(ref);
       }
-      ret->sourceVars.push_back(outputMapping);
     }
     else
     {
-      // Make a mapping per element
-      for(const ShaderVariable &member : v.members)
-      {
-        SourceVariableMapping outputMapping;
-        outputMapping.name = v.name + member.name;
-        outputMapping.type = member.type;
-        outputMapping.rows = 1;
-        outputMapping.columns = member.columns;
-        outputMapping.signatureIndex = -1;
-        for(uint32_t c = 0; c < member.columns; ++c)
-        {
-          DebugVariableReference ref;
-          ref.type = DebugVariableType::Variable;
-          ref.name = outStruct.name + "." + v.name + member.name;
-          ref.component = c;
-          outputMapping.variables.push_back(ref);
-        }
-        ret->sourceVars.push_back(outputMapping);
-      }
+      DebugVariableReference ref;
+      ref.type = DebugVariableType::Variable;
+      ref.name = outStruct.name + "." + v.name;
+      outputMapping.variables.push_back(ref);
     }
+    ret->sourceVars.push_back(outputMapping);
 
     if(0)
     {
@@ -9860,16 +8373,15 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
   {
     // Make a single source variable mapping for the whole output struct
     SourceVariableMapping outputMapping;
-    outputMapping.name = outStruct.name;
+    outputMapping.name = state.m_Output.var.name;
     outputMapping.type = VarType::Struct;
-    outputMapping.rows = 0;
-    outputMapping.columns = 0;
+    outputMapping.rows = 1;
+    outputMapping.columns = 1;
     outputMapping.variables.resize(1);
-    outputMapping.variables[0].name = outStruct.name;
+    outputMapping.variables[0].name = state.m_Output.var.name;
     outputMapping.variables[0].type = DebugVariableType::Variable;
     ret->sourceVars.push_back(outputMapping);
   }
-  activeState.SetOutput(outputSSAId, outStruct);
 
   // Global source variable mappings valid for lifetime of the debug session
   for(const GlobalVariable &gv : m_GlobalState.globals)
@@ -9885,270 +8397,76 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *apiWrapper, uint32_t eve
     ret->sourceVars.push_back(outputMapping);
   }
 
-  ret->inputs = {activeState.GetInput()};
+  // Per instruction all source variable mappings at this instruction (cumulative and complete)
+  // InstructionSourceInfo
+  // {
+  //   uint32_t instruction;
+  //   LineColumnInfo lineInfo;
+  //   {
+  //     uint32_t disassemblyLine = 0;
+  //     int32_t fileIndex = -1;
+  //     uint32_t lineStart = 0;
+  //     uint32_t lineEnd = 0;
+  //     uint32_t colStart = 0;
+  //     uint32_t colEnd = 0;
+  //   }
+  //   rdcarray<SourceVariableMapping> sourceVars;
+  //   {
+  //     rdcstr name;
+  //     VarType type = VarType::Unknown;
+  //     uint32_t rows = 0;
+  //     uint32_t columns = 0;
+  //     uint32_t offset;
+  //     int32_t signatureIndex = -1;
+  //     rdcarray<DebugVariableReference> variables;
+  //     {
+  //       rdcstr name;
+  //       DebugVariableType type = DebugVariableType::Undefined;
+  //       uint32_t component = 0;
+  //     }
+  //   }
+  // }
+  // ret->instInfo.push_back(InstructionSourceInfo())
 
-  if(shaderStage == ShaderStage::Compute)
-  {
-    // For Compute shaders add fake inputs for semantics
-    const BuiltinInputs &globalBuiltins = m_GlobalState.builtins;
-    const BuiltinInputs &activeBuiltins = activeState.GetBuiltins();
-    rdcarray<ShaderBuiltin> builtinsToAdd;
-    // Parse the instructions to find which builtins are read
-    // ShaderBuiltin::DispatchThreadIndex,
-    // ShaderBuiltin::GroupIndex,
-    // ShaderBuiltin::GroupFlatIndex,
-    // ShaderBuiltin::GroupThreadIndex,
-    for(const Function *f : m_Program->m_Functions)
-    {
-      if(f->external)
-        continue;
-      for(const Instruction *inst : f->instructions)
-      {
-        switch(inst->op)
-        {
-          case Operation::Call:
-          {
-            const Function *callFunc = inst->getFuncCall();
-            if(callFunc->family == FunctionFamily::DXOp)
-            {
-              DXOp dxOpCode;
-              RDCASSERT(getival<DXOp>(inst->args[0], dxOpCode));
-              RDCASSERT(dxOpCode < DXOp::NumOpCodes, dxOpCode, DXOp::NumOpCodes);
-              switch(dxOpCode)
-              {
-                case DXOp::ThreadId:
-                  if(!builtinsToAdd.contains(ShaderBuiltin::DispatchThreadIndex))
-                    builtinsToAdd.push_back(ShaderBuiltin::DispatchThreadIndex);
-                  break;
-                case DXOp::GroupId:
-                  if(!builtinsToAdd.contains(ShaderBuiltin::GroupIndex))
-                    builtinsToAdd.push_back(ShaderBuiltin::GroupIndex);
-                  break;
-                case DXOp::FlattenedThreadIdInGroup:
-                  if(!builtinsToAdd.contains(ShaderBuiltin::GroupFlatIndex))
-                    builtinsToAdd.push_back(ShaderBuiltin::GroupFlatIndex);
-                  break;
-                case DXOp::ThreadIdInGroup:
-                  if(!builtinsToAdd.contains(ShaderBuiltin::GroupThreadIndex))
-                    builtinsToAdd.push_back(ShaderBuiltin::GroupThreadIndex);
-                  break;
-                default: break;
-              }
-            }
-          }
-          default: break;
-        }
-      }
-    }
-
-    for(const ShaderBuiltin &builtin : builtinsToAdd)
-    {
-      ShaderVariable value;
-      bool found = false;
-      auto itThread = activeBuiltins.find(builtin);
-      if(itThread != activeBuiltins.end())
-      {
-        value = itThread->second;
-        found = true;
-      }
-      else
-      {
-        auto itGlobal = globalBuiltins.find(builtin);
-        if(itGlobal != activeBuiltins.end())
-        {
-          value = itGlobal->second;
-          found = true;
-        }
-      }
-      if(found)
-      {
-        value.rows = 1;
-        value.columns = 3;
-        value.type = VarType::UInt;
-        switch(builtin)
-        {
-          case ShaderBuiltin::DispatchThreadIndex: value.name = "SV_DispatchThreadID"; break;
-          case ShaderBuiltin::GroupIndex: value.name = "SV_GroupID"; break;
-          case ShaderBuiltin::GroupFlatIndex:
-            value.name = "SV_GroupIndex";
-            value.columns = 1;
-            break;
-          case ShaderBuiltin::GroupThreadIndex: value.name = "SV_GroupThreadID"; break;
-          default: RDCERR("Unhandled builtin %s", ToStr(builtin).c_str()); break;
-        }
-        ret->inputs.push_back(value);
-      }
-    }
-  }
-
+  ret->inputs = {state.m_Input};
+  ret->inputs.append(state.m_Input.members);
   ret->constantBlocks = m_GlobalState.constantBlocks;
   ret->readOnlyResources = m_GlobalState.readOnlyResources;
   ret->readWriteResources = m_GlobalState.readWriteResources;
   ret->samplers = m_GlobalState.samplers;
   ret->debugger = this;
 
-  for(uint32_t i = 0; i < threadsInWorkgroup; i++)
-  {
-    ThreadState &lane = m_Workgroup[i];
-    if(i != m_ActiveLaneIndex)
-      lane.InitialiseFromActive(activeState);
-  }
-
   // Add the output struct to the global state
   if(countOutputs)
-    m_GlobalState.globals.push_back(activeState.GetOutput());
+    m_GlobalState.globals.push_back(state.m_Output);
 
-  InitialiseWorkgroup();
-
-  m_MTSimulation = D3D12_DXILShaderDebugger_EnableMT();
-  if(threadsInWorkgroup < 4)
-    m_MTSimulation = false;
-
-  AtomicStore(&atomic_simulationFinished, 0);
-  if(m_MTSimulation)
-  {
-    if(!Shader_Debug_UseJobSystemJobs())
-    {
-      uint32_t countJobs = RDCMIN(threadsInWorkgroup, Threading::JobSystem::GetCountWorkers() / 2U);
-      for(uint32_t i = 0; i < countJobs; ++i)
-        Threading::JobSystem::AddJob([this]() { SimulationJobHelper(); });
-    }
-  }
   return ret;
 }
 
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::InitialiseWorkgroup()
+rdcarray<ShaderDebugState> Debugger::ContinueDebug(DebugAPIWrapper *apiWrapper)
 {
-  CHECK_DEBUGGER_THREAD();
-  const rdcarray<ThreadProperties> &workgroupProperties = m_ApiWrapper->GetWorkgroupProperties();
-  const uint32_t threadsInWorkgroup = (uint32_t)m_Workgroup.size();
-
-  if(threadsInWorkgroup == 1)
-  {
-    rdcarray<ThreadIndex> threadIds;
-    threadIds.push_back(0);
-    m_ControlFlow.Construct(threadIds);
-    return;
-  }
-
-  if(threadsInWorkgroup != workgroupProperties.size())
-  {
-    RDCERR("Workgroup properties has wrong count %zu, expected %u", workgroupProperties.size(),
-           threadsInWorkgroup);
-    return;
-  }
-
-  rdcarray<ThreadIndex> threadIds;
-  for(uint32_t i = 0; i < threadsInWorkgroup; i++)
-  {
-    ThreadState &lane = m_Workgroup[i];
-
-    if(m_Stage == ShaderStage::Pixel)
-    {
-      lane.SetHelper(workgroupProperties[i][ThreadProperty::Helper] != 0);
-      lane.SetQuadLaneIndex(workgroupProperties[i][ThreadProperty::QuadLane]);
-      lane.SetQuadId(workgroupProperties[i][ThreadProperty::QuadId]);
-    }
-    if(m_Stage == ShaderStage::Compute)
-    {
-      lane.SetQuadLaneIndex(workgroupProperties[i][ThreadProperty::QuadLane]);
-      lane.SetQuadId(workgroupProperties[i][ThreadProperty::QuadId]);
-    }
-
-    lane.SetDead(workgroupProperties[i][ThreadProperty::Active] == 0);
-    lane.SetSubgroupIdx(workgroupProperties[i][ThreadProperty::SubgroupIdx]);
-
-    // Only add active lanes to control flow
-    if(!lane.IsDead())
-      threadIds.push_back(i);
-  }
-
-  m_ControlFlow.Construct(threadIds);
-
-  // find quad neighbours
-  {
-    rdcarray<uint32_t> processedQuads;
-    for(uint32_t i = 0; i < threadsInWorkgroup; i++)
-    {
-      uint32_t desiredQuad = m_Workgroup[i].GetQuadId();
-
-      // ignore threads not in any quad
-      if(desiredQuad == 0)
-        continue;
-
-      // quads are almost certainly sorted together, so shortcut by checking the last one
-      if((!processedQuads.empty() && processedQuads.back() == desiredQuad) ||
-         processedQuads.contains(desiredQuad))
-        continue;
-
-      processedQuads.push_back(desiredQuad);
-
-      // find the threads
-      uint32_t threads[4] = {
-          i,
-          ~0U,
-          ~0U,
-          ~0U,
-      };
-      for(uint32_t j = i + 1, t = 1; j < threadsInWorkgroup && t < 4; j++)
-      {
-        if(m_Workgroup[j].GetQuadId() == desiredQuad)
-          threads[t++] = j;
-      }
-
-      // now swizzle the threads to know each other
-      for(uint32_t src = 0; src < 4; src++)
-      {
-        uint32_t lane = m_Workgroup[threads[src]].GetQuadLaneIndex();
-
-        if(lane >= 4)
-          continue;
-
-        for(uint32_t dst = 0; dst < 4; dst++)
-        {
-          if(threads[dst] == ~0U)
-            continue;
-
-          m_Workgroup[threads[dst]].SetQuadNeighbours(lane, threads[src]);
-        }
-      }
-    }
-  }
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-rdcarray<ShaderDebugState> Debugger::ContinueDebug()
-{
-  CHECK_DEBUGGER_THREAD();
   ThreadState &active = GetActiveLane();
 
   rdcarray<ShaderDebugState> ret;
-  m_ShaderChangesReturn = NULL;
 
   // initialise the first ShaderDebugState if we haven't stepped yet
   if(m_Steps == 0)
   {
     ShaderDebugState initial;
-    uint32_t startPoint = INVALID_EXECUTION_POINT;
 
-    for(size_t lane = 0; lane < m_Workgroup.size(); lane++)
+    for(size_t lane = 0; lane < m_Workgroups.size(); lane++)
     {
-      ThreadState &thread = m_Workgroup[lane];
+      ThreadState &thread = m_Workgroups[lane];
 
       if(lane == m_ActiveLaneIndex)
       {
-        thread.EnterEntryPoint(m_EntryPointFunction, true);
+        thread.EnterEntryPoint(m_EntryPointFunction, &initial);
         thread.FillCallstack(initial);
-        initial.nextInstruction = thread.GetActiveGlobalInstructionIdx();
-        const ShaderDebugState &pendingDebugState = thread.GetPendingDebugState();
-        initial.flags = pendingDebugState.flags;
-        initial.changes.append(pendingDebugState.changes);
-        startPoint = initial.nextInstruction;
+        initial.nextInstruction = thread.m_ActiveGlobalInstructionIdx;
       }
       else
       {
-        thread.EnterEntryPoint(m_EntryPointFunction, false);
+        thread.EnterEntryPoint(m_EntryPointFunction, NULL);
       }
     }
 
@@ -10162,258 +8480,65 @@ rdcarray<ShaderDebugState> Debugger::ContinueDebug()
 
     ret.push_back(std::move(initial));
 
-    // Set the initial execution point for the threads in the root tangle
-    ThreadExecutionStates threadExecutionStates;
-    TangleGroup &tangles = m_ControlFlow.GetTangles();
-    RDCASSERTEQUAL(tangles.size(), 1);
-    RDCASSERTNOTEQUAL(startPoint, INVALID_EXECUTION_POINT);
-    for(Tangle &tangle : tangles)
-    {
-      RDCASSERT(tangle.IsAliveActive());
-      for(uint32_t threadIdx = 0; threadIdx < m_Workgroup.size(); ++threadIdx)
-      {
-        if(!m_Workgroup[threadIdx].Finished())
-          threadExecutionStates[threadIdx].push_back(startPoint);
-      }
-    }
-    m_ControlFlow.UpdateState(threadExecutionStates);
     m_Steps++;
   }
 
   // if we've finished, return an empty set to signify that
   if(active.Finished())
-  {
-    AtomicStore(&atomic_simulationFinished, 1);
-    Threading::JobSystem::SyncAllJobs();
     return ret;
-  }
 
-  bool allStepsCompleted = true;
-  m_ShaderChangesReturn = &ret;
+  rdcarray<bool> activeMask;
 
-  // continue stepping until we have 1000000 target steps completed in a chunk.
-  for(int stepEnd = m_Steps + 1000000; m_Steps < stepEnd;)
+  for(int stepEnd = m_Steps + 100; m_Steps < stepEnd;)
   {
-    allStepsCompleted = true;
-    if(active.Finished() && !active.IsSimulationStepActive())
+    if(active.Finished())
       break;
 
-    // Execute the threads in each active tangle
-    ThreadExecutionStates threadExecutionStates;
-    TangleGroup &tangles = m_ControlFlow.GetTangles();
+    // calculate the current mask of which threads are active
+    CalcActiveMask(activeMask);
 
-    bool anyActiveThreads = false;
+    // step all active members of the workgroup
+    ShaderDebugState state;
     bool hasDebugState = false;
-
-    for(const Tangle &tangle : tangles)
+    for(size_t lane = 0; lane < m_Workgroups.size(); lane++)
     {
-      if(!tangle.IsAliveActive())
-        continue;
-
-      rdcarray<bool> activeMask;
-      // one bool per workgroup thread
-      activeMask.resize(m_Workgroup.size());
-
-      // calculate the current active thread mask from the threads in the tangle
-      for(size_t i = 0; i < m_Workgroup.size(); i++)
-        activeMask[i] = false;
-
-      const rdcarray<ThreadReference> &threadRefs = tangle.GetThreadRefs();
-      for(const ThreadReference &ref : threadRefs)
+      if(activeMask[lane])
       {
-        uint32_t lane = ref.id;
-        RDCASSERT(lane < m_Workgroup.size(), lane, m_Workgroup.size());
-        ThreadState &thread = m_Workgroup[lane];
-        RDCASSERT(!thread.Finished());
-        activeMask[lane] = true;
-        anyActiveThreads = true;
-      }
-
-      // step all threads in the tangle
-      for(const ThreadReference &ref : threadRefs)
-      {
-        const uint32_t threadId = ref.id;
-        const uint32_t lane = threadId;
-
-        ThreadState &thread = m_Workgroup[lane];
+        ThreadState &thread = m_Workgroups[lane];
         if(thread.Finished())
         {
           if(lane == m_ActiveLaneIndex)
             ret.emplace_back();
           continue;
         }
+
         if(lane == m_ActiveLaneIndex)
+        {
           hasDebugState = true;
-
-        thread.SetActiveMask(activeMask);
-        QueueJob(lane);
+          state.stepIndex = m_Steps;
+          thread.StepNext(&state, apiWrapper, m_Workgroups);
+          m_Steps++;
+        }
+        else
+        {
+          thread.StepNext(NULL, apiWrapper, m_Workgroups);
+        }
       }
     }
-
-    do
+    for(size_t lane = 0; lane < m_Workgroups.size(); lane++)
     {
-      ProcessQueuedDeviceThreadSteps();
-      // Convert the simulation threads queued operations into pending operations i.e. GPU commands
-      ProcessQueuedOps();
-      // Sync any pending GPU operations and set the results to the pending threads
-      SyncPendingLanes();
-
-      allStepsCompleted = true;
-      for(const Tangle &tangle : tangles)
-      {
-        if(!tangle.IsAliveActive())
-          continue;
-
-        bool tangleStepsCompleted = true;
-        const rdcarray<ThreadReference> &threadRefs = tangle.GetThreadRefs();
-        for(const ThreadReference &ref : threadRefs)
-        {
-          const uint32_t threadId = ref.id;
-          const uint32_t lane = threadId;
-          ThreadState &thread = m_Workgroup[lane];
-          if(thread.IsSimulationStepActive())
-          {
-            tangleStepsCompleted = false;
-            break;
-          }
-        }
-        if(!tangleStepsCompleted)
-        {
-          allStepsCompleted = false;
-          break;
-        }
-      }
-    } while(!allStepsCompleted);
-
-    for(Tangle &tangle : tangles)
-    {
-      if(!tangle.IsAliveActive())
-        continue;
-
-      const rdcarray<ThreadReference> &threadRefs = tangle.GetThreadRefs();
-#if ENABLED(RDOC_DEVEL)
-      for(const ThreadReference &ref : threadRefs)
-      {
-        const uint32_t threadId = ref.id;
-        const uint32_t lane = threadId;
-        ThreadState &thread = m_Workgroup[lane];
-        RDCASSERT(!thread.IsSimulationStepActive());
-      }
-#endif    // #if ENABLED(RDOC_DEVEL)
-
-      const DXIL::BlockArray *newPartialConvergentPoints = NULL;
-      ExecutionPoint newConvergencePoint = INVALID_EXECUTION_POINT;
-      uint32_t countActiveThreads = 0;
-      uint32_t countDivergedThreads = 0;
-      uint32_t countConvergePointThreads = 0;
-      uint32_t countPartialConvergePointThreads = 0;
-
-      // Update the control flow state
-      for(const ThreadReference &ref : threadRefs)
-      {
-        const uint32_t threadId = ref.id;
-        const uint32_t lane = threadId;
-        ThreadState &thread = m_Workgroup[lane];
-
-        bool wasActive = !thread.Finished();
-
-        threadExecutionStates[threadId] = thread.GetEnteredPoints();
-
-        const uint32_t threadConvergencePoint = thread.GetConvergencePoint();
-        // the thread activated a new convergence point
-        if(threadConvergencePoint != INVALID_EXECUTION_POINT)
-        {
-          wasActive = true;
-          if(newConvergencePoint == INVALID_EXECUTION_POINT)
-          {
-            newConvergencePoint = threadConvergencePoint;
-            RDCASSERTNOTEQUAL(newConvergencePoint, INVALID_EXECUTION_POINT);
-          }
-          else
-          {
-            // All the threads in the tangle should set the same convergence point
-            RDCASSERTEQUAL(threadConvergencePoint, newConvergencePoint);
-          }
-          ++countConvergePointThreads;
-        }
-        const DXIL::BlockArray *partialConvergentPoints = thread.GetPartialConvergencePoints();
-        if(!partialConvergentPoints->empty())
-        {
-          wasActive = true;
-          if(newPartialConvergentPoints == NULL)
-          {
-            newPartialConvergentPoints = partialConvergentPoints;
-            RDCASSERT(newPartialConvergentPoints);
-            if(newPartialConvergentPoints)
-              RDCASSERT(!newPartialConvergentPoints->empty());
-          }
-          else
-          {
-            // All the threads in the tangle should set the same partial convergence points
-            RDCASSERT(*newPartialConvergentPoints == *partialConvergentPoints);
-          }
-          ++countPartialConvergePointThreads;
-        }
-
-        if(thread.GetDiverged())
-        {
-          wasActive = true;
-          ++countDivergedThreads;
-        }
-
-        if(thread.Finished())
-          tangle.SetThreadDead(threadId);
-
-        countActiveThreads += wasActive ? 1 : 0;
-      }
-
-      for(const ThreadReference &ref : threadRefs)
-      {
-        const uint32_t threadId = ref.id;
-        const uint32_t lane = threadId;
-        m_Workgroup[lane].UpdateCurrentInstruction();
-      }
-
-      if(countConvergePointThreads)
-      {
-        // all the active threads should have a convergence point if any have one
-        RDCASSERTEQUAL(countConvergePointThreads, countActiveThreads);
-        tangle.AddMergePoint(newConvergencePoint);
-      }
-      if(countPartialConvergePointThreads)
-      {
-        // all the active threads should have partial convergence points if any have them
-        RDCASSERTEQUAL(countPartialConvergePointThreads, countActiveThreads);
-        RDCASSERT(newPartialConvergentPoints);
-        const size_t countPoints =
-            newPartialConvergentPoints ? newPartialConvergentPoints->size() : 0;
-        for(size_t i = 0; i < countPoints; i++)
-        {
-          // The partial convergence points are generated sorted from least to most inter-connections
-          const uint32_t point = newPartialConvergentPoints->at(i);
-          tangle.AddMergePoint(point);
-        }
-        // partial convergence requires full convergence
-        RDCASSERTEQUAL(countConvergePointThreads, countActiveThreads);
-      }
-      if(countDivergedThreads)
-      {
-        // all the active threads should have diverged if any diverges
-        RDCASSERTEQUAL(countDivergedThreads, countActiveThreads);
-        tangle.SetDiverged(true);
-      }
+      if(activeMask[lane])
+        m_Workgroups[lane].StepOverNopInstructions();
     }
-    if(!anyActiveThreads)
+    // Update UI state after the execute and step over nops to make sure state.nextInstruction is in sync
+    if(hasDebugState)
     {
-      active.SetDead(true);
-      m_ControlFlow.UpdateState(threadExecutionStates);
-      RDCERR("No active threads in any tangle, killing active thread to terminate the debugger");
+      ThreadState &thread = m_Workgroups[m_ActiveLaneIndex];
+      state.nextInstruction = thread.m_ActiveGlobalInstructionIdx;
+      thread.FillCallstack(state);
+      ret.push_back(std::move(state));
     }
-    m_ControlFlow.UpdateState(threadExecutionStates);
   }
-
-  RDCASSERT(allStepsCompleted);
-  m_ShaderChangesReturn = NULL;
   return ret;
 }
 
@@ -10422,450 +8547,4 @@ const FunctionInfo *Debugger::GetFunctionInfo(const DXIL::Function *function) co
   RDCASSERT(m_FunctionInfos.count(function) != 0);
   return &m_FunctionInfos.at(function);
 }
-
-// Called from any thread
-// Resource must be cached
-ShaderValue Debugger::TypedResourceLoad(DXIL::ResourceClass resClass, const BindingSlot &slot,
-                                        const DXILDebug::ViewFmt &fmt, uint64_t dataOffset)
-{
-  if(resClass == DXIL::ResourceClass::UAV)
-  {
-    DXIL_DEBUG_RDCASSERT(m_ApiWrapper->IsUAVCached(slot));
-    return m_ApiWrapper->TypedUAVLoad(slot, fmt, dataOffset);
-  }
-  else if(resClass == DXIL::ResourceClass::SRV)
-  {
-    DXIL_DEBUG_RDCASSERT(m_ApiWrapper->IsSRVCached(slot));
-    return m_ApiWrapper->TypedSRVLoad(slot, fmt, dataOffset);
-  }
-  RDCERR("Unexpected resource class %s", ToStr(resClass).c_str());
-  return ShaderValue();
-}
-
-// Called from any thread
-// Resource must be cached
-bool Debugger::TypedResourceStore(DXIL::ResourceClass resClass, const BindingSlot &slot,
-                                  const DXILDebug::ViewFmt &fmt, uint64_t dataOffset,
-                                  ShaderValue &value)
-{
-  if(resClass == DXIL::ResourceClass::UAV)
-  {
-    DXIL_DEBUG_RDCASSERT(m_ApiWrapper->IsUAVCached(slot));
-    return m_ApiWrapper->TypedUAVStore(slot, fmt, dataOffset, value);
-  }
-  else if(resClass == DXIL::ResourceClass::SRV)
-  {
-    DXIL_DEBUG_RDCASSERT(m_ApiWrapper->IsSRVCached(slot));
-    return m_ApiWrapper->TypedSRVStore(slot, fmt, dataOffset, value);
-  }
-  RDCERR("Unexpected resource class %s", ToStr(resClass).c_str());
-  return false;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetUAV(const BindingSlot &slot, UAVInfo &uavInfo) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsUAVCached(slot))
-    return DeviceOpResult::NeedsDevice;
-
-  uavInfo = m_ApiWrapper->GetUAV(slot);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetSRV(const BindingSlot &slot, SRVInfo &srvInfo) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsSRVCached(slot))
-    return DeviceOpResult::NeedsDevice;
-
-  srvInfo = m_ApiWrapper->GetSRV(slot);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetResourceInfo(DXIL::ResourceClass resClass,
-                                         const DXDebug::BindingSlot &slot, uint32_t mipLevel,
-                                         ShaderVariable &result) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsResourceInfoCached(slot, mipLevel))
-    return DeviceOpResult::NeedsDevice;
-
-  result = m_ApiWrapper->GetResourceInfo(resClass, slot, mipLevel);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetSampleInfo(DXIL::ResourceClass resClass, const DXDebug::BindingSlot &slot,
-                                       const char *opString, ShaderVariable &result) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsSampleInfoCached(slot))
-    return DeviceOpResult::NeedsDevice;
-
-  result = m_ApiWrapper->GetSampleInfo(resClass, slot, opString);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetRenderTargetSampleInfo(const char *opString, ShaderVariable &result) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsRenderTargetSampleInfoCached())
-    return DeviceOpResult::NeedsDevice;
-
-  result = m_ApiWrapper->GetRenderTargetSampleInfo(opString);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetResourceReferenceInfo(const DXDebug::BindingSlot &slot,
-                                                  ResourceReferenceInfo &result) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsResourceReferenceInfoCached(slot))
-    return DeviceOpResult::NeedsDevice;
-
-  result = m_ApiWrapper->GetResourceReferenceInfo(slot);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-DeviceOpResult Debugger::GetShaderDirectAccess(DescriptorType type, const DXDebug::BindingSlot &slot,
-                                               ShaderDirectAccess &result) const
-{
-  if(!IsDeviceThread() && !m_ApiWrapper->IsShaderDirectAccessCached(slot))
-    return DeviceOpResult::NeedsDevice;
-
-  result = m_ApiWrapper->GetShaderDirectAccess(type, slot);
-  return DeviceOpResult::Succeeded;
-}
-
-// Called from any thread
-void Debugger::StepThread(uint32_t lane, StepThreadMode stepMode)
-{
-  ThreadState &thread = m_Workgroup[lane];
-  bool isActiveThread = lane == m_ActiveLaneIndex;
-  bool simulateStep = true;
-  DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-  int curActiveSteps = isActiveThread ? m_Steps : 0;
-
-  while(simulateStep)
-  {
-    simulateStep = false;
-    {
-      thread.ClearPendingDebugState();
-      if(isActiveThread)
-        m_ActiveDebugState.stepIndex = curActiveSteps;
-      InternalStepThread(lane);
-      thread.ClearPendingDebugState();
-    }
-    if(thread.StepNeedsGpuSampleGatherOp())
-      break;
-    else if(thread.StepNeedsGpuMathOp())
-      break;
-    else if(thread.StepNeedsDeviceThread())
-      break;
-
-    if(isActiveThread)
-      curActiveSteps++;
-
-    if(stepMode == StepThreadMode::RUN_SINGLE_STEP)
-      break;
-
-    if(stepMode == StepThreadMode::QUEUE_SINGLE_STEP)
-      break;
-
-    simulateStep = thread.CanRunAnotherStep();
-    if(simulateStep)
-    {
-      DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-    }
-    if(simulateStep)
-      thread.SetStepQueued();
-
-    if(stepMode == StepThreadMode::QUEUE_MULTIPLE_STEPS)
-      break;
-  };
-  // Update the number of simulation steps
-  if(isActiveThread)
-    m_Steps = curActiveSteps;
-
-  DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-
-  // The queueing has to be when the thread is not being simulated
-  if(thread.StepNeedsGpuSampleGatherOp())
-  {
-    DXIL_DEBUG_RDCASSERT(!simulateStep);
-    QueueGpuSampleGatherOp(lane);
-    return;
-  }
-  if(thread.StepNeedsGpuMathOp())
-  {
-    DXIL_DEBUG_RDCASSERT(!simulateStep);
-    QueueGpuMathOp(lane);
-    return;
-  }
-  if(thread.StepNeedsDeviceThread())
-  {
-    DXIL_DEBUG_RDCASSERT(!simulateStep);
-    QueueDeviceThreadStep(lane);
-    return;
-  }
-
-  if(simulateStep)
-  {
-    DXIL_DEBUG_RDCASSERTEQUAL(stepMode, StepThreadMode::QUEUE_MULTIPLE_STEPS);
-    QueueJob(lane);
-    return;
-  }
-  thread.SetSimulationStepCompleted();
-}
-
-// Called from any thread
-void Debugger::InternalStepThread(uint32_t lane)
-{
-  ThreadState &thread = m_Workgroup[lane];
-  if(lane == m_ActiveLaneIndex)
-  {
-    if(m_RetireIDs)
-    {
-      thread.RetireLiveIDs();
-      m_RetireIDs = false;
-      const ShaderDebugState &pendingDebugState = thread.GetPendingDebugState();
-      m_ActiveDebugState.changes.append(pendingDebugState.changes);
-      thread.ClearPendingDebugState();
-    }
-    thread.StepNext(true, m_Workgroup);
-    if(thread.StepNeedsGpuSampleGatherOp())
-      return;
-    if(thread.StepNeedsGpuMathOp())
-      return;
-    if(thread.StepNeedsDeviceThread())
-      return;
-
-    m_ActiveDebugState.nextInstruction = thread.GetActiveGlobalInstructionIdx();
-    thread.FillCallstack(m_ActiveDebugState);
-
-    const ShaderDebugState &pendingDebugState = thread.GetPendingDebugState();
-    m_ActiveDebugState.flags = pendingDebugState.flags;
-    m_ActiveDebugState.changes.append(pendingDebugState.changes);
-    thread.ClearPendingDebugState();
-
-    m_ShaderChangesReturn->push_back(m_ActiveDebugState);
-    {
-      m_ActiveDebugState.callstack.clear();
-      m_ActiveDebugState.changes.clear();
-      m_ActiveDebugState.flags = ShaderEvents::NoEvent;
-      m_ActiveDebugState.stepIndex = 0;
-      m_ActiveDebugState.nextInstruction = 0;
-      m_RetireIDs = true;
-    }
-  }
-  else
-  {
-    thread.StepNext(false, m_Workgroup);
-    if(thread.StepNeedsGpuSampleGatherOp())
-      return;
-    if(thread.StepNeedsGpuMathOp())
-      return;
-    if(thread.StepNeedsDeviceThread())
-      return;
-  }
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::QueueJob(uint32_t lane)
-{
-  CHECK_DEBUGGER_THREAD();
-  ThreadState &thread = m_Workgroup[lane];
-  thread.SetStepQueued();
-  if(m_MTSimulation)
-  {
-    if(Shader_Debug_UseJobSystemJobs())
-    {
-      Threading::JobSystem::AddJob(
-          [this, lane]() { StepThread(lane, StepThreadMode::RUN_MULTIPLE_STEPS); });
-    }
-    else
-    {
-      RDCASSERT(Atomic::CmpExch32(&m_QueuedJobs[lane], 0, 1) == 0);
-    }
-  }
-  else
-  {
-    StepThread(lane, StepThreadMode::RUN_SINGLE_STEP);
-  }
-}
-
-// Can be called from any thread
-void Debugger::QueueDeviceThreadStep(uint32_t lane)
-{
-  ThreadState &thread = m_Workgroup[lane];
-  DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-  thread.SetStepQueued();
-  DXIL_DEBUG_RDCASSERT(!m_QueuedDeviceThreadSteps[lane]);
-  m_QueuedDeviceThreadSteps[lane] = true;
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::ProcessQueuedDeviceThreadSteps()
-{
-  CHECK_DEBUGGER_THREAD();
-  for(uint32_t lane = 0; lane < m_QueuedDeviceThreadSteps.size(); ++lane)
-  {
-    if(m_QueuedDeviceThreadSteps[lane])
-    {
-      m_QueuedDeviceThreadSteps[lane] = false;
-      ThreadState &thread = m_Workgroup[lane];
-      thread.SetPendingResultUnknown();
-      DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-      StepThread(lane, StepThreadMode::QUEUE_MULTIPLE_STEPS);
-    }
-  }
-}
-
-// Can be called from any thread
-void Debugger::QueueGpuMathOp(uint32_t lane)
-{
-  ThreadState &thread = m_Workgroup[lane];
-  DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-  DXIL_DEBUG_RDCASSERT(!m_QueuedGpuMathOps[lane]);
-  m_QueuedGpuMathOps[lane] = true;
-}
-
-// Can be called from any thread
-void Debugger::QueueGpuSampleGatherOp(uint32_t lane)
-{
-  ThreadState &thread = m_Workgroup[lane];
-  DXIL_DEBUG_RDCASSERT(thread.IsSimulationStepActive());
-  DXIL_DEBUG_RDCASSERT(!m_QueuedGpuSampleGatherOps[lane]);
-  m_QueuedGpuSampleGatherOps[lane] = true;
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::ProcessQueuedOps()
-{
-  CHECK_DEBUGGER_THREAD();
-  ProcessQueuedGpuMathOps();
-  ProcessQueuedGpuSampleGatherOps();
-  SyncPendingGpuOps();
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::SyncPendingLanes()
-{
-  CHECK_DEBUGGER_THREAD();
-  for(uint32_t lane = 0; lane < m_PendingLanes.size(); ++lane)
-  {
-    if(m_PendingLanes[lane])
-    {
-      m_PendingLanes[lane] = false;
-      ThreadState &thread = m_Workgroup[lane];
-      thread.SetPendingResultReady();
-      QueueJob(lane);
-    }
-  }
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::ProcessQueuedGpuMathOps()
-{
-  CHECK_DEBUGGER_THREAD();
-  for(uint32_t lane = 0; lane < m_QueuedGpuMathOps.size(); ++lane)
-  {
-    if(m_QueuedGpuMathOps[lane])
-    {
-      if(!m_ApiWrapper->QueuedOpsHasSpace())
-        SyncPendingGpuOps();
-
-      m_QueuedGpuMathOps[lane] = false;
-      const GpuMathOperation &mathOp = m_Workgroup[lane].GetQueuedGpuMathOp();
-
-      uint32_t workgroupIndex = mathOp.workgroupIndex;
-      if(m_ApiWrapper->QueueMathIntrinsic(mathOp.dxOp, mathOp.input))
-      {
-        m_PendingGpuMathsOpsResults.push_back(mathOp.result);
-      }
-      else
-      {
-        ShaderVariable &result = *mathOp.result;
-        memset(&result.value, 0, sizeof(result.value));
-      }
-
-      DXIL_DEBUG_RDCASSERT(!m_PendingLanes[workgroupIndex]);
-      m_PendingLanes[workgroupIndex] = true;
-    }
-  }
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::ProcessQueuedGpuSampleGatherOps()
-{
-  CHECK_DEBUGGER_THREAD();
-  for(uint32_t lane = 0; lane < m_QueuedGpuSampleGatherOps.size(); ++lane)
-  {
-    if(m_QueuedGpuSampleGatherOps[lane])
-    {
-      if(!m_ApiWrapper->QueuedOpsHasSpace())
-        SyncPendingGpuOps();
-
-      m_QueuedGpuSampleGatherOps[lane] = false;
-      const GpuSampleGatherOperation &sampleGatherOp = m_Workgroup[lane].GetQueuedGpuSampleGatherOp();
-
-      uint32_t workgroupIndex = sampleGatherOp.workgroupIndex;
-      ShaderVariable &result = *sampleGatherOp.result;
-      bool hasResult = false;
-      int sampleRetType = 0;
-      if(!m_ApiWrapper->QueueSampleGather(
-             sampleGatherOp.dxOp, sampleGatherOp.resourceData, sampleGatherOp.samplerData,
-             sampleGatherOp.uv, sampleGatherOp.ddxCalc, sampleGatherOp.ddyCalc,
-             sampleGatherOp.texelOffsets, sampleGatherOp.multisampleIndex, sampleGatherOp.lodValue,
-             sampleGatherOp.compareValue, sampleGatherOp.gatherChannel,
-             sampleGatherOp.instructionIdx, sampleRetType))
-      {
-        // sample failed. Pretend we got 0 columns back
-        set0001(result);
-        hasResult = true;
-      }
-      if(!hasResult)
-      {
-        m_PendingGpuSampleGatherOpsResults.push_back(sampleGatherOp.result);
-        m_PendingGpuSampleGatherOpsSampleRetTypes.push_back(sampleRetType);
-      }
-
-      DXIL_DEBUG_RDCASSERT(!m_PendingLanes[workgroupIndex]);
-      m_PendingLanes[workgroupIndex] = true;
-    }
-  }
-}
-
-// Must be called from the replay manager thread (the debugger thread)
-void Debugger::SyncPendingGpuOps()
-{
-  CHECK_DEBUGGER_THREAD();
-  if(m_PendingGpuMathsOpsResults.empty() && m_PendingGpuSampleGatherOpsResults.empty())
-    return;
-
-  if(!(m_ApiWrapper->GetQueuedResults(m_PendingGpuMathsOpsResults, m_PendingGpuSampleGatherOpsResults,
-                                      m_PendingGpuSampleGatherOpsSampleRetTypes)))
-  {
-    RDCERR("GetQueuedResults failed");
-    return;
-  }
-  m_PendingGpuMathsOpsResults.clear();
-  m_PendingGpuSampleGatherOpsResults.clear();
-  m_PendingGpuSampleGatherOpsSampleRetTypes.clear();
-}
-
-void Debugger::SimulationJobHelper()
-{
-  while(AtomicLoad(&atomic_simulationFinished) == 0)
-  {
-    for(uint32_t lane = 0; lane < m_Workgroup.size(); ++lane)
-    {
-      if(Atomic::CmpExch32(&m_QueuedJobs[lane], 1, 0) == 1)
-      {
-        StepThread(lane, StepThreadMode::RUN_MULTIPLE_STEPS);
-      }
-    }
-  };
-}
-
 };    // namespace DXILDebug

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -151,8 +151,8 @@ public:
   virtual rdcarray<DebugMessage> GetDebugMessages() = 0;
 
   virtual rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader) = 0;
-  virtual const ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader,
-                                            ShaderEntryPoint entry) = 0;
+  virtual ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader,
+                                      ShaderEntryPoint entry) = 0;
 
   virtual rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline) = 0;
   virtual rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl,
@@ -182,6 +182,8 @@ public:
 
   virtual void InitPostVSBuffers(uint32_t eventId) = 0;
   virtual void InitPostVSBuffers(const rdcarray<uint32_t> &passEvents) = 0;
+
+  virtual ResourceId GetLiveID(ResourceId id) = 0;
 
   virtual MeshFormat GetPostVSBuffers(uint32_t eventId, uint32_t instID, uint32_t viewID,
                                       MeshDataStage stage) = 0;

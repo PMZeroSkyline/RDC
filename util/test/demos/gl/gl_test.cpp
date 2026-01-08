@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -143,8 +143,7 @@ void OpenGLGraphicsTest::Shutdown()
   delete mainWindow;
 }
 
-GLuint OpenGLGraphicsTest::MakeProgram(std::string vertSrc, std::string fragSrc,
-                                       std::string geomSrc, std::function<void(GLuint)> prelink)
+GLuint OpenGLGraphicsTest::MakeProgram(std::string vertSrc, std::string fragSrc, std::string geomSrc)
 {
   GLuint vs = vertSrc.empty() ? 0 : glCreateShader(GL_VERTEX_SHADER);
   GLuint fs = fragSrc.empty() ? 0 : glCreateShader(GL_FRAGMENT_SHADER);
@@ -232,9 +231,6 @@ GLuint OpenGLGraphicsTest::MakeProgram(std::string vertSrc, std::string fragSrc,
 
   if(!vs || !fs)
     glProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
-
-  if(prelink)
-    prelink(program);
 
   glLinkProgram(program);
 
@@ -327,12 +323,6 @@ GLuint OpenGLGraphicsTest::MakeProgram()
   GLuint program = glCreateProgram();
   managedResources.progs.push_back(program);
   return program;
-}
-
-GLuint OpenGLGraphicsTest::MakePipelineProgram(GLenum type, std::string src)
-{
-  const char *c_str = src.c_str();
-  return glCreateShaderProgramv(type, 1, &c_str);
 }
 
 GLuint OpenGLGraphicsTest::MakeBuffer()

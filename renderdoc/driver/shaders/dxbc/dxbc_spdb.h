@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -175,33 +175,6 @@ struct DBIModule
   rdcstr objectName;
 };
 
-struct HashHeader
-{
-  uint32_t sig;
-  uint32_t version;
-  uint32_t size;
-  uint32_t numBuckets;
-};
-
-struct HashRecord
-{
-  uint32_t offset;
-  uint32_t cref;
-};
-
-struct PublicStreamHeader
-{
-  uint32_t hash;
-  uint32_t addrMap;
-  uint32_t numThunks;
-  uint32_t thunkByteSize;
-  uint16_t isectThunkTable;
-  uint16_t pad;
-  uint32_t offsThunkTable;
-  uint16_t numSections;
-  uint16_t pad2;
-};
-
 struct CompilandDetails
 {
   uint8_t Language;
@@ -240,6 +213,7 @@ struct InstructionLocation
 struct Inlinee
 {
   uint32_t id;
+  uint64_t ptr;
   uint64_t parentPtr;
   uint32_t fileOffs;
   uint32_t baseLineNum;
@@ -305,10 +279,9 @@ public:
   void GetLineInfo(size_t instruction, uintptr_t offset, LineColumnInfo &lineInfo) const;
   void GetCallstack(size_t instruction, uintptr_t offset, rdcarray<rdcstr> &callstack) const;
 
+  bool HasSourceMapping() const;
   void GetLocals(const DXBC::DXBCContainer *dxbc, size_t instruction, uintptr_t offset,
                  rdcarray<SourceVariableMapping> &locals) const;
-
-  void FillReflection(DXBC::Reflection &refl);
 
 private:
   void UnrollGroupsharedMappings(const std::map<uint32_t, TypeDesc> &typeInfo,
@@ -334,13 +307,5 @@ private:
 
   std::map<uint32_t, Function> m_Functions;
   std::map<uint32_t, InstInfo> m_InstructionInfo;
-
-  rdcarray<ShaderInputBind> SRVs;
-  rdcarray<ShaderInputBind> UAVs;
-  std::map<rdcstr, CBufferVariableType> ResourceBinds;
-
-  rdcarray<ShaderInputBind> Samplers;
-
-  rdcarray<CBuffer> CBuffers;
 };
 };

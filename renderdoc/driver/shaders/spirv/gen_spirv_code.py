@@ -57,8 +57,6 @@ def operand_name(name, lowercase_first = True):
         return 'arguments'
     if re.search(r'variable, parent.*\.\.\.', name, re.RegexFlag.I):
         return 'parents'
-    if re.search(r'condition 0, operand.*\.\.\.', name, re.RegexFlag.I):
-        return 'conditional_arguments'
 
     name = re.sub(r'<<(.*),(.*)>>', r'\2', name)
     name = re.sub(r'[ \'~<>./-]', '', name)
@@ -81,7 +79,7 @@ copyright = '''
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -210,16 +208,6 @@ inline uint32_t DecodeParam(const ConstIter &it, uint32_t &word)
   if(word >= it.size()) return 0;
   
   uint32_t ret = it.word(word);
-  word += 1;
-  return ret;
-}}
-
-template<>
-inline Capability DecodeParam(const ConstIter &it, uint32_t &word)
-{{
-  if(word >= it.size()) return Capability::Invalid;
-  
-  Capability ret = Capability(word);
   word += 1;
   return ret;
 }}
@@ -534,20 +522,14 @@ tostr_decls = ''
 # Second pass to declare operand parameter structs in ops helper header
 for operand_kind in spirv['operand_kinds']:
     name = operand_kind['kind']
-    none = []
-    if operand_kind['category'] == 'BitEnum':
-        none = [v['enumerant'] for v in operand_kind['enumerants'] if 'None' in v['enumerant']]
-    if len(none) > 0:
-        none = none[0]
-    else:
-        none = ''
 
     if not operand_kind['has_params']:
         if operand_kind['category'] == 'ValueEnum':
             ops_header.write('inline uint16_t OptionalWordCount(const {0} val) {{ return val != {0}::Invalid ? 1 : 0; }}\n\n'.format(name))
         elif operand_kind['category'] == 'BitEnum':
-            if none != '':
-                ops_header.write('inline uint16_t OptionalWordCount(const {0} val) {{ return val != {0}::{1} ? 1 : 0; }}\n\n'.format(name, none))
+            none = [v['enumerant'] for v in operand_kind['enumerants'] if 'None' in v['enumerant']]
+            if len(none) > 0:
+                ops_header.write('inline uint16_t OptionalWordCount(const {0} val) {{ return val != {0}::{1} ? 1 : 0; }}\n\n'.format(name, none[0]))
         continue
 
     values = ''
@@ -599,10 +581,7 @@ for operand_kind in spirv['operand_kinds']:
                 param = value['parameters'][0]
                 size += kinds[param['kind']]['size']
                 param_type = kinds[param['kind']]['type']
-                if bit_enum:
-                    member = "{} {} = {{}};\n".format(param_type, param_name)
-                else:
-                    member = "{} {};\n".format(param_type, param_name)
+                member = "{} {};\n".format(param_type, param_name)
 
                 if value_enum:
                     values += '  '
@@ -730,15 +709,14 @@ rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv:
 '''.format(name=name, tostr_cases=tostr_cases.rstrip())
 
         tostr_decls += '''template<>
-rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv::{name}AndParamData &el);\n'''.format(name=name)
+rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv::{name}AndParamData &el);'''.format(name=name)
 
         header.write('''struct {name}AndParamData
 {{
-  {name}AndParamData({name} v = {name}::Invalid) : value(v), _init(0) {{}}
+  {name}AndParamData({name} v = {name}::Invalid) : value(v) {{}}
   {name} value;
   union
   {{
-    uint64_t _init;
 {values}
   }};
   
@@ -797,11 +775,11 @@ rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv:
 '''.format(name=name, tostr_cases=tostr_cases.rstrip())
 
         tostr_decls += '''template<>
-rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv::{name}AndParamDatas &el);\n'''.format(name=name)
+rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv::{name}AndParamDatas &el);'''.format(name=name)
 
         header.write('''struct {name}AndParamDatas
 {{
-  {name}AndParamDatas({name} f = {name}::{none}) : flags(f) {{}}
+  {name}AndParamDatas({name} f = {name}::None) : flags(f) {{}}
   {name} flags;
 {values}
   
@@ -810,7 +788,7 @@ rdcstr ParamToStr(const std::function<rdcstr(rdcspv::Id)> &idName, const rdcspv:
 {set_unset}
 }};
 
-'''.format(name=name, none=none, values=values.rstrip(), set_unset=set_unset.rstrip()))
+'''.format(name=name, values=values.rstrip(), set_unset=set_unset.rstrip()))
 
         ops_header.write('''template<>
 inline {name}AndParamDatas DecodeParam(const ConstIter &it, uint32_t &word)

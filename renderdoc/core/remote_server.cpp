@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -50,54 +50,48 @@ RDOC_CONFIG(bool, RemoteServer_DebugLogging, false,
 static const uint32_t RemoteServerProtocolVersion =
     MAKE_REMOTE_SERVER_VERSION(RENDERDOC_VERSION_MAJOR, RENDERDOC_VERSION_MINOR);
 
-enum class RemoteServerPacket
+enum RemoteServerPacket
 {
   // fixed packets. These are used cross-version so MUST NOT CHANGE
-  Noop = 1,
-  Handshake,
-  VersionMismatch,
-  Busy,
-  VersionMismatch2,    // sent for versions 1.23 and above, including the version info
+  eRemoteServer_Noop = 1,
+  eRemoteServer_Handshake,
+  eRemoteServer_VersionMismatch,
+  eRemoteServer_Busy,
+  eRemoteServer_VersionMismatch2,    // sent for versions 1.23 and above, including the version info
 
   // variable packets. These are used only after a handshake has been established with an identical
   // version so can be freely changed
-  Ping,
-  RemoteDriverList,
-  TakeOwnershipCapture,
-  CopyCaptureToRemote,
-  CopyCaptureFromRemote,
-  OpenLog,
-  LogOpenProgress,
-  LogOpened,
-  HasCallstacks,
-  InitResolver,
-  ResolverProgress,
-  GetResolve,
-  CloseLog,
-  HomeDir,
-  ListDir,
-  ExecuteAndInject,
-  ShutdownServer,
-  GetDriverName,
-  GetSectionCount,
-  FindSectionByName,
-  FindSectionByType,
-  GetSectionProperties,
-  GetSectionContents,
-  WriteSection,
-  GetAvailableGPUs,
-  EmbedDependenciesIntoCapture,
-  RemoveDependenciesFromCapture,
-  HasEmbeddedDependencies,
-  HasPendingDependencies,
-  GetPendingDependenciesNicknames,
-  // This must be last
-  Count,
+  eRemoteServer_Ping,
+  eRemoteServer_RemoteDriverList,
+  eRemoteServer_TakeOwnershipCapture,
+  eRemoteServer_CopyCaptureToRemote,
+  eRemoteServer_CopyCaptureFromRemote,
+  eRemoteServer_OpenLog,
+  eRemoteServer_LogOpenProgress,
+  eRemoteServer_LogOpened,
+  eRemoteServer_HasCallstacks,
+  eRemoteServer_InitResolver,
+  eRemoteServer_ResolverProgress,
+  eRemoteServer_GetResolve,
+  eRemoteServer_CloseLog,
+  eRemoteServer_HomeDir,
+  eRemoteServer_ListDir,
+  eRemoteServer_ExecuteAndInject,
+  eRemoteServer_ShutdownServer,
+  eRemoteServer_GetDriverName,
+  eRemoteServer_GetSectionCount,
+  eRemoteServer_FindSectionByName,
+  eRemoteServer_FindSectionByType,
+  eRemoteServer_GetSectionProperties,
+  eRemoteServer_GetSectionContents,
+  eRemoteServer_WriteSection,
+  eRemoteServer_GetAvailableGPUs,
+  eRemoteServer_RemoteServerCount,
 };
 
 DECLARE_REFLECTION_ENUM(RemoteServerPacket);
 
-RDCCOMPILE_ASSERT((int)RemoteServerPacket::Count < (int)eReplayProxy_First,
+RDCCOMPILE_ASSERT((int)eRemoteServer_RemoteServerCount < (int)eReplayProxy_First,
                   "Remote server and Replay Proxy packets overlap");
 
 template <>
@@ -105,59 +99,48 @@ rdcstr DoStringise(const RemoteServerPacket &el)
 {
   BEGIN_ENUM_STRINGISE(RemoteServerPacket);
   {
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::Noop, "No-op");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::Handshake, "Handshake");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::VersionMismatch, "VersionMismatch");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::Busy, "Busy");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::VersionMismatch2, "VersionMismatch");
+    STRINGISE_ENUM_NAMED(eRemoteServer_Noop, "No-op");
+    STRINGISE_ENUM_NAMED(eRemoteServer_Handshake, "Handshake");
+    STRINGISE_ENUM_NAMED(eRemoteServer_VersionMismatch, "VersionMismatch");
+    STRINGISE_ENUM_NAMED(eRemoteServer_Busy, "Busy");
+    STRINGISE_ENUM_NAMED(eRemoteServer_VersionMismatch2, "VersionMismatch");
 
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::Ping, "Ping");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::RemoteDriverList, "RemoteDriverList");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::TakeOwnershipCapture, "TakeOwnershipCapture");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::CopyCaptureToRemote, "CopyCaptureToRemote");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::CopyCaptureFromRemote, "CopyCaptureFromRemote");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::OpenLog, "OpenLog");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::LogOpenProgress, "LogOpenProgress");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::LogOpened, "LogOpened");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::HasCallstacks, "HasCallstacks");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::InitResolver, "InitResolver");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::ResolverProgress, "ResolverProgress");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetResolve, "GetResolve");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::CloseLog, "CloseLog");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::HomeDir, "HomeDir");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::ListDir, "ListDir");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::ExecuteAndInject, "ExecuteAndInject");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::ShutdownServer, "ShutdownServer");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetDriverName, "GetDriverName");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetSectionCount, "GetSectionCount");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::FindSectionByName, "FindSectionByName");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::FindSectionByType, "FindSectionByType");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetSectionProperties, "GetSectionProperties");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetSectionContents, "GetSectionContents");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::WriteSection, "WriteSection");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetAvailableGPUs, "GetAvailableGPUs");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::EmbedDependenciesIntoCapture,
-                         "EmbedDependenciesIntoCapture");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::RemoveDependenciesFromCapture,
-                         "RemoveDependenciesFromCapture");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::HasEmbeddedDependencies, "HasEmbeddedDependencies");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::HasPendingDependencies, "HasPendingDependencies");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::GetPendingDependenciesNicknames,
-                         "GetPendingDependenciesNicknames");
-    STRINGISE_ENUM_NAMED(RemoteServerPacket::Count, "Count");
+    STRINGISE_ENUM_NAMED(eRemoteServer_Ping, "Ping");
+    STRINGISE_ENUM_NAMED(eRemoteServer_RemoteDriverList, "RemoteDriverList");
+    STRINGISE_ENUM_NAMED(eRemoteServer_TakeOwnershipCapture, "TakeOwnershipCapture");
+    STRINGISE_ENUM_NAMED(eRemoteServer_CopyCaptureToRemote, "CopyCaptureToRemote");
+    STRINGISE_ENUM_NAMED(eRemoteServer_CopyCaptureFromRemote, "CopyCaptureFromRemote");
+    STRINGISE_ENUM_NAMED(eRemoteServer_OpenLog, "OpenLog");
+    STRINGISE_ENUM_NAMED(eRemoteServer_LogOpenProgress, "LogOpenProgress");
+    STRINGISE_ENUM_NAMED(eRemoteServer_LogOpened, "LogOpened");
+    STRINGISE_ENUM_NAMED(eRemoteServer_HasCallstacks, "HasCallstacks");
+    STRINGISE_ENUM_NAMED(eRemoteServer_InitResolver, "InitResolver");
+    STRINGISE_ENUM_NAMED(eRemoteServer_ResolverProgress, "ResolverProgress");
+    STRINGISE_ENUM_NAMED(eRemoteServer_GetResolve, "GetResolve");
+    STRINGISE_ENUM_NAMED(eRemoteServer_CloseLog, "CloseLog");
+    STRINGISE_ENUM_NAMED(eRemoteServer_HomeDir, "HomeDir");
+    STRINGISE_ENUM_NAMED(eRemoteServer_ListDir, "ListDir");
+    STRINGISE_ENUM_NAMED(eRemoteServer_ExecuteAndInject, "ExecuteAndInject");
+    STRINGISE_ENUM_NAMED(eRemoteServer_ShutdownServer, "ShutdownServer");
+    STRINGISE_ENUM_NAMED(eRemoteServer_GetDriverName, "GetDriverName");
+    STRINGISE_ENUM_NAMED(eRemoteServer_GetSectionCount, "GetSectionCount");
+    STRINGISE_ENUM_NAMED(eRemoteServer_FindSectionByName, "FindSectionByName");
+    STRINGISE_ENUM_NAMED(eRemoteServer_FindSectionByType, "FindSectionByType");
+    STRINGISE_ENUM_NAMED(eRemoteServer_GetSectionProperties, "GetSectionProperties");
+    STRINGISE_ENUM_NAMED(eRemoteServer_GetSectionContents, "GetSectionContents");
+    STRINGISE_ENUM_NAMED(eRemoteServer_WriteSection, "WriteSection");
+    STRINGISE_ENUM_NAMED(eRemoteServer_GetAvailableGPUs, "GetAvailableGPUs");
+    STRINGISE_ENUM_NAMED(eRemoteServer_RemoteServerCount, "RemoteServerCount");
   }
   END_ENUM_STRINGISE();
 }
 
 rdcstr GetRemoteServerChunkName(uint32_t idx)
 {
-  if(idx <= (uint32_t)RemoteServerPacket::Count)
+  if(idx < eRemoteServer_RemoteServerCount)
     return ToStr((RemoteServerPacket)idx);
 
-  if(idx >= eReplayProxy_First)
-    return ToStr((ReplayProxyPacket)idx);
-
-  return StringFormat::Fmt("Invalid RemoteServerChunkIndex %u", idx);
+  return ToStr((ReplayProxyPacket)idx);
 }
 
 #define WRITE_DATA_SCOPE() WriteSerialiser &ser = writer;
@@ -203,7 +186,7 @@ static bool HandleHandshakeClient(ActiveClient &activeClient, ClientThread *thre
     // the server thread
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(ser.IsErrored() || type != RemoteServerPacket::Handshake)
+    if(ser.IsErrored() || type != eRemoteServer_Handshake)
     {
       RDCWARN("Didn't receive proper handshake");
       return activeConnectionEstablished;
@@ -229,13 +212,13 @@ static bool HandleHandshakeClient(ActiveClient &activeClient, ClientThread *thre
       // to.
       if(version >= MAKE_REMOTE_SERVER_VERSION(1, 23))
       {
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::VersionMismatch2);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_VersionMismatch2);
 
         SERIALISE_ELEMENT(RemoteServerProtocolVersion);
       }
       else
       {
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::VersionMismatch);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_VersionMismatch);
       }
     }
     else
@@ -262,7 +245,7 @@ static bool HandleHandshakeClient(ActiveClient &activeClient, ClientThread *thre
         RDCLOG("Returning busy signal for connection from %u.%u.%u.%u.", Network::GetIPOctet(ip, 0),
                Network::GetIPOctet(ip, 1), Network::GetIPOctet(ip, 2), Network::GetIPOctet(ip, 3));
 
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::Busy);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_Busy);
       }
       // otherwise we return a successful handshake. For active connections this begins the active
       // thread, for passive connection checks this is enough
@@ -271,7 +254,7 @@ static bool HandleHandshakeClient(ActiveClient &activeClient, ClientThread *thre
         RDCLOG("Returning OK signal for connection from %u.%u.%u.%u.", Network::GetIPOctet(ip, 0),
                Network::GetIPOctet(ip, 1), Network::GetIPOctet(ip, 2), Network::GetIPOctet(ip, 3));
 
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::Handshake);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_Handshake);
       }
     }
   }
@@ -343,7 +326,7 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
     if(client == NULL)
       continue;
 
-    if(type == RemoteServerPacket::Ping)
+    if(type == eRemoteServer_Ping)
     {
       reader.EndChunk();
 
@@ -354,9 +337,9 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
       Android::TickDeviceLogcat();
 
       WRITE_DATA_SCOPE();
-      SCOPED_SERIALISE_CHUNK(RemoteServerPacket::Ping);
+      SCOPED_SERIALISE_CHUNK(eRemoteServer_Ping);
     }
-    else if(type == RemoteServerPacket::RemoteDriverList)
+    else if(type == eRemoteServer_RemoteDriverList)
     {
       reader.EndChunk();
 
@@ -364,7 +347,7 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
       uint32_t count = (uint32_t)drivers.size();
 
       WRITE_DATA_SCOPE();
-      SCOPED_SERIALISE_CHUNK(RemoteServerPacket::RemoteDriverList);
+      SCOPED_SERIALISE_CHUNK(eRemoteServer_RemoteDriverList);
       SERIALISE_ELEMENT(count);
 
       for(auto it = drivers.begin(); it != drivers.end(); ++it)
@@ -376,7 +359,7 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
         SERIALISE_ELEMENT(driverName);
       }
     }
-    else if(type == RemoteServerPacket::HomeDir)
+    else if(type == eRemoteServer_HomeDir)
     {
       reader.EndChunk();
 
@@ -384,11 +367,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HomeDir);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_HomeDir);
         SERIALISE_ELEMENT(home);
       }
     }
-    else if(type == RemoteServerPacket::ListDir)
+    else if(type == eRemoteServer_ListDir)
     {
       rdcstr path;
 
@@ -404,11 +387,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ListDir);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_ListDir);
         SERIALISE_ELEMENT(files);
       }
     }
-    else if(type == RemoteServerPacket::CopyCaptureFromRemote)
+    else if(type == eRemoteServer_CopyCaptureFromRemote)
     {
       rdcstr path;
 
@@ -421,13 +404,13 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::CopyCaptureFromRemote);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_CopyCaptureFromRemote);
 
         StreamReader fileStream(FileIO::fopen(path, FileIO::ReadBinary));
         ser.SerialiseStream(path, fileStream);
       }
     }
-    else if(type == RemoteServerPacket::CopyCaptureToRemote)
+    else if(type == eRemoteServer_CopyCaptureToRemote)
     {
       rdcstr path;
       rdcstr dummy, dummy2;
@@ -468,11 +451,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::CopyCaptureToRemote);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_CopyCaptureToRemote);
         SERIALISE_ELEMENT(path);
       }
     }
-    else if(type == RemoteServerPacket::TakeOwnershipCapture)
+    else if(type == eRemoteServer_TakeOwnershipCapture)
     {
       rdcstr path;
 
@@ -487,7 +470,7 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       tempFiles.push_back(path);
     }
-    else if(type == RemoteServerPacket::GetAvailableGPUs)
+    else if(type == eRemoteServer_GetAvailableGPUs)
     {
       reader.EndChunk();
 
@@ -495,11 +478,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetAvailableGPUs);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_GetAvailableGPUs);
         SERIALISE_ELEMENT(gpus);
       }
     }
-    else if(type == RemoteServerPacket::ShutdownServer)
+    else if(type == eRemoteServer_ShutdownServer)
     {
       reader.EndChunk();
 
@@ -510,10 +493,10 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ShutdownServer);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_ShutdownServer);
       }
     }
-    else if(type == RemoteServerPacket::OpenLog)
+    else if(type == eRemoteServer_OpenLog)
     {
       rdcstr path;
       ReplayOptions opts;
@@ -547,24 +530,12 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
             {
               {
                 WRITE_DATA_SCOPE();
-                SCOPED_SERIALISE_CHUNK(RemoteServerPacket::LogOpenProgress);
+                SCOPED_SERIALISE_CHUNK(eRemoteServer_LogOpenProgress);
                 SERIALISE_ELEMENT(progress);
               }
               Threading::Sleep(100);
             }
           });
-
-          // This has to be before the driver is created for the capture
-          RenderDoc::Inst().ClearTrackedFiles();
-          if(rdc->SectionIndex(SectionType::EmbeddedExternalFiles) >= 0)
-          {
-            ResultDetails ret = RenderDoc::Inst().ReadExternalFiles(rdc);
-            if(!ret.OK())
-            {
-              RDCERR("ReadExternalFiles failed Code:'%s' Message:'%s'", ToStr(ret.code).c_str(),
-                     ret.Message().c_str());
-            }
-          }
 
           // if we have a replay driver, try to create it so we can display a local preview e.g.
           if(RenderDoc::Inst().HasReplayDriver(rdc->GetDriver()))
@@ -616,11 +587,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::LogOpened);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_LogOpened);
         SERIALISE_ELEMENT(result);
       }
     }
-    else if(type == RemoteServerPacket::HasCallstacks)
+    else if(type == eRemoteServer_HasCallstacks)
     {
       reader.EndChunk();
 
@@ -628,11 +599,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HasCallstacks);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_HasCallstacks);
         SERIALISE_ELEMENT(HasCallstacks);
       }
     }
-    else if(type == RemoteServerPacket::InitResolver)
+    else if(type == eRemoteServer_InitResolver)
     {
       reader.EndChunk();
 
@@ -662,7 +633,7 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
             {
               {
                 WRITE_DATA_SCOPE();
-                SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ResolverProgress);
+                SCOPED_SERIALISE_CHUNK(eRemoteServer_ResolverProgress);
                 SERIALISE_ELEMENT(progress);
               }
               Threading::Sleep(100);
@@ -683,11 +654,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::InitResolver);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_InitResolver);
         SERIALISE_ELEMENT(res);
       }
     }
-    else if(type == RemoteServerPacket::GetResolve)
+    else if(type == eRemoteServer_GetResolve)
     {
       rdcarray<uint64_t> StackAddresses;
 
@@ -716,22 +687,22 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetResolve);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_GetResolve);
         SERIALISE_ELEMENT(StackFrames);
       }
     }
-    else if(type == RemoteServerPacket::GetDriverName)
+    else if(type == eRemoteServer_GetDriverName)
     {
       reader.EndChunk();
 
       rdcstr driver = rdc ? rdc->GetDriverName() : "";
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetDriverName);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_GetDriverName);
         SERIALISE_ELEMENT(driver);
       }
     }
-    else if(type == RemoteServerPacket::GetSectionCount)
+    else if(type == eRemoteServer_GetSectionCount)
     {
       reader.EndChunk();
 
@@ -739,11 +710,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetSectionCount);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_GetSectionCount);
         SERIALISE_ELEMENT(count);
       }
     }
-    else if(type == RemoteServerPacket::FindSectionByName)
+    else if(type == eRemoteServer_FindSectionByName)
     {
       rdcstr name;
 
@@ -758,11 +729,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::FindSectionByName);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_FindSectionByName);
         SERIALISE_ELEMENT(index);
       }
     }
-    else if(type == RemoteServerPacket::FindSectionByType)
+    else if(type == eRemoteServer_FindSectionByType)
     {
       SectionType sectionType;
 
@@ -777,11 +748,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::FindSectionByType);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_FindSectionByType);
         SERIALISE_ELEMENT(index);
       }
     }
-    else if(type == RemoteServerPacket::GetSectionProperties)
+    else if(type == eRemoteServer_GetSectionProperties)
     {
       int index = -1;
 
@@ -798,11 +769,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetSectionProperties);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_GetSectionProperties);
         SERIALISE_ELEMENT(props);
       }
     }
-    else if(type == RemoteServerPacket::GetSectionContents)
+    else if(type == eRemoteServer_GetSectionContents)
     {
       int index = -1;
 
@@ -830,11 +801,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetSectionContents);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_GetSectionContents);
         SERIALISE_ELEMENT(contents);
       }
     }
-    else if(type == RemoteServerPacket::WriteSection)
+    else if(type == eRemoteServer_WriteSection)
     {
       SectionProperties props;
       bytebuf contents;
@@ -871,11 +842,11 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::WriteSection);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_WriteSection);
         SERIALISE_ELEMENT(result);
       }
     }
-    else if(type == RemoteServerPacket::CloseLog)
+    else if(type == eRemoteServer_CloseLog)
     {
       reader.EndChunk();
 
@@ -889,7 +860,7 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
       SAFE_DELETE(rdc);
       SAFE_DELETE(resolver);
     }
-    else if(type == RemoteServerPacket::ExecuteAndInject)
+    else if(type == eRemoteServer_ExecuteAndInject)
     {
       rdcstr app, workingDir, cmdLine, logfile;
       CaptureOptions opts;
@@ -921,116 +892,14 @@ static void ActiveRemoteClientThread(ClientThread *threadData,
 
       {
         WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ExecuteAndInject);
+        SCOPED_SERIALISE_CHUNK(eRemoteServer_ExecuteAndInject);
         SERIALISE_ELEMENT(res);
         SERIALISE_ELEMENT(ident);
       }
     }
-    else if(type == RemoteServerPacket::EmbedDependenciesIntoCapture)
-    {
-      reader.EndChunk();
-
-      RDResult result;
-      if(rdc)
-      {
-        result = RenderDoc::Inst().EmbedExternalFiles(rdc);
-      }
-      else
-      {
-        SET_ERROR_RESULT(result, ResultCode::InternalError,
-                         "Attempt to embed external dependency files with no capture open");
-      }
-
-      {
-        WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::EmbedDependenciesIntoCapture);
-        SERIALISE_ELEMENT(result);
-      }
-    }
-    else if(type == RemoteServerPacket::RemoveDependenciesFromCapture)
-    {
-      reader.EndChunk();
-
-      RDResult result;
-      if(rdc)
-      {
-        result = RenderDoc::Inst().RemoveExternalFiles(rdc);
-      }
-      else
-      {
-        SET_ERROR_RESULT(result, ResultCode::InternalError,
-                         "Attempt to remove external files with no capture open");
-      }
-
-      {
-        WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::RemoveDependenciesFromCapture);
-        SERIALISE_ELEMENT(result);
-      }
-    }
-    else if(type == RemoteServerPacket::HasEmbeddedDependencies)
-    {
-      reader.EndChunk();
-
-      bool res = false;
-      if(rdc)
-      {
-        res = RenderDoc::Inst().HasEmbeddedFiles(rdc);
-      }
-      else
-      {
-        RDCWARN("Attempt to check for embedded files with no capture open");
-      }
-
-      {
-        WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HasEmbeddedDependencies);
-        SERIALISE_ELEMENT(res);
-      }
-    }
-    else if(type == RemoteServerPacket::HasPendingDependencies)
-    {
-      reader.EndChunk();
-
-      bool res = false;
-      if(rdc)
-      {
-        res = RenderDoc::Inst().HasTrackedFileData();
-      }
-      else
-      {
-        RDCWARN("Attempt to check for externally referenced files with no capture open");
-      }
-
-      {
-        WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HasPendingDependencies);
-        SERIALISE_ELEMENT(res);
-      }
-    }
-    else if(type == RemoteServerPacket::GetPendingDependenciesNicknames)
-    {
-      reader.EndChunk();
-
-      rdcarray<rdcstr> res;
-      if(rdc)
-      {
-        res = RenderDoc::Inst().GetTrackedFileNicknames();
-      }
-      else
-      {
-        RDCWARN("Attempt to get nickanmes of externally referenced files with no capture open");
-      }
-
-      {
-        WRITE_DATA_SCOPE();
-        SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetPendingDependenciesNicknames);
-        SERIALISE_ELEMENT(res);
-      }
-    }
     else if((int)type >= eReplayProxy_First && proxy)
     {
-      bool ok = proxy->Tick((int)type);
+      bool ok = proxy->Tick(type);
 
       if(!ok)
         break;
@@ -1328,7 +1197,7 @@ RENDERDOC_CreateRemoteServerConnection(const rdcstr &URL, IRemoteServer **rend)
 
     ser.SetStreamingMode(true);
 
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::Handshake);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_Handshake);
     SERIALISE_ELEMENT(version);
     SERIALISE_ELEMENT(activeConnection);
   }
@@ -1344,20 +1213,20 @@ RENDERDOC_CreateRemoteServerConnection(const rdcstr &URL, IRemoteServer **rend)
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
     uint32_t remoteVersion = 0;
-    if(type == RemoteServerPacket::VersionMismatch2)
+    if(type == eRemoteServer_VersionMismatch2)
     {
       SERIALISE_ELEMENT(remoteVersion);
     }
 
     ser.EndChunk();
 
-    if(type == RemoteServerPacket::Busy)
+    if(type == eRemoteServer_Busy)
     {
       SAFE_DELETE(sock);
       return RDResult(ResultCode::NetworkRemoteBusy);
     }
 
-    if(type == RemoteServerPacket::VersionMismatch || type == RemoteServerPacket::VersionMismatch2)
+    if(type == eRemoteServer_VersionMismatch || type == eRemoteServer_VersionMismatch2)
     {
       SAFE_DELETE(sock);
 
@@ -1369,7 +1238,7 @@ RENDERDOC_CreateRemoteServerConnection(const rdcstr &URL, IRemoteServer **rend)
       return RDResult(ResultCode::NetworkVersionMismatch, ver);
     }
 
-    if(ser.IsErrored() || type != RemoteServerPacket::Handshake)
+    if(ser.IsErrored() || type != eRemoteServer_Handshake)
     {
       RDCWARN("Didn't get proper handshake");
       SAFE_DELETE(sock);
@@ -1460,7 +1329,7 @@ void RemoteServer::ShutdownServerAndConnection()
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ShutdownServer);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_ShutdownServer);
   }
 
   {
@@ -1468,7 +1337,7 @@ void RemoteServer::ShutdownServerAndConnection()
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
     ser.EndChunk();
 
-    RDCASSERT(type == RemoteServerPacket::ShutdownServer);
+    RDCASSERT(type == eRemoteServer_ShutdownServer);
   }
 
   delete this;
@@ -1491,7 +1360,7 @@ ResultDetails RemoteServer::Ping()
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::Ping);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_Ping);
   }
 
   RemoteServerPacket type;
@@ -1502,7 +1371,7 @@ ResultDetails RemoteServer::Ping()
     ser.EndChunk();
   }
 
-  if(type == RemoteServerPacket::Ping)
+  if(type == eRemoteServer_Ping)
     ret = ResultCode::Succeeded;
   else
     ret = ResultCode::RemoteServerConnectionLost;
@@ -1529,7 +1398,7 @@ rdcarray<rdcstr> RemoteServer::RemoteSupportedReplays()
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::RemoteDriverList);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_RemoteDriverList);
   }
 
   {
@@ -1537,7 +1406,7 @@ rdcarray<rdcstr> RemoteServer::RemoteSupportedReplays()
 
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::RemoteDriverList)
+    if(type == eRemoteServer_RemoteDriverList)
     {
       uint32_t count = 0;
       SERIALISE_ELEMENT(count);
@@ -1570,7 +1439,7 @@ rdcstr RemoteServer::GetHomeFolder()
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HomeDir);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_HomeDir);
   }
 
   rdcstr home;
@@ -1580,7 +1449,7 @@ rdcstr RemoteServer::GetHomeFolder()
 
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::HomeDir)
+    if(type == eRemoteServer_HomeDir)
     {
       SERIALISE_ELEMENT(home);
     }
@@ -1599,7 +1468,7 @@ rdcarray<PathEntry> RemoteServer::ListFolder(const rdcstr &path)
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ListDir);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_ListDir);
     SERIALISE_ELEMENT(path);
   }
 
@@ -1610,7 +1479,7 @@ rdcarray<PathEntry> RemoteServer::ListFolder(const rdcstr &path)
 
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::ListDir)
+    if(type == eRemoteServer_ListDir)
     {
       SERIALISE_ELEMENT(files);
     }
@@ -1635,7 +1504,7 @@ ExecuteResult RemoteServer::ExecuteAndInject(const rdcstr &app, const rdcstr &wo
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::ExecuteAndInject);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_ExecuteAndInject);
     SERIALISE_ELEMENT(app);
     SERIALISE_ELEMENT(workingDir);
     SERIALISE_ELEMENT(cmdline);
@@ -1649,7 +1518,7 @@ ExecuteResult RemoteServer::ExecuteAndInject(const rdcstr &app, const rdcstr &wo
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::ExecuteAndInject)
+    if(type == eRemoteServer_ExecuteAndInject)
     {
       SERIALISE_ELEMENT_LOCAL(result, RDResult());
       SERIALISE_ELEMENT_LOCAL(ident, uint32_t());
@@ -1673,7 +1542,7 @@ void RemoteServer::CopyCaptureFromRemote(const rdcstr &remotepath, const rdcstr 
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::CopyCaptureFromRemote);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_CopyCaptureFromRemote);
     SERIALISE_ELEMENT(remotepath);
   }
 
@@ -1681,7 +1550,7 @@ void RemoteServer::CopyCaptureFromRemote(const rdcstr &remotepath, const rdcstr 
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::CopyCaptureFromRemote)
+    if(type == eRemoteServer_CopyCaptureFromRemote)
     {
       StreamWriter streamWriter(FileIO::fopen(localpath, FileIO::WriteBinary), Ownership::Stream);
 
@@ -1714,7 +1583,7 @@ rdcstr RemoteServer::CopyCaptureToRemote(const rdcstr &filename, RENDERDOC_Progr
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::CopyCaptureToRemote);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_CopyCaptureToRemote);
 
     // this will take ownership of and close the file
     StreamReader fileStream(fileHandle);
@@ -1727,7 +1596,7 @@ rdcstr RemoteServer::CopyCaptureToRemote(const rdcstr &filename, RENDERDOC_Progr
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::CopyCaptureToRemote)
+    if(type == eRemoteServer_CopyCaptureToRemote)
     {
       SERIALISE_ELEMENT(path);
     }
@@ -1746,7 +1615,7 @@ void RemoteServer::TakeOwnershipCapture(const rdcstr &filename)
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::TakeOwnershipCapture);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_TakeOwnershipCapture);
     SERIALISE_ELEMENT(filename);
   }
 }
@@ -1775,18 +1644,18 @@ rdcpair<ResultDetails, IReplayController *> RemoteServer::OpenCapture(
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::OpenLog);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_OpenLog);
     SERIALISE_ELEMENT(filename);
     SERIALISE_ELEMENT(opts);
   }
 
-  RemoteServerPacket type = RemoteServerPacket::Noop;
+  RemoteServerPacket type = eRemoteServer_Noop;
   while(!reader->IsErrored())
   {
     READ_DATA_SCOPE();
     type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(reader->IsErrored() || type != RemoteServerPacket::LogOpenProgress)
+    if(reader->IsErrored() || type != eRemoteServer_LogOpenProgress)
       break;
 
     float progressValue = 0.0f;
@@ -1801,7 +1670,7 @@ rdcpair<ResultDetails, IReplayController *> RemoteServer::OpenCapture(
 
   RDCLOG("Capture open complete");
 
-  if(reader->IsErrored() || type != RemoteServerPacket::LogOpened)
+  if(reader->IsErrored() || type != eRemoteServer_LogOpened)
   {
     RDCERR("Error opening capture");
     ret.first = ResultCode::NetworkIOFailed;
@@ -1867,7 +1736,7 @@ void RemoteServer::CloseCapture(IReplayController *rend)
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::CloseLog);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_CloseLog);
   }
 }
 
@@ -1878,7 +1747,7 @@ rdcstr RemoteServer::DriverName()
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetDriverName);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_GetDriverName);
   }
 
   rdcstr driverName = "";
@@ -1887,7 +1756,7 @@ rdcstr RemoteServer::DriverName()
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::GetDriverName)
+    if(type == eRemoteServer_GetDriverName)
     {
       SERIALISE_ELEMENT(driverName);
     }
@@ -1909,7 +1778,7 @@ rdcarray<GPUDevice> RemoteServer::GetAvailableGPUs()
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetAvailableGPUs);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_GetAvailableGPUs);
   }
 
   rdcarray<GPUDevice> gpus;
@@ -1918,7 +1787,7 @@ rdcarray<GPUDevice> RemoteServer::GetAvailableGPUs()
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::GetAvailableGPUs)
+    if(type == eRemoteServer_GetAvailableGPUs)
     {
       SERIALISE_ELEMENT(gpus);
     }
@@ -1940,7 +1809,7 @@ int RemoteServer::GetSectionCount()
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetSectionCount);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_GetSectionCount);
   }
 
   int count = 0;
@@ -1949,7 +1818,7 @@ int RemoteServer::GetSectionCount()
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::GetSectionCount)
+    if(type == eRemoteServer_GetSectionCount)
     {
       SERIALISE_ELEMENT(count);
     }
@@ -1971,7 +1840,7 @@ int RemoteServer::FindSectionByName(const rdcstr &name)
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::FindSectionByName);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_FindSectionByName);
     SERIALISE_ELEMENT(name);
   }
 
@@ -1981,7 +1850,7 @@ int RemoteServer::FindSectionByName(const rdcstr &name)
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::FindSectionByName)
+    if(type == eRemoteServer_FindSectionByName)
     {
       SERIALISE_ELEMENT(index);
     }
@@ -2003,7 +1872,7 @@ int RemoteServer::FindSectionByType(SectionType sectionType)
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::FindSectionByType);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_FindSectionByType);
     SERIALISE_ELEMENT(sectionType);
   }
 
@@ -2013,7 +1882,7 @@ int RemoteServer::FindSectionByType(SectionType sectionType)
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::FindSectionByType)
+    if(type == eRemoteServer_FindSectionByType)
     {
       SERIALISE_ELEMENT(index);
     }
@@ -2035,7 +1904,7 @@ SectionProperties RemoteServer::GetSectionProperties(int index)
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetSectionProperties);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_GetSectionProperties);
     SERIALISE_ELEMENT(index);
   }
 
@@ -2045,7 +1914,7 @@ SectionProperties RemoteServer::GetSectionProperties(int index)
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::GetSectionProperties)
+    if(type == eRemoteServer_GetSectionProperties)
     {
       SERIALISE_ELEMENT(props);
     }
@@ -2067,7 +1936,7 @@ bytebuf RemoteServer::GetSectionContents(int index)
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetSectionContents);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_GetSectionContents);
     SERIALISE_ELEMENT(index);
   }
 
@@ -2077,7 +1946,7 @@ bytebuf RemoteServer::GetSectionContents(int index)
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::GetSectionContents)
+    if(type == eRemoteServer_GetSectionContents)
     {
       SERIALISE_ELEMENT(contents);
     }
@@ -2104,7 +1973,7 @@ ResultDetails RemoteServer::WriteSection(const SectionProperties &props, const b
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::WriteSection);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_WriteSection);
     SERIALISE_ELEMENT(props);
     SERIALISE_ELEMENT(contents);
   }
@@ -2115,13 +1984,13 @@ ResultDetails RemoteServer::WriteSection(const SectionProperties &props, const b
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::WriteSection)
+    if(type == eRemoteServer_WriteSection)
     {
       SERIALISE_ELEMENT(success);
     }
     else
     {
-      RDCERR("Unexpected response to write section request");
+      RDCERR("Unexpected response to has write section request");
     }
 
     ser.EndChunk();
@@ -2137,7 +2006,7 @@ bool RemoteServer::HasCallstacks()
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HasCallstacks);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_HasCallstacks);
   }
 
   bool hasCallstacks = false;
@@ -2146,7 +2015,7 @@ bool RemoteServer::HasCallstacks()
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::HasCallstacks)
+    if(type == eRemoteServer_HasCallstacks)
     {
       SERIALISE_ELEMENT(hasCallstacks);
     }
@@ -2165,16 +2034,16 @@ ResultDetails RemoteServer::InitResolver(bool interactive, RENDERDOC_ProgressCal
 {
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::InitResolver);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_InitResolver);
   }
 
-  RemoteServerPacket type = RemoteServerPacket::Noop;
+  RemoteServerPacket type = eRemoteServer_Noop;
   while(!reader->IsErrored())
   {
     READ_DATA_SCOPE();
     type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(reader->IsErrored() || type != RemoteServerPacket::ResolverProgress)
+    if(reader->IsErrored() || type != eRemoteServer_ResolverProgress)
       break;
 
     float progressValue = 0.0f;
@@ -2191,7 +2060,7 @@ ResultDetails RemoteServer::InitResolver(bool interactive, RENDERDOC_ProgressCal
 
   RDResult res;
 
-  if(reader->IsErrored() || type != RemoteServerPacket::InitResolver)
+  if(reader->IsErrored() || type != eRemoteServer_InitResolver)
   {
     res = ResultCode::NetworkIOFailed;
     return res;
@@ -2216,7 +2085,7 @@ rdcarray<rdcstr> RemoteServer::GetResolve(const rdcarray<uint64_t> &callstack)
 
   {
     WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetResolve);
+    SCOPED_SERIALISE_CHUNK(eRemoteServer_GetResolve);
     SERIALISE_ELEMENT(callstack);
   }
 
@@ -2226,7 +2095,7 @@ rdcarray<rdcstr> RemoteServer::GetResolve(const rdcarray<uint64_t> &callstack)
     READ_DATA_SCOPE();
     RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
 
-    if(type == RemoteServerPacket::GetResolve)
+    if(type == eRemoteServer_GetResolve)
     {
       SERIALISE_ELEMENT(StackFrames);
     }
@@ -2239,163 +2108,4 @@ rdcarray<rdcstr> RemoteServer::GetResolve(const rdcarray<uint64_t> &callstack)
   }
 
   return StackFrames;
-}
-
-ResultDetails RemoteServer::EmbedDependenciesIntoCapture()
-{
-  RDResult ret;
-
-  if(!Connected())
-  {
-    ret.code = ResultCode::RemoteServerConnectionLost;
-    return ret;
-  }
-
-  {
-    WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::EmbedDependenciesIntoCapture);
-  }
-
-  {
-    READ_DATA_SCOPE();
-    RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
-
-    if(type == RemoteServerPacket::EmbedDependenciesIntoCapture)
-    {
-      SERIALISE_ELEMENT(ret);
-    }
-    else
-    {
-      RDCERR("Unexpected response to embed dependencies into capture request");
-    }
-
-    ser.EndChunk();
-  }
-
-  return ret;
-}
-
-ResultDetails RemoteServer::RemoveDependenciesFromCapture()
-{
-  RDResult ret;
-  if(!Connected())
-  {
-    ret.code = ResultCode::RemoteServerConnectionLost;
-    return ret;
-  }
-
-  {
-    WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::RemoveDependenciesFromCapture);
-  }
-
-  {
-    READ_DATA_SCOPE();
-    RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
-
-    if(type == RemoteServerPacket::RemoveDependenciesFromCapture)
-    {
-      SERIALISE_ELEMENT(ret);
-    }
-    else
-    {
-      RDCERR("Unexpected response to remove dependencies from capture request");
-    }
-
-    ser.EndChunk();
-  }
-
-  return ret;
-}
-
-bool RemoteServer::HasEmbeddedDependencies()
-{
-  bool ret = false;
-  if(!Connected())
-  {
-    return false;
-  }
-
-  {
-    WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HasEmbeddedDependencies);
-  }
-
-  {
-    READ_DATA_SCOPE();
-    RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
-
-    if(type == RemoteServerPacket::HasEmbeddedDependencies)
-    {
-      SERIALISE_ELEMENT(ret);
-    }
-    else
-    {
-      RDCERR("Unexpected response to has embedded dependencies request");
-    }
-
-    ser.EndChunk();
-  }
-  return ret;
-}
-
-bool RemoteServer::HasPendingDependencies()
-{
-  bool ret = false;
-  if(!Connected())
-  {
-    return false;
-  }
-
-  {
-    WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::HasPendingDependencies);
-  }
-
-  {
-    READ_DATA_SCOPE();
-    RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
-
-    if(type == RemoteServerPacket::HasPendingDependencies)
-    {
-      SERIALISE_ELEMENT(ret);
-    }
-    else
-    {
-      RDCERR("Unexpected response to has pending dependencies request");
-    }
-
-    ser.EndChunk();
-  }
-  return ret;
-}
-
-rdcarray<rdcstr> RemoteServer::GetPendingDependenciesNicknames()
-{
-  rdcarray<rdcstr> ret;
-  if(!Connected())
-  {
-    return ret;
-  }
-  {
-    WRITE_DATA_SCOPE();
-    SCOPED_SERIALISE_CHUNK(RemoteServerPacket::GetPendingDependenciesNicknames);
-  }
-
-  {
-    READ_DATA_SCOPE();
-    RemoteServerPacket type = ser.ReadChunk<RemoteServerPacket>();
-
-    if(type == RemoteServerPacket::GetPendingDependenciesNicknames)
-    {
-      SERIALISE_ELEMENT(ret);
-    }
-    else
-    {
-      RDCERR("Unexpected response to get nicknmes of externally referenced files");
-    }
-
-    ser.EndChunk();
-  }
-  return ret;
 }

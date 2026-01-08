@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -233,13 +233,6 @@ static uint64_t get_nanotime()
 
 // ebreak
 #define BREAK_INST 0x00100073ULL
-#define BREAK_INST_BYTES_SIZE 4
-#define BREAK_INST_INST_PTR_ADJUST 4
-
-#elif defined(__loongarch64)
-#define INST_PTR_REG csr_era
-// ebreak
-#define BREAK_INST 0x150000ULL
 #define BREAK_INST_BYTES_SIZE 4
 #define BREAK_INST_INST_PTR_ADJUST 4
 

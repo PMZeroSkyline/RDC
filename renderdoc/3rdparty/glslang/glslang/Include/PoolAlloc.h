@@ -118,17 +118,11 @@ private:
     unsigned char* mem;           // beginning of our allocation (pts to header)
     TAllocation* prevAlloc;       // prior allocation in the chain
 
-    // RD Modification - static constexpr implies inline
-    static constexpr unsigned char guardBlockBeginVal = 0xfb;
-    static constexpr unsigned char guardBlockEndVal = 0xfe;
-    static constexpr unsigned char userDataFill = 0xcd;
+    const static unsigned char guardBlockBeginVal;
+    const static unsigned char guardBlockEndVal;
+    const static unsigned char userDataFill;
 
-#   ifdef GUARD_BLOCKS
-    static constexpr size_t guardBlockSize = 16;
-#   else
-    static constexpr size_t guardBlockSize = 0;
-#   endif
-
+    const static size_t guardBlockSize;
 #   ifdef GUARD_BLOCKS
     inline static size_t headerSize() { return sizeof(TAllocation); }
 #   else
@@ -314,11 +308,8 @@ public:
 
     pool_allocator select_on_container_copy_construction() const { return pool_allocator{}; }
 
-    // RD Modification - work around seeming old libstdc++ bug, string move assignment
-    // invokes std::swap() which swaps allocators via assignment
-    // newer compilers do not invoke this function
-    pool_allocator& operator=(const pool_allocator&) { return *this; }
 protected:
+    pool_allocator& operator=(const pool_allocator&) { return *this; }
     TPoolAllocator& allocator;
 };
 

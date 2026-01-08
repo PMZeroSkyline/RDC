@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -213,6 +213,16 @@ bool FindSigParameter(const rdcarray<SigParameter> &inputSig,
     }
   }
   return false;
+}
+
+// Replace '.' -> '_'
+void SanitiseName(rdcstr &name)
+{
+  for(size_t c = 0; c < name.size(); ++c)
+  {
+    if(name[c] == '.')
+      name[c] = '_';
+  }
 }
 
 static const char *shaderNames[] = {
@@ -1128,6 +1138,14 @@ static rdcstr GetResourceTypeName(const Type *type)
   return "UNHANDLED RESOURCE TYPE";
 };
 
+rdcstr Program::GetHandleAlias(const rdcstr &handleStr) const
+{
+  auto it = m_SsaAliases.find(handleStr);
+  if(it != m_SsaAliases.end())
+    return it->second;
+  return handleStr;
+}
+
 void Program::Parse(const DXBC::Reflection *reflection)
 {
   if(m_Parsed)
@@ -1137,6 +1155,7 @@ void Program::Parse(const DXBC::Reflection *reflection)
 
   m_EntryPointInterfaces.clear();
   FillEntryPointInterfaces();
+  m_SsaAliases.clear();
   ParseReferences(reflection);
 
   if(m_Type == DXBC::ShaderType::Compute || m_Type == DXBC::ShaderType::Amplification ||
@@ -1151,47 +1170,8 @@ void Program::Parse(const DXBC::Reflection *reflection)
 
     for(Function *f : m_Functions)
     {
-      if(f->family != FunctionFamily::DXOp)
-        continue;
       if(f->name == "dx.op.barrier")
         m_Threadscope |= DXBC::ThreadScope::Workgroup;
-      if(f->name.beginsWith("dx.op.quadReadLaneAt.") || f->name.beginsWith("dx.op.quadOp.") ||
-         f->name.beginsWith("dx.op.quadVote."))
-        m_Threadscope |= DXBC::ThreadScope::Quad;
-    }
-    // Compute shaders using derivatives require quad scope
-    // DXOp::DerivCoarseX
-    // DXOp::DerivCoarseY
-    // DXOp::DerivFineX
-    // DXOp::DerivFineY
-    // DXOp::CalculateLOD
-    // DXOp::Sample
-    // DXOp::SampleBias
-    // DXOp::SampleCmp
-    for(Function *f : m_Functions)
-    {
-      if(f->external)
-        continue;
-      for(size_t funcIdx = 0; funcIdx < f->instructions.size(); funcIdx++)
-      {
-        const Instruction *inst = f->instructions[funcIdx];
-        if(inst->op != Operation::Call)
-          continue;
-        const Function *callFunc = inst->getFuncCall();
-        if(callFunc->family != FunctionFamily::DXOp)
-          continue;
-
-        DXOp dxOpCode = DXOp::NumOpCodes;
-        RDCASSERT(getival<DXOp>(inst->args[0], dxOpCode));
-        RDCASSERT(dxOpCode < DXOp::NumOpCodes, dxOpCode, DXOp::NumOpCodes);
-        if((dxOpCode == DXOp::DerivCoarseX) || (dxOpCode == DXOp::DerivCoarseY) ||
-           (dxOpCode == DXOp::DerivFineX) || (dxOpCode == DXOp::DerivFineY) ||
-           (dxOpCode == DXOp::CalculateLOD) || (dxOpCode == DXOp::Sample) ||
-           (dxOpCode == DXOp::SampleBias) || (dxOpCode == DXOp::SampleCmp))
-        {
-          m_Threadscope |= DXBC::ThreadScope::Quad;
-        }
-      }
     }
   }
 
@@ -1221,19 +1201,7 @@ void Program::SettleIDs()
   for(GlobalVar *g : m_GlobalVars)
   {
     if(g->ssaId == ~0U)
-    {
       g->ssaId = m_NextSSAId++;
-      rdcstr n = DXBC::BasicDemangle(g->name);
-      // Replace '.' -> '_'
-      for(size_t c = 0; c < n.size(); ++c)
-      {
-        if(n[c] == '.')
-          n[c] = '_';
-      }
-
-      n += StringFormat::Fmt("_%u", g->ssaId);
-      SetSSAName(g->ssaId, n);
-    }
   }
 
   // assign SSA ID for constants
@@ -1248,11 +1216,7 @@ void Program::SettleIDs()
         {
           Constant *c = (Constant *)arg;
           if(c->ssaId == ~0U)
-          {
             c->ssaId = m_NextSSAId++;
-            rdcstr n = StringFormat::Fmt("_%u", c->ssaId);
-            SetSSAName(c->ssaId, n);
-          }
         }
       }
     }
@@ -1277,8 +1241,6 @@ void Program::SettleIDs()
       if(arg->getName().isEmpty())
         arg->slot = slot++;
 #endif
-      rdcstr n = GetInstResultName(arg);
-      SetSSAName(arg->slot, n);
     }
     for(Instruction *inst : func.instructions)
     {
@@ -1291,8 +1253,6 @@ void Program::SettleIDs()
         if(inst->getName().isEmpty())
           inst->slot = slot++;
 #endif
-        rdcstr n = GetInstResultName(inst);
-        SetSSAName(inst->slot, n);
       }
       if(inst->op == Operation::Call)
       {
@@ -1764,29 +1724,13 @@ rdcstr Program::DisassembleGlobalVars(int &instructionLine) const
   {
     const GlobalVar &g = *m_GlobalVars[i];
 
-    rdcstr n;
-    if(!dxcStyleFormatting)
-      GetSSAName(g.ssaId, n);
-    else
-      n = g.name;
-
-    if(!dxcStyleFormatting)
+    rdcstr n = g.name;
+    if(!m_DXCStyle)
     {
-      switch(g.type->addrSpace)
-      {
-        case DXIL::Type::PointerAddrSpace::Default: break;
-        case DXIL::Type::PointerAddrSpace::DeviceMemory: ret += "DeviceMemory "; break;
-        case DXIL::Type::PointerAddrSpace::CBuffer: ret += "CBuffer "; break;
-        case DXIL::Type::PointerAddrSpace::GroupShared: ret += "GroupShared "; break;
-        case DXIL::Type::PointerAddrSpace::GenericPointer: break;
-        case DXIL::Type::PointerAddrSpace::ImmediateCBuffer: ret += "ImmediateCBuffer "; break;
-      };
-      ret += StringFormat::Fmt("%s = ", escapeStringIfNeeded(n).c_str());
+      n = DXBC::BasicDemangle(g.name);
+      DXIL::SanitiseName(n);
     }
-    else
-    {
-      ret += StringFormat::Fmt("@%s = ", escapeStringIfNeeded(n).c_str());
-    }
+    ret += StringFormat::Fmt("@%s = ", escapeStringIfNeeded(n).c_str());
     switch(g.flags & GlobalFlags::LinkageMask)
     {
       case GlobalFlags::ExternalLinkage:
@@ -1810,7 +1754,7 @@ rdcstr Program::DisassembleGlobalVars(int &instructionLine) const
       ret += "local_unnamed_addr ";
     else if(g.flags & GlobalFlags::GlobalUnnamedAddr)
       ret += "unnamed_addr ";
-    if(dxcStyleFormatting && (g.type->addrSpace != Type::PointerAddrSpace::Default))
+    if(g.type->addrSpace != Type::PointerAddrSpace::Default)
       ret += StringFormat::Fmt("addrspace(%d) ", g.type->addrSpace);
     if(g.flags & GlobalFlags::IsConst)
       ret += "constant ";
@@ -1828,7 +1772,6 @@ rdcstr Program::DisassembleGlobalVars(int &instructionLine) const
     if(g.section >= 0)
       ret += StringFormat::Fmt(", section %s", escapeString(m_Sections[g.section]).c_str());
 
-    ret += " // " + escapeString(g.name);
     ret += "\n";
     instructionLine++;
   }
@@ -3311,8 +3254,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   m_Disassembly += " " + cbVar.name;
                   if(cbType.elements > 1)
                     m_Disassembly += "[" + ToStr(cbType.elements) + "]";
-                  m_Disassembly += ": packoffset(" + ToStr(cbVar.offset) + ")";
-                  m_Disassembly += "; ";
+                  m_Disassembly += ";";
                   DisassemblyAddNewLine();
                 }
                 m_Disassembly += "};";
@@ -3411,8 +3353,8 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
           resultTypeStr += " ";
         }
         rdcstr resultIdStr;
+        MakeResultId(inst, resultIdStr);
         DXILDebug::Id resultId = GetResultSSAId(inst);
-        GetSSAName(resultId, resultIdStr);
 
         bool showDxFuncName = false;
         rdcstr commentStr;
@@ -3452,19 +3394,19 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   }
                   else
                   {
-                    name = GetArgString(inst, 1);
+                    name = GetArgId(inst, 1);
                     rowStr = "[";
                     if(hasRowIdx)
                       rowStr += ToStr(rowIdx);
                     else
-                      rowStr += GetArgString(inst, 2);
+                      rowStr += GetArgId(inst, 2);
                     rowStr += +"]";
                   }
                   uint32_t componentIdx;
                   if(getival<uint32_t>(inst.args[3], componentIdx))
                     componentStr = StringFormat::Fmt("%c", swizzle[componentIdx & 0x3]);
                   else
-                    componentStr = GetArgString(inst, 3);
+                    componentStr = GetArgId(inst, 3);
 
                   lineStr += DXIL_FAKE_INPUT_STRUCT_NAME + "." + name + rowStr + "." + componentStr;
                   break;
@@ -3490,22 +3432,22 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   }
                   else
                   {
-                    name = GetArgString(inst, 1);
+                    name = GetArgId(inst, 1);
                     rowStr = "[";
                     if(hasRowIdx)
                       rowStr += ToStr(rowIdx);
                     else
-                      rowStr += GetArgString(inst, 2);
+                      rowStr += GetArgId(inst, 2);
                     rowStr += +"]";
                   }
                   uint32_t componentIdx;
                   if(getival<uint32_t>(inst.args[3], componentIdx))
                     componentStr = StringFormat::Fmt("%c", swizzle[componentIdx & 0x3]);
                   else
-                    componentStr = GetArgString(inst, 3);
+                    componentStr = GetArgId(inst, 3);
 
                   lineStr += DXIL_FAKE_OUTPUT_STRUCT_NAME + "." + name + rowStr + "." + componentStr;
-                  lineStr += " = " + GetArgString(inst, 4);
+                  lineStr += " = " + GetArgId(inst, 4);
                   break;
                 }
                 case DXOp::CreateHandle:
@@ -3532,44 +3474,37 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   }
                   else
                   {
-                    commentStr += " index = " + GetArgString(inst, resIndexArgId);
+                    commentStr += " index = " + GetArgId(inst, resIndexArgId);
                   }
 
                   lineStr = "InitialiseHandle(";
-                  rdcstr handleRes = m_SsaHandles[resultId];
-                  RDCASSERT(!handleRes.empty());
-                  lineStr += handleRes;
+                  lineStr += GetHandleAlias(resultIdStr);
 
                   uint32_t value;
                   if(getival<uint32_t>(inst.args[nonUniformIndexArgId], value))
                   {
                     if(value != 0)
-                      commentStr += ", nonUniformIndex = true";
-                  }
-                  else
-                  {
-                    commentStr += ", nonUniformIndex = " + GetArgString(inst, nonUniformIndexArgId);
+                      lineStr += ", nonUniformIndex = true";
                   }
 
                   lineStr += ")";
+                  resultIdStr.clear();
                   break;
                 }
                 case DXOp::CreateHandleFromHeap:
                 {
                   // CreateHandleFromHeap(index,samplerHeap,nonUniformIndex)
-                  rdcstr handleRes = m_SsaHandles[resultId];
-                  if(!handleRes.empty())
+                  uint32_t samplerHeap;
+                  resultIdStr = GetHandleAlias(resultIdStr);
+                  if(getival<uint32_t>(inst.args[2], samplerHeap))
                   {
-                    lineStr += handleRes;
+                    lineStr += GetHandleAlias(resultIdStr);
+
                     uint32_t value;
                     if(getival<uint32_t>(inst.args[3], value))
                     {
                       if(value != 0)
-                        commentStr += ", nonUniformIndex = true";
-                    }
-                    else
-                    {
-                      commentStr += ", nonUniformIndex = " + GetArgString(inst, 3);
+                        commentStr += " nonUniformIndex = true";
                     }
                   }
                   else
@@ -3745,7 +3680,9 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       lineStr += "(";
                       lineStr += typeStr;
                       lineStr += ")";
-                      lineStr += GetArgString(inst, 1);
+                      rdcstr ssaStr = GetArgId(inst, 1);
+                      lineStr += GetHandleAlias(ssaStr);
+                      resultIdStr = GetHandleAlias(resultIdStr);
                     }
                     else
                     {
@@ -3764,9 +3701,10 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   // CBufferLoad(handle,byteOffset,alignment)
                   // CBufferLoadLegacy(handle,regIndex)
                   DXILDebug::Id handleId = GetSSAId(inst.args[1]);
-                  rdcstr resName = GetArgString(inst, 1);
-                  bool useFallback = true;
                   const ResourceReference *resRef = GetResourceReference(handleId);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
+                  bool useFallback = true;
                   if(foundEntryPoint && resRef)
                   {
                     uint32_t regIndex;
@@ -3776,7 +3714,6 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       if(dxOpCode == DXOp::CBufferLoad)
                       {
                         // TODO: handle non 16-byte aligned offsets
-                        // TODO: this only loads a single value not four values
                         // Convert byte offset to a register index
                         regIndex = regIndex / 16;
                         // uint32_t alignment = getival<uint32_t>(inst.args[3]);
@@ -3832,7 +3769,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     }
                     else
                     {
-                      lineStr += GetArgString(inst, 2);
+                      lineStr += GetArgId(inst, 2);
                       if(dxOpCode == DXOp::CBufferLoadLegacy)
                         lineStr += " * 16";
                     }
@@ -3846,12 +3783,13 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   // BufferLoad(srv,index,wot)
                   // "wot" is a byte offset
                   // RawBufferLoad(srv,index,elementOffset,mask,alignment)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     if(!isUndef(inst.args[2]))
                     {
-                      lineStr += resName + ".Load(" + GetArgString(inst, 2);
+                      lineStr += resName + ".Load(" + GetArgId(inst, 2);
                       uint32_t elementOffset;
                       if(getival<uint32_t>(inst.args[3], elementOffset))
                       {
@@ -3876,16 +3814,17 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 {
                   // BufferStore(uav,coord0,coord1,value0,value1,value2,value3,mask)
                   // RawBufferStore(uav,index,elementOffset,value0,value1,value2,value3,mask,alignment)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     if(!isUndef(inst.args[2]))
                     {
-                      lineStr += resName + ".Store(" + GetArgString(inst, 2);
+                      lineStr += resName + ".Store(" + GetArgId(inst, 2);
                       if(dxOpCode == DXOp::BufferStore)
                       {
                         if(!isUndef(inst.args[3]))
-                          lineStr += ", byteOffset = " + GetArgString(inst, 3);
+                          lineStr += ", byteOffset = " + GetArgId(inst, 3);
                       }
                       else
                       {
@@ -3905,7 +3844,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         if(needComma)
                           lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                         needComma = true;
                       }
                     }
@@ -3921,8 +3860,8 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 {
                   // TextureLoad(srv,mipLevelOrSampleCount,coord0,coord1,coord2,offset0,offset1,offset2)
                   DXILDebug::Id handleId = GetSSAId(inst.args[1]);
-                  rdcstr resName = GetArgString(inst, 1);
                   const ResourceReference *resRef = GetResourceReference(handleId);
+                  rdcstr handleStr = GetArgId(inst, 1);
                   uint32_t sampleCount = 0;
                   if(foundEntryPoint && resRef)
                   {
@@ -3934,6 +3873,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     if(texture)
                       sampleCount = texture->sampleCount;
                   }
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     lineStr += resName;
@@ -3945,7 +3885,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         if(needComma)
                           lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                         needComma = true;
                       }
                     }
@@ -3973,7 +3913,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                         needText = false;
                         lineStr += ", ";
                         lineStr += prefix;
-                        lineStr += GetArgString(inst, 2);
+                        lineStr += GetArgId(inst, 2);
                       }
                     }
                     needText = true;
@@ -3987,7 +3927,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                           lineStr += "Offset = ";
                           needText = false;
                         }
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                       }
                     }
                     lineStr += ")";
@@ -4001,7 +3941,8 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 case DXOp::TextureStore:
                 {
                   // TextureStore(srv,coord0,coord1,coord2,value0,value1,value2,value3,mask)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     lineStr += resName;
@@ -4013,7 +3954,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         if(needComma)
                           lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                         needComma = true;
                       }
                     }
@@ -4027,7 +3968,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         if(needComma)
                           lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                         needComma = true;
                       }
                     }
@@ -4058,7 +3999,8 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                   // SampleCmpLevel(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,offset2,compareValue,lod)
                   // SampleCmpGrad(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,offset2,compareValue,ddx0,ddx1,ddx2,ddy0,ddy1,ddy2,clamp)
                   // SampleCmpBias(srv,sampler,coord0,coord1,coord2,coord3,offset0,offset1,offset2,compareValue,bias,clamp)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     lineStr += resName;
@@ -4071,14 +4013,16 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       lineStr += "UNKNOWN DX FUNCTION";
 
                     // sampler is 2
-                    lineStr += GetArgString(inst, 2);
+                    rdcstr samplerStr = GetArgId(inst, 2);
+                    samplerStr = GetHandleAlias(samplerStr);
+                    lineStr += samplerStr;
 
                     for(uint32_t a = 3; a < 7; ++a)
                     {
                       if(!isUndef(inst.args[a]))
                       {
                         lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                       }
                     }
                     bool needText = true;
@@ -4092,7 +4036,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                           lineStr += "Offset = {";
                           needText = false;
                         }
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                       }
                     }
                     if(!needText)
@@ -4130,7 +4074,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         lineStr += ", ";
                         lineStr += paramNameStr;
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                       }
                     }
                     lineStr += ")";
@@ -4144,12 +4088,13 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 case DXOp::GetDimensions:
                 {
                   // GetDimensions(handle,mipLevel)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     lineStr += resName;
                     lineStr += ".GetDimensions(";
-                    lineStr += GetArgString(inst, 2);
+                    lineStr += GetArgId(inst, 2);
                     lineStr += ")";
                   }
                   else
@@ -4161,12 +4106,13 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 case DXOp::Texture2DMSGetSamplePosition:
                 {
                   // Texture2DMSGetSamplePosition(srv,index)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty())
                   {
                     lineStr += resName;
                     lineStr += ".GetSamplePosition(";
-                    lineStr += GetArgString(inst, 2);
+                    lineStr += GetArgId(inst, 2);
                     lineStr += ")";
                   }
                   else
@@ -4178,8 +4124,9 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 case DXOp::AtomicBinOp:
                 {
                   // AtomicBinOp(handle, atomicOp, offset0, offset1, offset2, newValue)
-                  rdcstr resName = GetArgString(inst, 1);
+                  rdcstr handleStr = GetArgId(inst, 1);
                   AtomicBinOpCode atomicBinOpCode;
+                  rdcstr resName = GetHandleAlias(handleStr);
                   if(!resName.isEmpty() && getival<AtomicBinOpCode>(inst.args[2], atomicBinOpCode))
                   {
                     lineStr += resName;
@@ -4195,7 +4142,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         if(needComma)
                           lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                         needComma = true;
                       }
                     }
@@ -4203,82 +4150,8 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     if(!isUndef(inst.args[6]))
                     {
                       lineStr += ", ";
-                      lineStr += GetArgString(inst, 6);
+                      lineStr += GetArgId(inst, 6);
                     }
-                    lineStr += ")";
-                  }
-                  else
-                  {
-                    showDxFuncName = true;
-                  }
-                  break;
-                }
-                case DXOp::WaveActiveOp:
-                {
-                  // WaveActiveOp(value, i8 waveOp, i8 sign)
-                  WaveOpCode waveOpCode;
-                  SignedOpKind sop;
-                  if(getival<SignedOpKind>(inst.args[3], sop))
-                    commentStr += ToStr(sop);
-
-                  if(getival<WaveOpCode>(inst.args[2], waveOpCode))
-                  {
-                    lineStr += "WaveActive" + ToStr(waveOpCode);
-                    lineStr += "(";
-                    lineStr += GetArgString(inst, 1);
-                    lineStr += ")";
-                  }
-                  else
-                  {
-                    showDxFuncName = true;
-                  }
-                  break;
-                }
-                case DXOp::WaveActiveBit:
-                {
-                  // WaveActiveBit(value, i8 waveBitOp)
-                  WaveBitOpCode waveBitOpCode;
-                  if(getival<WaveBitOpCode>(inst.args[2], waveBitOpCode))
-                  {
-                    lineStr += "WaveActiveBit" + ToStr(waveBitOpCode);
-                    lineStr += "(";
-                    lineStr += GetArgString(inst, 1);
-                    lineStr += ")";
-                  }
-                  else
-                  {
-                    showDxFuncName = true;
-                  }
-                  break;
-                }
-                case DXOp::WaveMultiPrefixOp:
-                {
-                  // WaveMultiPrefixOp(value,mask0,mask1,mask2,mask3,op,sop)
-                  SignedOpKind sop;
-                  if(getival<SignedOpKind>(inst.args[7], sop))
-                    commentStr += ToStr(sop);
-
-                  WaveMultiPrefixOpCode waveMultiOpCode;
-                  if(getival<WaveMultiPrefixOpCode>(inst.args[6], waveMultiOpCode))
-                  {
-                    lineStr += "WaveMultiPrefix";
-                    if((waveMultiOpCode == WaveMultiPrefixOpCode::And) ||
-                       (waveMultiOpCode == WaveMultiPrefixOpCode::Or) ||
-                       (waveMultiOpCode == WaveMultiPrefixOpCode::Xor))
-                      lineStr += "Bit";
-
-                    lineStr += ToStr(waveMultiOpCode);
-                    lineStr += "(";
-                    lineStr += GetArgString(inst, 1);
-                    lineStr += ", {";
-                    lineStr += GetArgString(inst, 2);
-                    lineStr += ",";
-                    lineStr += GetArgString(inst, 3);
-                    lineStr += ",";
-                    lineStr += GetArgString(inst, 4);
-                    lineStr += ",";
-                    lineStr += GetArgString(inst, 5);
-                    lineStr += "}";
                     lineStr += ")";
                   }
                   else
@@ -4309,7 +4182,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       {
                         if(needComma)
                           lineStr += ", ";
-                        lineStr += GetArgString(inst, a);
+                        lineStr += GetArgId(inst, a);
                         needComma = true;
                       }
                     }
@@ -4343,7 +4216,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     else
                       lineStr += StringFormat::Fmt("unpack_u8u%d", bitWidth);
                     lineStr += "(";
-                    lineStr += GetArgString(inst, 2);
+                    lineStr += GetArgId(inst, 2);
                     lineStr += ")";
                   }
                   else
@@ -4368,24 +4241,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     else if(quadOpKind == QuadOpKind::ReadAcrossDiagonal)
                       lineStr += "QuadReadAcrossDiagonal";
                     lineStr += "(";
-                    lineStr += GetArgString(inst, 1);
-                    lineStr += ")";
-                  }
-                  else
-                  {
-                    showDxFuncName = true;
-                  }
-                  break;
-                }
-                case DXOp::QuadVote:
-                {
-                  // SM6.7 QuadVote(cond,op)
-                  QuadVoteOpKind quadVoteOpKind;
-                  if(getival<QuadVoteOpKind>(inst.args[2], quadVoteOpKind))
-                  {
-                    lineStr += "Quad" + ToStr(quadVoteOpKind);
-                    lineStr += "(";
-                    lineStr += GetArgString(inst, 1);
+                    lineStr += GetArgId(inst, 1);
                     lineStr += ")";
                   }
                   else
@@ -4420,7 +4276,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     {
                       if(needComma)
                         lineStr += ", ";
-                      lineStr += GetArgString(inst, a);
+                      lineStr += GetArgId(inst, a);
                       needComma = true;
                     }
                   }
@@ -4435,7 +4291,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                     {
                       if(needComma)
                         lineStr += ", ";
-                      lineStr += GetArgString(inst, a);
+                      lineStr += GetArgId(inst, a);
                       needComma = true;
                     }
                   }
@@ -4504,8 +4360,8 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                       lineStr += ", ";
 
                     lineStr += paramNameStr;
-                    rdcstr ssaStr = GetArgString(inst, a);
-                    lineStr += ssaStr;
+                    rdcstr ssaStr = GetArgId(inst, a);
+                    lineStr += GetHandleAlias(ssaStr);
                     first = false;
                   }
                 }
@@ -4649,14 +4505,14 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
             }
 
             lineStr += "(";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ")";
             break;
           }
           case Operation::ExtractVal:
           {
             lineStr += "extractvalue ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             for(size_t n = 1; n < inst.args.size(); n++)
               lineStr += StringFormat::Fmt(", %llu", cast<Literal>(inst.args[n])->literal);
             break;
@@ -4717,7 +4573,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
             bool first = true;
             for(const Value *s : inst.args)
             {
-              lineStr += GetValueString(s);
+              lineStr += GetArgId(s);
               if(first)
               {
                 lineStr += opStr;
@@ -4731,7 +4587,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
           {
             lineStr += "return";
             if(!inst.args.empty())
-              lineStr += " " + GetArgString(inst, 0);
+              lineStr += " " + GetArgId(inst, 0);
             break;
           }
           case Operation::Unreachable: lineStr += "unreachable"; break;
@@ -4745,63 +4601,99 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
           }
           case Operation::GetElementPtr:
           {
+            bool fallbackOutput = true;
             if(!inst.type->isVoid())
             {
-              switch(inst.type->addrSpace)
+              // type "float addrspace(3)*" : addrspace(3) is DXIL specific, see DXIL::Type::PointerAddrSpace
+              rdcstr typeStr = inst.type->toString(dxcStyleFormatting);
+              int start = typeStr.find(" addrspace(");
+              if(start > 0)
               {
-                case DXIL::Type::PointerAddrSpace::Default: resultTypeStr = ""; break;
-                case DXIL::Type::PointerAddrSpace::DeviceMemory:
-                  resultTypeStr = "DeviceMemory";
-                  break;
-                case DXIL::Type::PointerAddrSpace::CBuffer: resultTypeStr = "CBuffer"; break;
-                case DXIL::Type::PointerAddrSpace::GroupShared:
-                  resultTypeStr = "GroupShared";
-                  break;
-                case DXIL::Type::PointerAddrSpace::GenericPointer: resultTypeStr = ""; break;
-                case DXIL::Type::PointerAddrSpace::ImmediateCBuffer:
-                  resultTypeStr = "ImmediateCBuffer";
-                  break;
-              };
+                rdcstr scalarType = typeStr.substr(0, start);
+                scalarType.trim();
 
-              resultTypeStr += " ";
-              resultTypeStr += inst.type->inner->toString(true);
-              resultTypeStr += "* ";
-
-              // arg[0] : ptr
-              rdcstr argName = GetArgString(inst, 0);
-              lineStr += argName;
-              // arg[1] : index 0
-              bool first = true;
-              if(inst.args.size() > 1)
-              {
-                uint32_t v = 0;
-                if(!getival<uint32_t>(inst.args[1], v) || (v > 0))
+                start += 11;
+                int end = typeStr.find(')', start);
+                if(end > start)
                 {
-                  lineStr += "[";
-                  lineStr += GetArgString(inst, 1);
-                  lineStr += "]";
-                  first = false;
-                }
-              }
+                  // Example output:
+                  // DXC:
+                  // %3 = getelementptr [6 x float], [6 x float] addrspace(3)*
+                  // @"\01?s_x@@3@$$A.1dim", i32 0, i32 %9
 
-              // arg[2..] : index 1...N
-              for(uint32_t a = 2; a < inst.args.size(); ++a)
-              {
-                if(first)
-                  lineStr += "[";
-                else
-                  lineStr += " + ";
+                  // RD: GroupShared float* _3 = s_x[_9];
+                  fallbackOutput = false;
 
-                lineStr += GetArgString(inst, a);
+                  rdcstr addrspaceStr(typeStr.substr(start, end - start));
+                  int32_t value = atoi(addrspaceStr.c_str());
+                  DXIL::Type::PointerAddrSpace addrspace = (DXIL::Type::PointerAddrSpace)value;
 
-                if(first)
-                {
-                  lineStr += "]";
-                  first = false;
+                  switch(addrspace)
+                  {
+                    case DXIL::Type::PointerAddrSpace::Default: resultTypeStr = ""; break;
+                    case DXIL::Type::PointerAddrSpace::DeviceMemory:
+                      resultTypeStr = "DeviceMemory";
+                      break;
+                    case DXIL::Type::PointerAddrSpace::CBuffer: resultTypeStr = "CBuffer"; break;
+                    case DXIL::Type::PointerAddrSpace::GroupShared:
+                      resultTypeStr = "GroupShared";
+                      break;
+                    case DXIL::Type::PointerAddrSpace::GenericPointer: resultTypeStr = ""; break;
+                    case DXIL::Type::PointerAddrSpace::ImmediateCBuffer:
+                      resultTypeStr = "ImmediateCBuffer";
+                      break;
+                  };
+
+                  resultTypeStr += " ";
+                  resultTypeStr += scalarType;
+                  resultTypeStr += "* ";
+
+                  // arg[0] : ptr
+                  rdcstr ptrStr = GetArgId(inst, 0);
+                  // Simple demangle take string between first "?" and next "@"
+                  int nameStart = ptrStr.indexOf('?');
+                  if(nameStart > 0)
+                  {
+                    nameStart++;
+                    int nameEnd = ptrStr.indexOf('@', nameStart);
+                    if(nameEnd > nameStart)
+                      ptrStr = ptrStr.substr(nameStart, nameEnd - nameStart);
+                  }
+                  lineStr += ptrStr;
+                  // arg[1] : index 0
+                  bool first = true;
+                  if(inst.args.size() > 1)
+                  {
+                    uint32_t v = 0;
+                    if(!getival<uint32_t>(inst.args[1], v) || (v > 0))
+                    {
+                      lineStr += "[";
+                      lineStr += GetArgId(inst, 1);
+                      lineStr += "]";
+                      first = false;
+                    }
+                  }
+
+                  // arg[2..] : index 1...N
+                  for(uint32_t a = 2; a < inst.args.size(); ++a)
+                  {
+                    if(first)
+                      lineStr += "[";
+                    else
+                      lineStr += " + ";
+
+                    lineStr += GetArgId(inst, a);
+
+                    if(first)
+                    {
+                      lineStr += "]";
+                      first = false;
+                    }
+                  }
                 }
               }
             }
-            else
+            if(fallbackOutput)
             {
               lineStr += "getelementptr ";
               bool first = true;
@@ -4810,7 +4702,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 if(!first)
                   lineStr += ", ";
 
-                lineStr += GetValueString(s);
+                lineStr += GetArgId(s);
                 first = false;
               }
             }
@@ -4830,7 +4722,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
               if(!first)
                 lineStr += ", ";
 
-              lineStr += GetValueString(s);
+              lineStr += GetArgId(s);
               first = false;
             }
             if(inst.align > 0)
@@ -4843,9 +4735,9 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
             if(inst.opFlags() & InstructionFlags::Volatile)
               commentStr += "volatile ";
             lineStr = "*";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += " = ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             if(inst.align > 0)
               commentStr += StringFormat::Fmt("align %u ", (1U << inst.align) >> 1);
             break;
@@ -4891,9 +4783,9 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
               default: break;
             }
             lineStr += "(";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += opStr;
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += ")";
             break;
           }
@@ -4901,11 +4793,11 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
           {
             // ord: yields true if both operands are not a QNAN.
             lineStr += "!isqnan(";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ")";
             lineStr += " && ";
             lineStr += "!isqnan(";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += ")";
             break;
           }
@@ -4913,11 +4805,11 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
           {
             // uno: yields true if either operand is a QNAN.
             lineStr += "isqnan(";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ")";
             lineStr += " || ";
             lineStr += "isqnan(";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += ")";
             break;
           }
@@ -4958,55 +4850,55 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
               default: break;
             }
             lineStr += "(";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += opStr;
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += ")";
             break;
           }
           case Operation::Select:
           {
-            lineStr += GetArgString(inst, 2);
+            lineStr += GetArgId(inst, 2);
             lineStr += " ? ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += " : ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             break;
           }
           case Operation::ExtractElement:
           {
             lineStr += "extractelement ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             break;
           }
           case Operation::InsertElement:
           {
             lineStr += "insertelement ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 2);
+            lineStr += GetArgId(inst, 2);
             break;
           }
           case Operation::ShuffleVector:
           {
             lineStr += "shufflevector ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 2);
+            lineStr += GetArgId(inst, 2);
             break;
           }
           case Operation::InsertValue:
           {
             lineStr += "insertvalue ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             for(size_t a = 2; a < inst.args.size(); a++)
             {
               lineStr += ", " + ToStr(cast<Literal>(inst.args[a])->literal);
@@ -5018,16 +4910,16 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
             if(inst.args.size() > 1)
             {
               lineStr += "if (";
-              lineStr += GetArgString(inst, 2);
+              lineStr += GetArgId(inst, 2);
               lineStr += ") goto ";
-              lineStr += StringFormat::Fmt("%s", GetArgString(inst, 0).c_str());
+              lineStr += StringFormat::Fmt("%s", GetArgId(inst, 0).c_str());
               lineStr += "; else goto ";
-              lineStr += StringFormat::Fmt("%s", GetArgString(inst, 1).c_str());
+              lineStr += StringFormat::Fmt("%s", GetArgId(inst, 1).c_str());
             }
             else
             {
               lineStr += "goto ";
-              lineStr += GetArgString(inst, 0);
+              lineStr += GetArgId(inst, 0);
             }
             break;
           }
@@ -5041,27 +4933,27 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
                 lineStr += " ";
               else
                 lineStr += ", ";
-              rdcstr block = GetArgString(inst, a + 1);
+              rdcstr block = GetArgId(inst, a + 1);
               lineStr += "[ ";
               if(IsSSA(inst.args[a]))
                 lineStr += StringFormat::Fmt("%s::", block.c_str());
-              lineStr += StringFormat::Fmt("%s, %s ]", GetArgString(inst, a).c_str(), block.c_str());
+              lineStr += StringFormat::Fmt("%s, %s ]", GetArgId(inst, a).c_str(), block.c_str());
             }
             break;
           }
           case Operation::Switch:
           {
             lineStr += "switch ";
-            lineStr += GetArgString(inst, 0);
+            lineStr += GetArgId(inst, 0);
             lineStr += ", ";
-            lineStr += GetArgString(inst, 1);
+            lineStr += GetArgId(inst, 1);
             lineStr += " [";
             lineStr += "\n";
             m_DisassemblyInstructionLine++;
             for(uint32_t a = 2; a < inst.args.size(); a += 2)
             {
-              lineStr += StringFormat::Fmt("    %s, %s", GetArgString(inst, a).c_str(),
-                                           GetArgString(inst, a + 1).c_str());
+              lineStr += StringFormat::Fmt("    %s, %s", GetArgId(inst, a).c_str(),
+                                           GetArgId(inst, a + 1).c_str());
               lineStr += "\n";
               m_DisassemblyInstructionLine++;
             }
@@ -5099,7 +4991,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
               if(!first)
                 lineStr += ", ";
 
-              lineStr += GetValueString(s);
+              lineStr += GetArgId(s);
               first = false;
             }
 
@@ -5166,7 +5058,7 @@ void Program::MakeRDDisassemblyString(const DXBC::Reflection *reflection)
               if(!first)
                 lineStr += ", ";
 
-              lineStr += GetValueString(s);
+              lineStr += GetArgId(s);
               first = false;
             }
 
@@ -5371,8 +5263,8 @@ void Program::ParseReferences(const DXBC::Reflection *reflection)
           if(callFunc->family == FunctionFamily::DXOp)
           {
             rdcstr resultIdStr;
+            MakeResultId(inst, resultIdStr);
             DXILDebug::Id resultId = GetResultSSAId(inst);
-            GetSSAName(resultId, resultIdStr);
 
             DXOp dxOpCode = DXOp::NumOpCodes;
             RDCASSERT(getival<DXOp>(inst.args[0], dxOpCode));
@@ -5412,9 +5304,9 @@ void Program::ParseReferences(const DXBC::Reflection *reflection)
                   }
                   else
                   {
-                    resName = "ResourceClass:" + GetArgString(inst, 1);
-                    resName += "[" + GetArgString(inst, 2) + "]";
-                    resName += "[" + GetArgString(inst, resIndexArgId) + "]";
+                    resName = "ResourceClass:" + GetArgId(inst, 1);
+                    resName += "[" + GetArgId(inst, 2) + "]";
+                    resName += "[" + GetArgId(inst, resIndexArgId) + "]";
                   }
                 }
                 else
@@ -5521,9 +5413,9 @@ void Program::ParseReferences(const DXBC::Reflection *reflection)
                     }
                     if(!resourceBase)
                     {
-                      resName = "ResourceClass:" + GetArgString(inst, 1);
-                      resName += "[" + GetArgString(inst, 2) + "]";
-                      resName += "[" + GetArgString(inst, resIndexArgId) + "]";
+                      resName = "ResourceClass:" + GetArgId(inst, 1);
+                      resName += "[" + GetArgId(inst, 2) + "]";
+                      resName += "[" + GetArgId(inst, resIndexArgId) + "]";
                     }
                   }
                 }
@@ -5532,51 +5424,48 @@ void Program::ParseReferences(const DXBC::Reflection *reflection)
                 {
                   RDCASSERT(!GetResourceReference(resultId));
                   ResourceReference resRef(resultIdStr, *resourceBase, resIndex);
-                  m_ResourceByIdHandles[resultId] = m_ResourceReferences.size();
+                  m_ResourceByIdHandles[resultId] = m_ResourceByIdHandles.size();
                   m_ResourceReferences.push_back(resRef);
                   resName = resourceBase->name;
-                  uint32_t arrayIndex = 0;
-                  if(getival<uint32_t>(inst.args[resIndexArgId], arrayIndex))
+                  uint32_t index = 0;
+                  if(getival<uint32_t>(inst.args[resIndexArgId], index))
                   {
-                    if(arrayIndex != resIndex)
+                    if(index != resIndex)
                     {
                       if(resourceBase->regCount > 1)
-                      {
-                        RDCASSERT(arrayIndex >= resourceBase->regBase);
-                        arrayIndex -= resourceBase->regBase;
-                        resName += StringFormat::Fmt("[%u]", arrayIndex);
-                      }
+                        resName += StringFormat::Fmt("[%u]", index);
                     }
                   }
                   else
                   {
                     if(resourceBase->regCount > 1)
-                      resName +=
-                          StringFormat::Fmt("[%s - %u]", GetArgString(inst, resIndexArgId).c_str(),
-                                            resourceBase->regBase);
+                      resName += "[" + GetArgId(inst, resIndexArgId) + "]";
                   }
                 }
-                m_SsaHandles[resultId] = resName;
+                if(!resName.isEmpty())
+                  m_SsaAliases[resultIdStr] = resName;
                 break;
               }
               case DXOp::CreateHandleFromHeap:
               {
                 // CreateHandleFromHeap(index,samplerHeap,nonUniformIndex)
                 rdcstr resBaseName = "untyped_descriptor";
-                rdcstr resultAlias = "__" + resBaseName + "_" + ToStr(resultId);
-                SetSSAName(resultId, resultAlias, true);
+                uint32_t annotateHandleCount = m_ResourceAnnotateCounts[resBaseName];
+                rdcstr resultAlias = "__" + resBaseName + "_" + ToStr(annotateHandleCount);
+                m_ResourceAnnotateCounts[resBaseName]++;
+                m_SsaAliases[resultIdStr] = resultAlias;
 
-                rdcstr resName;
                 uint32_t samplerHeap;
                 if(getival<uint32_t>(inst.args[2], samplerHeap))
                 {
-                  resName = (samplerHeap == 0) ? "ResourceDescriptorHeap" : "SamplerDescriptorHeap";
+                  rdcstr resName =
+                      (samplerHeap == 0) ? "ResourceDescriptorHeap" : "SamplerDescriptorHeap";
 
                   resName += "[";
-                  resName += GetArgString(inst, 1);
+                  resName += GetArgId(inst, 1);
                   resName += "]";
+                  m_SsaAliases[resultAlias] = resName;
                 }
-                m_SsaHandles[resultId] = resName;
                 break;
               }
               case DXOp::AnnotateHandle:
@@ -5587,17 +5476,20 @@ void Program::ParseReferences(const DXBC::Reflection *reflection)
                 // and register it as resultIdStr
                 DXILDebug::Id handleId = GetSSAId(inst.args[1]);
                 const ResourceReference *pResRef = GetResourceReference(handleId);
-                rdcstr baseResource = GetArgString(inst, 1);
+                rdcstr baseResource = GetArgId(inst, 1);
                 rdcstr resBaseName = "typed_descriptor";
                 if(pResRef)
                 {
                   const ResourceReference resRef = *pResRef;
                   resBaseName = resRef.resourceBase.name;
-                  m_ResourceByIdHandles[resultId] = m_ResourceReferences.size();
+                  m_ResourceByIdHandles[resultId] = m_ResourceByIdHandles.size();
                   m_ResourceReferences.push_back(resRef);
                 }
-                rdcstr resName = "__" + resBaseName + "_" + ToStr(resultId);
-                SetSSAName(resultId, resName, true);
+                uint32_t annotateHandleCount = m_ResourceAnnotateCounts[resBaseName];
+                rdcstr resName = "__" + resBaseName + "_" + ToStr(annotateHandleCount);
+                m_SsaAliases[resultIdStr] = resName;
+                m_ResourceAnnotateCounts[resBaseName]++;
+
                 break;
               }
               default: break;
@@ -6267,26 +6159,23 @@ rdcstr Constant::toString(bool dxcStyleFormatting, bool withType) const
 }
 
 // Formatting used by RD disassembly and the DXIL debugger
-rdcstr Program::GetArgString(const Instruction &inst, uint32_t arg) const
+rdcstr Program::GetArgId(const Instruction &inst, uint32_t arg) const
 {
-  return GetValueString(inst.args[arg]);
+  return GetArgId(inst.args[arg]);
 }
 
-rdcstr Program::GetValueString(const Value *v) const
+rdcstr Program::GetArgId(const Value *v) const
 {
-  // Return constants as their value not SSA names
-  if(const Constant *c = cast<Constant>(v))
-  {
-    return ArgToString(v, false);
-  }
-  if(IsSSA(v))
-  {
-    DXILDebug::Id ssaId = GetSSAId(v);
-    rdcstr name;
-    GetSSAName(ssaId, name);
-    return name;
-  }
-  return ArgToString(v, false);
+  rdcstr ret = ArgToString(v, false);
+  return ret;
+}
+
+rdcstr Program::GetArgumentName(const DXIL::Value *v) const
+{
+  if(const DXIL::Constant *c = cast<Constant>(v))
+    return StringFormat::Fmt("%c%u", '_', c->ssaId);
+
+  return GetArgId(v);
 }
 
 DXILDebug::Id Program::GetResultSSAId(const DXIL::Instruction &inst)
@@ -6294,50 +6183,12 @@ DXILDebug::Id Program::GetResultSSAId(const DXIL::Instruction &inst)
   return inst.slot;
 }
 
-rdcstr Program::GetInstResultName(const DXIL::Instruction *inst) const
+void Program::MakeResultId(const DXIL::Instruction &inst, rdcstr &resultId)
 {
-  rdcstr n;
-  DXILDebug::Id id = inst->slot;
-
-  if(!inst->getName().empty())
-    n = StringFormat::Fmt("_%s", escapeStringIfNeeded(inst->getName()).c_str());
-
-  if(id != ~0U)
-    n += StringFormat::Fmt("_%d", id);
-  return n;
-}
-
-/*
-rdcstr Program::GetArgumentName(const Instruction &inst, uint32_t arg) const
-{
-  DXILDebug::Id id = GetSSAId(inst.args[arg]);
-  rdcstr name;
-  GetSSAName(id, name);
-  return name;
-}
-*/
-
-void Program::GetSSAName(DXILDebug::Id id, rdcstr &name) const
-{
-  if(id == ~0U)
-    return;
-
-  auto it = m_SsaNames.find(id);
-  if(it != m_SsaNames.end())
-  {
-    name = it->second;
-    return;
-  }
-  RDCERR("Name for SSA Id %u not found", id);
-}
-
-void Program::SetSSAName(DXILDebug::Id id, const rdcstr &name, bool overwrite)
-{
-  RDCASSERTNOTEQUAL(id, ~0U);
-  if(!overwrite)
-    RDCASSERTEQUAL(m_SsaNames.count(id), 0);
-
-  m_SsaNames[id] = name;
+  if(!inst.getName().empty())
+    resultId = StringFormat::Fmt("%c%s", '_', escapeStringIfNeeded(inst.getName()).c_str());
+  else if(inst.slot != ~0U)
+    resultId = StringFormat::Fmt("%c%s", '_', ToStr(inst.slot).c_str());
 }
 
 rdcpair<int32_t, int32_t> Program::ParseDIExpressionMD(const Metadata *expressionMD) const
@@ -6380,8 +6231,7 @@ SourceMappingInfo Program::ParseDbgOpValue(const DXIL::Instruction &inst) const
   // arg 0 is metadata containing the new value
   const Metadata *valueMD = cast<Metadata>(inst.args[0]);
   ret.dbgVarId = GetSSAId(valueMD->value);
-  ret.dbgVarName;
-  GetSSAName(ret.dbgVarId, ret.dbgVarName);
+  ret.dbgVarName = GetArgumentName(valueMD->value);
 
   // arg 1 is i64 byte offset in the source variable where the new value is written
   int64_t value = 0;
@@ -6413,15 +6263,26 @@ SourceMappingInfo Program::ParseDbgOpDeclare(const DXIL::Instruction &inst) cons
   RDCASSERT(allocaInstMD);
   const DXIL::Value *value = allocaInstMD->value;
   if(const Instruction *varInst = cast<Instruction>(value))
+  {
     ret.dbgVarId = Program::GetResultSSAId(*varInst);
+    Program::MakeResultId(*varInst, ret.dbgVarName);
+  }
   else if(const GlobalVar *gv = cast<GlobalVar>(value))
+  {
     ret.dbgVarId = gv->ssaId;
+    rdcstr n = DXBC::BasicDemangle(gv->name);
+    DXIL::SanitiseName(n);
+    ret.dbgVarName = n;
+  }
   else if(const Constant *c = cast<Constant>(value))
+  {
     ret.dbgVarId = c->ssaId;
+    ret.dbgVarName = StringFormat::Fmt("%c%u", '_', c->ssaId);
+  }
   else
+  {
     RDCERR("Unhandled metadata value type %s", ToStr(value->kind()).c_str());
-
-  GetSSAName(ret.dbgVarId, ret.dbgVarName);
+  }
 
   // arg 1 is DILocalVariable metadata
   const Metadata *localVariableMD = cast<Metadata>(inst.args[1]);

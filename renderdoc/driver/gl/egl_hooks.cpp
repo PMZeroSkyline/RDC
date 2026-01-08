@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -554,9 +554,6 @@ HOOK_EXPORT EGLBoolean EGLAPIENTRY eglSwapBuffers_renderdoc_hooked(EGLDisplay dp
     data.egl_wnd = surface;
     data.egl_ctx = EGL.GetCurrentContext();
 
-    // we could query this out technically but it's easier to keep a map
-    data.egl_cfg = eglhook.configs[data.egl_ctx];
-
     eglhook.RefreshWindowParameters(data);
 
     SurfaceConfig cfg = eglhook.windows[surface];
@@ -972,7 +969,7 @@ EGL_PASSTHRU_4(EGLSurface, eglCreatePlatformPixmapSurface, EGLDisplay, dpy, EGLC
                void *, native_pixmap, const EGLAttrib *, attrib_list)
 EGL_PASSTHRU_3(EGLBoolean, eglWaitSync, EGLDisplay, dpy, EGLSync, sync, EGLint, flags)
 
-static void EGLHooked(void *handle, const char *libName)
+static void EGLHooked(void *handle)
 {
   RDCDEBUG("EGL library hooked");
 
@@ -1016,11 +1013,6 @@ static void EGLHooked(void *handle, const char *libName)
     ScopedSuppressHooking suppress;
     return (void *)EGL.GetProcAddress(funcName);
   });
-
-#if ENABLED(RDOC_WIN32)
-  // force library to stay loaded so that function pointers don't move
-  LoadLibraryA(libName);
-#endif
 }
 
 #if ENABLED(RDOC_WIN32)

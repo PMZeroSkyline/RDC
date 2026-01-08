@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2017-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -100,8 +100,6 @@ rdcstr DoStringise(const ResultCode &el)
     STRINGISE_ENUM_CLASS_NAMED(InvalidParameter,
                                "An invalid parameter was passed to RenderDoc's API");
     STRINGISE_ENUM_CLASS_NAMED(CompressionFailed, "Compression or decompression failed");
-    STRINGISE_ENUM_CLASS_NAMED(AndroidLayerConfFailed,
-                               "Debug layer configuration failed on Android");
   }
   END_ENUM_STRINGISE();
 }
@@ -1128,7 +1126,6 @@ rdcstr DoStringise(const SectionType &el)
     STRINGISE_ENUM_CLASS_NAMED(EditedShaders, "renderdoc/ui/edits");
     STRINGISE_ENUM_CLASS_NAMED(D3D12Core, "renderdoc/internal/d3d12core");
     STRINGISE_ENUM_CLASS_NAMED(D3D12SDKLayers, "renderdoc/internal/d3d12sdklayers");
-    STRINGISE_ENUM_CLASS_NAMED(EmbeddedExternalFiles, "renderdoc/internal/embeddedexternalfiles");
   }
   END_ENUM_STRINGISE();
 }
@@ -1210,7 +1207,6 @@ rdcstr DoStringise(const ShaderVariableFlags &el)
     STRINGISE_BITFIELD_CLASS_BIT(SNorm);
     STRINGISE_BITFIELD_CLASS_BIT(Truncated);
     STRINGISE_BITFIELD_CLASS_BIT(SignedEnum);
-    STRINGISE_BITFIELD_CLASS_BIT(SingleElementArray);
   }
   END_BITFIELD_STRINGISE();
 }

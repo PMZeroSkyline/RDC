@@ -643,9 +643,8 @@ class ModuleRedeclarator(object):
             elif str(descriptor).startswith('<staticmethod'):
                 deco = "staticmethod"
         if p_name == "__new__":
-            # do not redeclare __new__, it is not needed in the stub
-            # and causes problems with the known type of simple declarations
-            return
+            deco = "staticmethod"
+            deco_comment = " # known case of __new__"
 
         action("redoing innards of func %r of class %r", p_name, p_class)
         if deco and HAS_DECORATORS:

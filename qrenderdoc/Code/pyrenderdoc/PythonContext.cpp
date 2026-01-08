@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1331,7 +1331,7 @@ PyObject *PythonContext::outstream_write(PyObject *self, PyObject *args)
 
       PyFrameObject *frame = PyEval_GetFrame();
 
-      while(!message.empty() && (message.back() == '\n' || message.back() == '\r'))
+      while(message.back() == '\n' || message.back() == '\r')
         message.pop_back();
 
       QString filename = lit("unknown");

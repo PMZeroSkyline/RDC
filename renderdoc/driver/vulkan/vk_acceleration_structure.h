@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -66,8 +66,6 @@ struct VkAccelerationStructureInfo
   void convertGeometryData(rdcarray<VkAccelerationStructureGeometryKHR> &geometry) const;
   rdcarray<VkAccelerationStructureBuildRangeInfoKHR> getBuildRanges() const;
 
-  VkDeviceAddress address;
-
   VkAccelerationStructureTypeKHR type =
       VkAccelerationStructureTypeKHR::VK_ACCELERATION_STRUCTURE_TYPE_GENERIC_KHR;
   VkBuildAccelerationStructureFlagsKHR flags = 0;
@@ -96,7 +94,6 @@ class VulkanAccelerationStructureManager
 {
 public:
   explicit VulkanAccelerationStructureManager(WrappedVulkan *driver);
-  void Cleanup();
 
   // Allocates readback mem and injects commands into the command buffer so that the input buffers
   // are copied.
@@ -151,5 +148,4 @@ private:
 
   Allocation scratch;
   VkDeviceOrHostAddressKHR scratchAddressUnion;
-  rdcarray<VkBuffer> scratchBuffers;
 };

@@ -1,5 +1,5 @@
 /*
-* Copyright 2014-2025 NVIDIA Corporation.  All rights reserved.
+* Copyright 2014-2022 NVIDIA Corporation.  All rights reserved.
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -268,7 +268,7 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_D3D12_LoadDriver(&loadDriverParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(10, "NVPW_D3D12_LoadDriver failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(10, "NVPW_D3D12_LoadDriver failed\n");
             return false;
         }
         return true;
@@ -283,7 +283,6 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_D3D12_Device_GetDeviceIndex(&getDeviceIndexParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_D3D12_Device_GetDeviceIndex failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
             return ~size_t(0);
         }
 
@@ -301,7 +300,7 @@ namespace nv { namespace perf {
         return D3DGetDeviceIdentifiers(pDXGIAdapter.Get(), sliIndex);
     }
 
-    inline ClockInfo D3D12GetDeviceClockState(ID3D12Device* pDevice)
+    inline NVPW_Device_ClockStatus D3D12GetDeviceClockState(ID3D12Device* pDevice)
     {
         size_t nvperfDeviceIndex = D3D12GetNvperfDeviceIndex(pDevice);
         return GetDeviceClockState(nvperfDeviceIndex);
@@ -313,10 +312,10 @@ namespace nv { namespace perf {
         return SetDeviceClockState(nvperfDeviceIndex, clockSetting);
     }
 
-    inline bool D3D12SetDeviceClockState(ID3D12Device* pDevice, const ClockInfo& clockInfo)
+    inline bool D3D12SetDeviceClockState(ID3D12Device* pDevice, NVPW_Device_ClockStatus clockStatus)
     {
         size_t nvperfDeviceIndex = D3D12GetNvperfDeviceIndex(pDevice);
-        return SetDeviceClockState(nvperfDeviceIndex, clockInfo);
+        return SetDeviceClockState(nvperfDeviceIndex, clockStatus);
     }
 
     inline size_t D3D12CalculateMetricsEvaluatorScratchBufferSize(const char* pChipName)
@@ -326,7 +325,7 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_D3D12_MetricsEvaluator_CalculateScratchBufferSize(&calculateScratchBufferSizeParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_D3D12_MetricsEvaluator_CalculateScratchBufferSize failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(20, "NVPW_D3D12_MetricsEvaluator_CalculateScratchBufferSize failed\n");
             return 0;
         }
         return calculateScratchBufferSizeParams.scratchBufferSize;
@@ -341,7 +340,7 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_D3D12_MetricsEvaluator_Initialize(&initializeParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_D3D12_MetricsEvaluator_Initialize failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(20, "NVPW_D3D12_MetricsEvaluator_Initialize failed\n");
             return nullptr;
         }
         return initializeParams.pMetricsEvaluator;
@@ -351,22 +350,22 @@ namespace nv { namespace perf {
 
 namespace nv { namespace perf { namespace profiler {
 
-    inline NVPW_RawCounterConfig* D3D12CreateRawCounterConfig(const char* pChipName)
+    inline NVPA_RawMetricsConfig* D3D12CreateRawMetricsConfig(const char* pChipName)
     {
-        NVPW_D3D12_RawCounterConfig_Create_Params configParams = { NVPW_D3D12_RawCounterConfig_Create_Params_STRUCT_SIZE };
+        NVPW_D3D12_RawMetricsConfig_Create_Params configParams = { NVPW_D3D12_RawMetricsConfig_Create_Params_STRUCT_SIZE };
         configParams.activityKind = NVPA_ACTIVITY_KIND_PROFILER;
         configParams.pChipName = pChipName;
 
-        NVPA_Status nvpaStatus = NVPW_D3D12_RawCounterConfig_Create(&configParams);
+        NVPA_Status nvpaStatus = NVPW_D3D12_RawMetricsConfig_Create(&configParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_D3D12_RawCounterConfig_Create failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(20, "NVPW_D3D12_RawMetricsConfig_Create failed\n");
             return nullptr;
         }
 
-        return configParams.pRawCounterConfig;
+        return configParams.pRawMetricsConfig;
     }
-    
+
     inline bool D3D12IsGpuSupported(ID3D12Device* pDevice, size_t sliIndex = 0)
     {
         const size_t deviceIndex = D3D12GetNvperfDeviceIndex(pDevice, sliIndex);
@@ -381,7 +380,7 @@ namespace nv { namespace perf { namespace profiler {
         NVPA_Status nvpaStatus = NVPW_D3D12_Profiler_IsGpuSupported(&params);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(10, "NVPW_D3D12_Profiler_IsGpuSupported failed on %ls, nvpaStatus = %s\n", D3D12GetDeviceName(pDevice).c_str(), FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(10, "NVPW_D3D12_Profiler_IsGpuSupported failed on %ls\n", D3D12GetDeviceName(pDevice).c_str());
             return false;
         }
 
@@ -430,7 +429,7 @@ namespace nv { namespace perf { namespace profiler {
         NVPA_Status nvpaStatus = NVPW_D3D12_Profiler_CommandList_PushRange(&pushRangeParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(50, "NVPW_D3D12_Profiler_CommandList_PushRange failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(50, "NVPW_D3D12_Profiler_CommandList_PushRange failed\n");
             return false;
         }
         return true;
@@ -443,7 +442,7 @@ namespace nv { namespace perf { namespace profiler {
         NVPA_Status nvpaStatus = NVPW_D3D12_Profiler_CommandList_PopRange(&popParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(50, "NVPW_D3D12_Profiler_CommandList_PopRange failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(50, "NVPW_D3D12_Profiler_CommandList_PopRange failed\n");
             return false;
         }
         return true;
@@ -520,7 +519,7 @@ namespace nv { namespace perf { namespace mini_trace {
         NVPA_Status nvpaStatus = NVPW_D3D12_MiniTrace_IsGpuSupported(&params);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(10, "NVPW_D3D12_MiniTrace_IsGpuSupported failed on %ls, nvpaStatus = %s\n", D3D12GetDeviceName(pDevice).c_str(), FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(10, "NVPW_D3D12_MiniTrace_IsGpuSupported failed on %ls\n", D3D12GetDeviceName(pDevice).c_str());
             return false;
         }
 

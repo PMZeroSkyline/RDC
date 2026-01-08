@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -79,19 +79,11 @@ public:
   void FillWithDiscardPattern(VkCommandBuffer cmd, DiscardType type, VkImage image,
                               VkImageLayout curLayout, VkImageSubresourceRange discardRange,
                               VkRect2D discardRect);
-  void FillWithDiscardPatternOnHost(VkDevice device, DiscardType type, VkImage image,
-                                    VkImageLayout curLayout, VkImageSubresourceRange discardRange,
-                                    VkRect2D discardRect);
 
-  struct ReadbackWindow
-  {
-    VkBuffer unwrappedBuffer;
-    VkDeviceMemory unwrappedMemory;
-    byte *ptr;
-  };
-
-  ReadbackWindow LockReadbackBuffer(VkDeviceSize sz);
-  void UnlockReadbackBuffer();
+  void InitReadbackBuffer(VkDeviceSize sz);
+  byte *GetReadbackPtr() { return m_ReadbackPtr; }
+  VkBuffer GetUnwrappedReadbackBuffer() { return m_ReadbackWindow.UnwrappedBuffer(); }
+  VkDeviceMemory GetUnwrappedReadbackMemory() { return m_ReadbackWindow.UnwrappedMemory(); }
   VkPipelineCache GetPipelineCache() { return m_PipelineCache; }
   VkPipeline GetCustomPipeline() { return m_Custom.TexPipeline; }
   VkPipeline GetDummyPipeline() { return m_DummyPipeline; }
@@ -122,7 +114,6 @@ public:
   VkImageLayout GetImageLayout(ResourceId image, VkImageAspectFlagBits aspect, uint32_t mip,
                                uint32_t slice);
 
-  const VulkanCreationInfo::Buffer &GetBufferInfo(ResourceId img) const;
   const VulkanCreationInfo::Image &GetImageInfo(ResourceId img) const;
   const VulkanCreationInfo::ImageView &GetImageViewInfo(ResourceId imgView) const;
   const VulkanCreationInfo::Pipeline &GetPipelineInfo(ResourceId pipe) const;
@@ -139,7 +130,6 @@ private:
   // GetBufferData
   GPUBuffer m_ReadbackWindow;
   byte *m_ReadbackPtr = NULL;
-  Threading::CriticalSection m_ReadbackLock;
 
   // CacheMeshDisplayPipelines
   std::map<uint64_t, VKMeshDisplayPipelines> m_CachedMeshPipelines;
@@ -158,11 +148,11 @@ private:
   VkPipeline m_DepthMS2BufferPipe = VK_NULL_HANDLE;
 
   // MSAA dummy images
-  VkDeviceMemory m_UnwrappedDummyMemory = VK_NULL_HANDLE;
-  VkImage m_UnwrappedDummyDepthImage = {VK_NULL_HANDLE};
-  VkImageView m_UnwrappedDummyDepthView = {VK_NULL_HANDLE};
-  VkImage m_UnwrappedDummyStencilImage = {VK_NULL_HANDLE};
-  VkImageView m_UnwrappedDummyStencilView = {VK_NULL_HANDLE};
+  VkDeviceMemory m_DummyMemory = VK_NULL_HANDLE;
+  VkImage m_DummyDepthImage = {VK_NULL_HANDLE};
+  VkImageView m_DummyDepthView = {VK_NULL_HANDLE};
+  VkImage m_DummyStencilImage = {VK_NULL_HANDLE};
+  VkImageView m_DummyStencilView = {VK_NULL_HANDLE};
 
   // dummy pipeline
   VkPipelineLayout m_DummyPipelineLayout = VK_NULL_HANDLE;

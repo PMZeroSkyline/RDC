@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -25,7 +25,6 @@
 
 #pragma once
 
-#include <unordered_map>
 #include "api/replay/renderdoc_replay.h"
 #include "core/core.h"
 #include "replay/replay_driver.h"
@@ -118,67 +117,6 @@ enum TexDisplayFlags
   eTexDisplay_RemapSInt = 0x10,
 };
 
-struct SamplingProgramConfig
-{
-  enum
-  {
-    TexBuffer,
-    Tex1D,
-    Tex2D,
-    Tex3D,
-    TexCube,
-    Tex1DArray,
-    Tex2DArray,
-    Tex3DArray,
-    TexCubeArray,
-    Tex2DRect,
-    Tex2DMS,
-    Tex2DMSArray,
-  } dim = Tex2D;
-
-  enum
-  {
-    Fetch,
-    QueryLod,
-    Sample,
-    SampleDref,
-    Gather,
-    GatherDref,
-  } op = Fetch;
-
-  enum
-  {
-    Float,
-    UInt,
-    SInt,
-  } resType = Float;
-
-  uint32_t gatherChannel = 0;
-  bool useGatherOffs = false;
-  bool useGrad = false;
-  bool manualBias = false;
-  rdcfixedarray<int32_t, 8> gatherOffsets = {};
-  Vec3i fetchOffset;
-
-  uint32_t hashKey() const
-  {
-    uint32_t hash = 5381;
-    hash = ((hash << 5) + hash) + (uint32_t)dim;
-    hash = ((hash << 5) + hash) + (uint32_t)op;
-    hash = ((hash << 5) + hash) + (uint32_t)resType;
-    hash = ((hash << 5) + hash) + gatherChannel;
-    hash = ((hash << 5) + hash) + useGatherOffs;
-    hash = ((hash << 5) + hash) + useGrad;
-    hash = ((hash << 5) + hash) + manualBias;
-    hash = ((hash << 5) + hash) + fetchOffset.x;
-    hash = ((hash << 5) + hash) + fetchOffset.y;
-    hash = ((hash << 5) + hash) + fetchOffset.z;
-    for(size_t i = 0; i < gatherOffsets.size(); i++)
-      hash = ((hash << 5) + hash) + gatherOffsets[i];
-    return hash;
-  }
-};
-
 class GLReplay : public IReplayDriver
 {
 public:
@@ -207,7 +145,7 @@ public:
   TextureDescription GetTexture(ResourceId id);
 
   rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader);
-  const ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader, ShaderEntryPoint entry);
+  ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader, ShaderEntryPoint entry);
 
   rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline);
   rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target);
@@ -255,6 +193,8 @@ public:
 
   void InitPostVSBuffers(uint32_t eventId);
   void InitPostVSBuffers(const rdcarray<uint32_t> &passEvents);
+
+  ResourceId GetLiveID(ResourceId id);
 
   void PickPixel(ResourceId texture, uint32_t x, uint32_t y, const Subresource &sub,
                  CompType typeCast, float pixel[4]);
@@ -347,7 +287,6 @@ public:
   void FileChanged() {}
   void SetReplayData(GLWindowingData data);
 
-  void UseReplayContext() { MakeCurrentReplayContext(&m_ReplayCtx); }
   bool IsReplayContext(void *ctx) { return m_ReplayCtx.ctx == NULL || ctx == m_ReplayCtx.ctx; }
   bool HasDebugContext() { return m_DebugCtx != NULL; }
   void FillWithDiscardPattern(DiscardType type, GLuint framebuffer, GLsizei numAttachments,
@@ -357,11 +296,8 @@ public:
                               GLint yoffset = 0, GLint zoffset = 0, GLsizei width = 65536,
                               GLsizei height = 65536, GLsizei depth = 65536);
 
-  bool CreateShaderReplacementProgram(GLuint srcProgram, GLuint srcPipeline, GLuint replacedProgram,
-                                      ShaderStage stage, GLuint newShader, GLuint newShaderSPIRV);
-
-  GLuint GetShaderDebugMathProg();
-  GLuint MakeShaderDebugSampleProg(const SamplingProgramConfig &config);
+  bool CreateFragmentShaderReplacementProgram(GLuint program, GLuint replacedProgram, GLuint pipeline,
+                                              GLuint fragShader, GLuint fragShaderSPIRV);
 
 private:
   void OpenGLFillCBufferVariables(ResourceId shader, GLuint prog, bool bufferBacked, rdcstr prefix,
@@ -437,8 +373,6 @@ private:
 
     int glslVersion;
 
-    rdcstr texSampleDefines;
-
     // min/max data
     GLuint minmaxTileResult;          // tile result buffer
     GLuint minmaxResult;              // Vec4f[2] final result buffer
@@ -504,8 +438,6 @@ private:
     GLuint discardProg[3][4];
     GLuint discardPatternBuffer;
 
-    GLuint shaderDebugMathProg;
-
     ResourceId overlayTexId;
     GLuint overlayTex;
     GLuint overlayFBO;
@@ -521,8 +453,6 @@ private:
   bool m_Degraded;
 
   HighlightCache m_HighlightCache;
-
-  std::unordered_map<uint32_t, GLuint> m_ShaderDebugSampleProg;
 
   std::map<GLenum, bytebuf> m_DiscardPatterns;
 

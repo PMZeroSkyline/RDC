@@ -1,5 +1,5 @@
 /*
-* Copyright 2014-2025 NVIDIA Corporation.  All rights reserved.
+* Copyright 2014-2022 NVIDIA Corporation.  All rights reserved.
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #include "NvPerfDeviceProperties.h"
 #include "nvperf_opengl_host.h"
 #include "nvperf_opengl_target.h"
-//#include "GL/gl.h"
+// #include "GL/gl.h"
 #include <string.h>
 namespace nv { namespace perf {
 
@@ -58,7 +58,7 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_OpenGL_LoadDriver(&loadDriverParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(10, "NVPW_OpenGL_LoadDriver failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(10, "NVPW_OpenGL_LoadDriver failed\n");
             return false;
         }
         return true;
@@ -72,7 +72,6 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_OpenGL_GraphicsContext_GetDeviceIndex(&getDeviceIndexParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_OpenGL_GraphicsContext_GetDeviceIndex failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
             return ~size_t(0);
         }
 
@@ -87,22 +86,22 @@ namespace nv { namespace perf {
         return deviceIdentifiers;
     }
 
-    inline ClockInfo OpenGLGetDeviceClockState()
+    inline NVPW_Device_ClockStatus OpenGLGetDeviceClockState()
     {
         size_t nvperfDeviceIndex = OpenGLGetNvperfDeviceIndex();
         return GetDeviceClockState(nvperfDeviceIndex);
     }
 
-    inline bool OpenGLSetDeviceClockState(NVPW_Device_ClockSetting clockSetting)
+    inline bool OpenGLSetDeviceClockState(NVPW_Device_ClockSetting clockStatus)
     {
         size_t nvperfDeviceIndex = OpenGLGetNvperfDeviceIndex();
-        return SetDeviceClockState(nvperfDeviceIndex, clockSetting);
+        return SetDeviceClockState(nvperfDeviceIndex, clockStatus);
     }
 
-    inline bool OpenGLSetDeviceClockState(const ClockInfo& clockInfo)
+    inline bool OpenGLSetDeviceClockState(NVPW_Device_ClockStatus clockStatus)
     {
         size_t nvperfDeviceIndex = OpenGLGetNvperfDeviceIndex();
-        return SetDeviceClockState(nvperfDeviceIndex, clockInfo);
+        return SetDeviceClockState(nvperfDeviceIndex, clockStatus);
     }
 
     inline size_t OpenGLCalculateMetricsEvaluatorScratchBufferSize(const char* pChipName)
@@ -112,7 +111,7 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_OpenGL_MetricsEvaluator_CalculateScratchBufferSize(&calculateScratchBufferSizeParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_OpenGL_MetricsEvaluator_CalculateScratchBufferSize failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(20, "NVPW_OpenGL_MetricsEvaluator_CalculateScratchBufferSize failed\n");
             return 0;
         }
         return calculateScratchBufferSizeParams.scratchBufferSize;
@@ -127,7 +126,7 @@ namespace nv { namespace perf {
         NVPA_Status nvpaStatus = NVPW_OpenGL_MetricsEvaluator_Initialize(&initializeParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_OpenGL_MetricsEvaluator_Initialize failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(20, "NVPW_OpenGL_MetricsEvaluator_Initialize failed\n");
             return nullptr;
         }
         return initializeParams.pMetricsEvaluator;
@@ -137,22 +136,19 @@ namespace nv { namespace perf {
 
 namespace nv { namespace perf { namespace profiler {
 
-// Wait Until Next Binary Drop
-
-    inline NVPW_RawCounterConfig* OpenGLCreateRawCounterConfig(const char* pChipName)
+    inline NVPA_RawMetricsConfig* OpenGLCreateRawMetricsConfig(const char* pChipName)
     {
-        NVPW_OpenGL_RawCounterConfig_Create_Params configParams = { NVPW_OpenGL_RawCounterConfig_Create_Params_STRUCT_SIZE };
+        NVPW_OpenGL_RawMetricsConfig_Create_Params configParams = { NVPW_OpenGL_RawMetricsConfig_Create_Params_STRUCT_SIZE };
         configParams.activityKind = NVPA_ACTIVITY_KIND_PROFILER;
         configParams.pChipName = pChipName;
 
-        NVPA_Status nvpaStatus = NVPW_OpenGL_RawCounterConfig_Create(&configParams);
+        NVPA_Status nvpaStatus = NVPW_OpenGL_RawMetricsConfig_Create(&configParams);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(20, "NVPW_OpenGL_RawCounterConfig_Create failed, nvpaStatus = %s\n", FormatStatus(nvpaStatus).c_str());
             return nullptr;
         }
 
-        return configParams.pRawCounterConfig;
+        return configParams.pRawMetricsConfig;
     }
 
     inline bool OpenGLIsGpuSupported(size_t sliIndex = 0)
@@ -164,7 +160,7 @@ namespace nv { namespace perf { namespace profiler {
         NVPA_Status nvpaStatus = NVPW_OpenGL_Profiler_IsGpuSupported(&params);
         if (nvpaStatus)
         {
-            NV_PERF_LOG_ERR(10, "NVPW_OpenGL_Profiler_IsGpuSupported failed on %s, nvpaStatus = %s\n", OpenGLGetDeviceName().c_str(), FormatStatus(nvpaStatus).c_str());
+            NV_PERF_LOG_ERR(10, "NVPW_OpenGL_Profiler_IsGpuSupported failed on %s\n", OpenGLGetDeviceName().c_str());
             return false;
         }
 

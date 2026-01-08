@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,6 @@
  ******************************************************************************/
 
 #include <math.h>
-#include "formatting.h"
 #include "threading.h"
 
 namespace Threading
@@ -216,7 +215,6 @@ bool RunJobIfReady(Threading::JobSystem::Job *curJob)
 
 void WorkerThread(JobWorker &worker)
 {
-  Threading::SetCurrentThreadName(StringFormat::Fmt("JobWorker %02u", (uint32_t)worker.idx));
   // outer loop until shutdown
   while(true)
   {
@@ -444,11 +442,6 @@ Job *AddJob(std::function<void()> &&callback, const rdcarray<Job *> &parents)
   TryWakeFirstSleepingWorker();
 
   return ret;
-}
-
-uint32_t GetCountWorkers()
-{
-  return (uint32_t)workers.size();
 }
 
 };    // namespace JobSystem

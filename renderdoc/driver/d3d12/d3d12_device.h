@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -64,7 +64,7 @@ struct D3D12InitParams
   UINT SDKVersion = 0;
 
   // check if a frame capture section version is supported
-  static const uint64_t CurrentVersion = 0x16;
+  static const uint64_t CurrentVersion = 0x13;
 
   static bool IsSupportedVersion(uint64_t ver);
 };
@@ -74,7 +74,7 @@ DECLARE_REFLECTION_STRUCT(D3D12InitParams);
 struct QueueReadbackData
 {
   Threading::CriticalSection lock;
-  ID3D12Resource *unwrappedReadbackBuf = NULL;
+  ID3D12Resource *readbackBuf = NULL;
   byte *readbackMapped = NULL;
   uint64_t readbackSize = 0;
 
@@ -336,27 +336,6 @@ struct WrappedDownlevelDevice : public ID3D12DeviceDownlevel
                        _Out_ DXGI_QUERY_VIDEO_MEMORY_INFO *pVideoMemoryInfo);
 };
 
-struct WrappedDeviceTools : public ID3D12DeviceTools
-{
-  WrappedID3D12Device &m_pDevice;
-
-  WrappedDeviceTools(WrappedID3D12Device &dev) : m_pDevice(dev) {}
-  //////////////////////////////
-  // implement IUnknown
-  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject);
-  ULONG STDMETHODCALLTYPE AddRef();
-  ULONG STDMETHODCALLTYPE Release();
-  //////////////////////////////
-  // implement ID3D12DeviceTools
-  virtual void STDMETHODCALLTYPE SetNextAllocationAddress(UINT64 pVirtualAddress);
-  //////////////////////////////
-  // implement ID3D12DeviceTools1
-  virtual HRESULT STDMETHODCALLTYPE GetApplicationSpecificDriverState(_COM_Outptr_ ID3DBlob **ppBlob);
-
-  virtual D3D12_APPLICATION_SPECIFIC_DRIVER_BLOB_STATUS STDMETHODCALLTYPE
-  GetApplicationSpecificDriverBlobStatus(void);
-};
-
 struct WrappedDRED : public ID3D12DeviceRemovedExtendedData1
 {
   WrappedID3D12Device &m_pDevice;
@@ -608,8 +587,6 @@ private:
   ID3D12Device12 *m_pDevice12;
   ID3D12Device13 *m_pDevice13;
   ID3D12Device14 *m_pDevice14;
-  ID3D12DeviceTools *m_pDeviceTools = NULL;
-  ID3D12DeviceTools1 *m_pDeviceTools1 = NULL;
   ID3D12DeviceDownlevel *m_pDownlevel;
 
   WrappedID3D12DeviceConfiguration m_DevConfig;
@@ -669,7 +646,6 @@ private:
   ID3D12GraphicsCommandList *m_OverlayLists[MaxOverlayInFlight] = {};
 
   WrappedDownlevelDevice m_WrappedDownlevel;
-  WrappedDeviceTools m_WrappedDeviceTools;
   WrappedDRED m_DRED;
   WrappedDREDSettings m_DREDSettings;
   WrappedCompatibilityDevice m_CompatDevice;
@@ -713,8 +689,6 @@ private:
   std::set<ResourceId> m_ModResources;
   rdcflatmap<uint64_t, ID3D12Resource *> m_UploadBuffers;
   rdcflatmap<uint64_t, D3D12_RANGE> m_UploadRanges;
-
-  rdcflatmap<rdcfixedarray<uint32_t, 4>, ID3D12RootSignature *> m_ImplicitRootSigs;
 
   Threading::CriticalSection m_MapsLock;
   rdcarray<MapState> m_Maps;
@@ -1082,8 +1056,6 @@ public:
   bool IsReadOnlyResource(ResourceId id) { return m_ModResources.find(id) == m_ModResources.end(); }
   void CloseInitialStateList();
   ID3D12Resource *GetUploadBuffer(uint64_t chunkOffset, uint64_t byteSize);
-
-  ID3D12RootSignature *CreateImplicitRootSig(D3D12_SERIALIZED_ROOT_SIGNATURE_DESC &RootSigBlob);
 
   HRESULT CreateInitialStateBuffer(const D3D12_RESOURCE_DESC &desc, ID3D12Resource **buf);
   rdcarray<ID3D12Heap *> m_InitialStateHeaps;
@@ -1458,11 +1430,6 @@ public:
                                        ID3D12CommandAllocator *pCommandAllocator,
                                        ID3D12PipelineState *pInitialState, REFIID riid,
                                        void **ppCommandList);
-
-  ResourceId m_NextListID;
-  HRESULT CreateCommandList(ResourceId id, UINT nodeMask, D3D12_COMMAND_LIST_TYPE type,
-                            ID3D12CommandAllocator *pCommandAllocator,
-                            ID3D12PipelineState *pInitialState, REFIID riid, void **ppCommandList);
 
   IMPLEMENT_FUNCTION_THREAD_SERIALISED(virtual HRESULT STDMETHODCALLTYPE, CheckFeatureSupport,
                                        D3D12_FEATURE Feature, void *pFeatureSupportData,
@@ -1904,29 +1871,4 @@ public:
                                        _In_reads_(blobLengthInBytes) const void *pLibraryBlob,
                                        _In_ SIZE_T blobLengthInBytes, _In_opt_ LPCWSTR subobjectName,
                                        REFIID riid, _COM_Outptr_ void **ppvRootSignature);
-
-  //////////////////////////////
-  // implement ID3D12DeviceTools
-  virtual void STDMETHODCALLTYPE SetNextAllocationAddress(UINT64 pVirtualAddress)
-  {
-    if(m_pDeviceTools)
-      m_pDeviceTools->SetNextAllocationAddress(pVirtualAddress);
-  }
-
-  //////////////////////////////
-  // implement ID3D12DeviceTools1
-  virtual HRESULT STDMETHODCALLTYPE GetApplicationSpecificDriverState(_COM_Outptr_ ID3DBlob **ppBlob)
-  {
-    if(m_pDeviceTools1)
-      return m_pDeviceTools1->GetApplicationSpecificDriverState(ppBlob);
-    return E_NOINTERFACE;
-  }
-
-  virtual D3D12_APPLICATION_SPECIFIC_DRIVER_BLOB_STATUS STDMETHODCALLTYPE
-  GetApplicationSpecificDriverBlobStatus(void)
-  {
-    if(m_pDeviceTools1)
-      return m_pDeviceTools1->GetApplicationSpecificDriverBlobStatus();
-    return D3D12_APPLICATION_SPECIFIC_DRIVER_BLOB_UNKNOWN;
-  }
 };

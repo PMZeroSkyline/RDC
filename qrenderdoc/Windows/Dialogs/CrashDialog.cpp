@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -70,7 +70,6 @@ CrashDialog::CrashDialog(PersistantConfig &cfg, QVariantMap crashReportJSON, QWi
 
   QFileInfo capInfo(m_CaptureFilename);
 
-  bool hasEmbeddedFiles = false;
   if(replayCrash && capInfo.exists())
   {
     // if we have a previous capture, fill out the capture group
@@ -99,7 +98,6 @@ CrashDialog::CrashDialog(PersistantConfig &cfg, QVariantMap crashReportJSON, QWi
 
         m_Thumbnail = new Thumbnail(cap->GetThumbnail(FileType::JPG, 0));
       }
-      hasEmbeddedFiles = cap->HasEmbeddedDependencies();
     }
 
     cap->Shutdown();
@@ -160,11 +158,6 @@ CrashDialog::CrashDialog(PersistantConfig &cfg, QVariantMap crashReportJSON, QWi
            "can get better!</p>")
             .arg(QUrl::fromLocalFile(m_ReportPath).toString());
   }
-
-  if(!m_CaptureFilename.isEmpty() && hasEmbeddedFiles)
-    text +=
-        tr("<p>Warning: The capture file contains embedded dependency files i.e. shader debug "
-           "files.</p>");
 
   if(m_Config.CheckUpdate_UpdateAvailable)
   {

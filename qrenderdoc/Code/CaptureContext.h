@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -195,7 +195,6 @@ public:
   int32_t UnreadMessageCount() override { return m_UnreadMessageCount; }
   void MarkMessagesRead() override { m_UnreadMessageCount = 0; }
   void AddMessages(const rdcarray<DebugMessage> &msgs) override;
-  void ClearMessages() override;
 
   void ConnectToRemoteServer(RemoteHost host) override;
 
@@ -204,10 +203,6 @@ public:
   rdcarray<EventBookmark> GetBookmarks() override { return m_Bookmarks; }
   void SetBookmark(const EventBookmark &mark) override;
   void RemoveBookmark(uint32_t EID) override;
-  void EmbedDependentFiles() override;
-  void RemoveDependentFiles() override;
-
-  void DelayedCallback(uint32_t milliseconds, std::function<void()> callback) override;
 
   IMainWindow *GetMainWindow() override;
   IEventBrowser *GetEventBrowser() override;
@@ -314,7 +309,6 @@ private:
   bool m_CaptureLoaded = false, m_LoadInProgress = false, m_CaptureLocal = false,
        m_CaptureTemporary = false;
   QString m_CaptureFile;
-  QString m_RemoteFile;
   CaptureModifications m_CaptureMods = CaptureModifications::NoModifications;
 
   rdcarray<DebugMessage> m_DebugMessages;

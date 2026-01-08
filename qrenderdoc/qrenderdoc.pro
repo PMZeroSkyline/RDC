@@ -251,9 +251,7 @@ SOURCES += Code/qrenderdoc.cpp \
     Windows/ResourceInspector.cpp \
     Windows/Dialogs/AnalyticsConfirmDialog.cpp \
     Windows/Dialogs/AnalyticsPromptDialog.cpp \
-    Windows/Dialogs/AxisMappingDialog.cpp \
-    Windows/Dialogs/CameraControlsDialog.cpp \
-    Windows/Dialogs/ProjectionGuessDialog.cpp
+    Windows/Dialogs/AxisMappingDialog.cpp
 HEADERS += Code/CaptureContext.h \
     Code/qprocessinfo.h \
     Code/ReplayManager.h \
@@ -339,9 +337,7 @@ HEADERS += Code/CaptureContext.h \
     Windows/ResourceInspector.h \
     Windows/Dialogs/AnalyticsConfirmDialog.h \
     Windows/Dialogs/AnalyticsPromptDialog.h \
-    Windows/Dialogs/AxisMappingDialog.h \
-    Windows/Dialogs/CameraControlsDialog.h \
-    Windows/Dialogs/ProjectionGuessDialog.h
+    Windows/Dialogs/AxisMappingDialog.h
 FORMS    += Windows/Dialogs/AboutDialog.ui \
     Windows/Dialogs/CrashDialog.ui \
     Windows/Dialogs/UpdateDialog.ui \
@@ -386,9 +382,7 @@ FORMS    += Windows/Dialogs/AboutDialog.ui \
     Windows/ResourceInspector.ui \
     Windows/Dialogs/AnalyticsConfirmDialog.ui \
     Windows/Dialogs/AnalyticsPromptDialog.ui \
-    Windows/Dialogs/AxisMappingDialog.ui \
-    Windows/Dialogs/CameraControlsDialog.ui \
-    Windows/Dialogs/ProjectionGuessDialog.ui
+    Windows/Dialogs/AxisMappingDialog.ui
 
 RESOURCES += Resources/resources.qrc
 

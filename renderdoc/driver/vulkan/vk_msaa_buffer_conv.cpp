@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -54,7 +54,7 @@ void VulkanDebugManager::CopyTex2DMSToBuffer(VkCommandBuffer cmd, VkBuffer destB
   VkImageViewCreateInfo viewInfo = {
       VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
       NULL,
-      m_pDriver->DefaultImageViewCreateFlags(),
+      0,
       srcMS,
       VK_IMAGE_VIEW_TYPE_2D_ARRAY,
       VK_FORMAT_UNDEFINED,
@@ -235,7 +235,7 @@ void VulkanDebugManager::CopyDepthTex2DMSToBuffer(VkCommandBuffer cmd, VkBuffer 
   VkImageViewCreateInfo viewInfo = {
       VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
       NULL,
-      m_pDriver->DefaultImageViewCreateFlags(),
+      0,
       srcMS,
       VK_IMAGE_VIEW_TYPE_2D_ARRAY,
       fmt,
@@ -294,9 +294,9 @@ void VulkanDebugManager::CopyDepthTex2DMSToBuffer(VkCommandBuffer cmd, VkBuffer 
 
   if((aspectFlags & VK_IMAGE_ASPECT_DEPTH_BIT) == 0)
   {
-    if(m_UnwrappedDummyDepthView != VK_NULL_HANDLE)
+    if(m_DummyDepthView != VK_NULL_HANDLE)
     {
-      srcdesc[0].imageView = m_UnwrappedDummyDepthView;
+      srcdesc[0].imageView = Unwrap(m_DummyDepthView);
     }
     else
     {
@@ -309,9 +309,9 @@ void VulkanDebugManager::CopyDepthTex2DMSToBuffer(VkCommandBuffer cmd, VkBuffer 
 
   if((aspectFlags & VK_IMAGE_ASPECT_STENCIL_BIT) == 0)
   {
-    if(m_UnwrappedDummyStencilView != VK_NULL_HANDLE)
+    if(m_DummyStencilView != VK_NULL_HANDLE)
     {
-      srcdesc[1].imageView = m_UnwrappedDummyStencilView;
+      srcdesc[1].imageView = Unwrap(m_DummyStencilView);
     }
     else
     {
@@ -422,7 +422,7 @@ void VulkanDebugManager::CopyBufferToTex2DMS(VkCommandBuffer cmd, VkImage destMS
   VkImageViewCreateInfo viewInfo = {
       VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
       NULL,
-      m_pDriver->DefaultImageViewCreateFlags(),
+      0,
       destMS,
       VK_IMAGE_VIEW_TYPE_2D_ARRAY,
       VK_FORMAT_UNDEFINED,
@@ -631,7 +631,7 @@ void VulkanDebugManager::CopyDepthBufferToTex2DMS(VkCommandBuffer cmd, VkImage d
   VkImageViewCreateInfo viewInfo = {
       VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
       NULL,
-      m_pDriver->DefaultImageViewCreateFlags(),
+      0,
       destMS,
       VK_IMAGE_VIEW_TYPE_2D_ARRAY,
       fmt,

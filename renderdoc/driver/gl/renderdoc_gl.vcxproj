@@ -23,6 +23,7 @@
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>renderdoc_gl</RootNamespace>
     <ProjectName>gl</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(SolutionDir)\util\WindowsSDKTarget.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -30,7 +31,7 @@
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
     <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -112,7 +113,6 @@
     <ClInclude Include="gl_renderstate.h" />
     <ClInclude Include="gl_replay.h" />
     <ClInclude Include="gl_resources.h" />
-    <ClInclude Include="gl_shaderdebug.h" />
     <ClInclude Include="gl_shader_refl.h" />
     <ClInclude Include="official\cgl.h" />
     <ClInclude Include="official\egl.h" />
@@ -152,7 +152,6 @@
     <ClCompile Include="gl_driver.cpp" />
     <ClCompile Include="gl_hooks.cpp" />
     <ClCompile Include="gl_pixelhistory.cpp" />
-    <ClCompile Include="gl_shaderdebug.cpp" />
     <ClCompile Include="wgl_hooks.cpp" />
     <ClCompile Include="gl_initstate.cpp" />
     <ClCompile Include="gl_manager.cpp" />

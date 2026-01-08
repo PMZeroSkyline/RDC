@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -81,20 +81,15 @@ Q_DECLARE_METATYPE(VulkanVBIBTag);
 struct VulkanCBufferTag
 {
   VulkanCBufferTag() { index = DescriptorAccess::NoShaderBinding; }
-  VulkanCBufferTag(uint32_t index, uint32_t arrayElement, uint32_t dynOffset)
-      : index(index), arrayElement(arrayElement), dynamicOffset(dynOffset)
+  VulkanCBufferTag(uint32_t index, uint32_t arrayElement) : index(index), arrayElement(arrayElement)
   {
   }
-  VulkanCBufferTag(Descriptor descriptor, uint32_t dynOffset)
-      : index(DescriptorAccess::NoShaderBinding),
-        arrayElement(0),
-        descriptor(descriptor),
-        dynamicOffset(dynOffset)
+  VulkanCBufferTag(Descriptor descriptor)
+      : index(DescriptorAccess::NoShaderBinding), arrayElement(0), descriptor(descriptor)
   {
   }
 
   Descriptor descriptor;
-  uint32_t dynamicOffset;
   uint32_t index, arrayElement;
 };
 
@@ -103,8 +98,8 @@ Q_DECLARE_METATYPE(VulkanCBufferTag);
 struct VulkanBufferTag
 {
   VulkanBufferTag() {}
-  VulkanBufferTag(const DescriptorAccess &access, const Descriptor &desc, uint32_t dynOffset)
-      : access(access), descriptor(desc), dynamicOffset(dynOffset)
+  VulkanBufferTag(const DescriptorAccess &access, const Descriptor &desc)
+      : access(access), descriptor(desc)
   {
   }
   VulkanBufferTag(ResourceId id, uint64_t offset, uint64_t length)
@@ -113,11 +108,9 @@ struct VulkanBufferTag
     descriptor.resource = id;
     descriptor.byteOffset = offset;
     descriptor.byteSize = length;
-    dynamicOffset = 0;
   }
   DescriptorAccess access;
   Descriptor descriptor;
-  uint32_t dynamicOffset = 0;
 };
 
 Q_DECLARE_METATYPE(VulkanBufferTag);
@@ -148,14 +141,8 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
   const QIcon &action_hover = Icons::action_hover();
 
   RDLabel *shaderLabels[] = {
-      ui->tsPipeline,     ui->msPipeline,    ui->vsPipeline,    ui->tcsPipeline,
-      ui->tesPipeline,    ui->gsPipeline,    ui->fsPipeline,    ui->csPipeline,
-
-      ui->tsShader,       ui->msShader,      ui->vsShader,      ui->tcsShader,
-      ui->tesShader,      ui->gsShader,      ui->fsShader,      ui->csShader,
-
-      ui->tsShaderDebug,  ui->msShaderDebug, ui->vsShaderDebug, ui->tcsShaderDebug,
-      ui->tesShaderDebug, ui->gsShaderDebug, ui->fsShaderDebug, ui->csShaderDebug,
+      ui->tsShader,  ui->msShader, ui->vsShader, ui->tcsShader,
+      ui->tesShader, ui->gsShader, ui->fsShader, ui->csShader,
   };
 
   RDLabel *pipeLayoutLabels[] = {
@@ -207,28 +194,21 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
       ui->tesDescSets, ui->gsDescSets, ui->fsDescSets, ui->csDescSets,
   };
 
-  // setup FlowLayout for shader groups
-  QWidget *shaderGroups[] = {
-      ui->tsShaderGroup,  ui->msShaderGroup, ui->vsShaderGroup, ui->tcsShaderGroup,
-      ui->tesShaderGroup, ui->gsShaderGroup, ui->fsShaderGroup, ui->csShaderGroup,
-  };
-
-  // setup FlowLayout for shader groups
-  for(QWidget *shaderGroup : shaderGroups)
+  // setup FlowLayout for CS shader group, with debugging controls
   {
-    QLayout *oldLayout = shaderGroup->layout();
+    QLayout *oldLayout = ui->csShaderGroup->layout();
 
-    QObjectList childs = shaderGroup->children();
+    QObjectList childs = ui->csShaderGroup->children();
     childs.removeOne((QObject *)oldLayout);
 
     delete oldLayout;
 
-    FlowLayout *shaderFlow = new FlowLayout(shaderGroup, -1, 3, 3);
+    FlowLayout *csShaderFlow = new FlowLayout(ui->csShaderGroup, -1, 3, 3);
 
     for(QObject *o : childs)
-      shaderFlow->addWidget(qobject_cast<QWidget *>(o));
+      csShaderFlow->addWidget(qobject_cast<QWidget *>(o));
 
-    shaderGroup->setLayout(shaderFlow);
+    ui->csShaderGroup->setLayout(csShaderFlow);
   }
 
   for(QToolButton *b : viewButtons)
@@ -387,12 +367,10 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
     RDHeaderView *header = new RDHeaderView(Qt::Horizontal, this);
     desc->setHeader(header);
 
-    // Buffer / Set
-    desc->setColumns({tr("Index"), tr("Layout"), tr("Buffer"), tr("Buffer Offset"),
-                      tr("Set Offset"), tr("Type"), tr("Go")});
-    header->setColumnStretchHints({-1, 4, 4, 2, 2, 2, -1});
+    desc->setColumns({tr("Index"), tr("Layout"), tr("Bound Set"), tr("Go")});
+    header->setColumnStretchHints({-1, 4, 4, -1});
 
-    desc->setHoverIconColumn(6, action, action_hover);
+    desc->setHoverIconColumn(3, action, action_hover);
     desc->setClearSelectionOnFocusLoss(true);
     desc->setInstantTooltips(true);
 
@@ -796,24 +774,20 @@ bool VulkanPipelineStateViewer::setViewDetails(RDTreeWidgetItem *node, const Des
 }
 
 bool VulkanPipelineStateViewer::setViewDetails(RDTreeWidgetItem *node, const Descriptor &descriptor,
-                                               BufferDescription *buf, uint32_t dynamicOffset)
+                                               BufferDescription *buf)
 {
   if(buf == NULL)
     return false;
 
   QString text;
 
-  if(descriptor.byteOffset + dynamicOffset > 0 || descriptor.byteSize < buf->length)
+  if(descriptor.byteOffset > 0 || descriptor.byteSize < buf->length)
   {
-    uint64_t effectiveSize = descriptor.byteSize;
-    if(descriptor.byteSize == UINT64_MAX)
-      effectiveSize = buf->length - (descriptor.byteOffset + dynamicOffset);
-    text +=
-        tr("The view covers bytes %1-%2.\nThe buffer is %3 bytes in length.\n")
-            .arg(Formatter::HumanFormat(descriptor.byteOffset + dynamicOffset, Formatter::OffsetSize))
-            .arg(Formatter::HumanFormat(descriptor.byteOffset + dynamicOffset + effectiveSize,
-                                        Formatter::OffsetSize))
-            .arg(Formatter::HumanFormat(buf->length, Formatter::OffsetSize));
+    text += tr("The view covers bytes %1-%2.\nThe buffer is %3 bytes in length.\n")
+                .arg(Formatter::HumanFormat(descriptor.byteOffset, Formatter::OffsetSize))
+                .arg(Formatter::HumanFormat(descriptor.byteOffset + descriptor.byteSize,
+                                            Formatter::OffsetSize))
+                .arg(Formatter::HumanFormat(buf->length, Formatter::OffsetSize));
   }
   else
   {
@@ -964,16 +938,12 @@ void VulkanPipelineStateViewer::setNewMeshPipeFlow()
   ui->pipeFlow->setIsolatedStage(5);    // compute shader isolated
 }
 
-void VulkanPipelineStateViewer::clearShaderState(RDLabel *pipeline, RDLabel *shader,
-                                                 RDLabel *shaderDebug, RDLabel *pipeLayout,
+void VulkanPipelineStateViewer::clearShaderState(RDLabel *shader, RDLabel *pipeLayout,
                                                  RDTreeWidget *resources, RDTreeWidget *cbuffers,
                                                  RDTreeWidget *descSets)
 {
   pipeLayout->setText(tr("Pipeline Layout"));
-  pipeline->show();
-  pipeline->setText(ToQStr(ResourceId()));
-  shader->setText(ToQStr(ResourceId()));
-  shaderDebug->hide();
+  shader->setText(QFormatStr("%1: %1").arg(ToQStr(ResourceId())));
   resources->clear();
   cbuffers->clear();
   descSets->clear();
@@ -993,22 +963,14 @@ void VulkanPipelineStateViewer::clearState()
   ui->primRestart->setVisible(false);
   ui->topologyDiagram->setPixmap(QPixmap());
 
-  clearShaderState(ui->tsPipeline, ui->tsShader, ui->tsShaderDebug, ui->tsPipeLayout,
-                   ui->tsResources, ui->tsUBOs, ui->tsDescSets);
-  clearShaderState(ui->msPipeline, ui->msShader, ui->msShaderDebug, ui->msPipeLayout,
-                   ui->msResources, ui->msUBOs, ui->msDescSets);
-  clearShaderState(ui->vsPipeline, ui->vsShader, ui->vsShaderDebug, ui->vsPipeLayout,
-                   ui->vsResources, ui->vsUBOs, ui->vsDescSets);
-  clearShaderState(ui->tcsPipeline, ui->tcsShader, ui->tcsShaderDebug, ui->tcsPipeLayout,
-                   ui->tcsResources, ui->tcsUBOs, ui->tcsDescSets);
-  clearShaderState(ui->tesPipeline, ui->tesShader, ui->tesShaderDebug, ui->tesPipeLayout,
-                   ui->tesResources, ui->tesUBOs, ui->tesDescSets);
-  clearShaderState(ui->gsPipeline, ui->gsShader, ui->gsShaderDebug, ui->gsPipeLayout,
-                   ui->gsResources, ui->gsUBOs, ui->gsDescSets);
-  clearShaderState(ui->fsPipeline, ui->fsShader, ui->fsShaderDebug, ui->fsPipeLayout,
-                   ui->fsResources, ui->fsUBOs, ui->fsDescSets);
-  clearShaderState(ui->csPipeline, ui->csShader, ui->csShaderDebug, ui->csPipeLayout,
-                   ui->csResources, ui->csUBOs, ui->csDescSets);
+  clearShaderState(ui->tsShader, ui->tsPipeLayout, ui->tsResources, ui->tsUBOs, ui->tsDescSets);
+  clearShaderState(ui->msShader, ui->msPipeLayout, ui->msResources, ui->msUBOs, ui->msDescSets);
+  clearShaderState(ui->vsShader, ui->vsPipeLayout, ui->vsResources, ui->vsUBOs, ui->vsDescSets);
+  clearShaderState(ui->tcsShader, ui->tcsPipeLayout, ui->tcsResources, ui->tcsUBOs, ui->tcsDescSets);
+  clearShaderState(ui->tesShader, ui->tesPipeLayout, ui->tesResources, ui->tesUBOs, ui->tesDescSets);
+  clearShaderState(ui->gsShader, ui->gsPipeLayout, ui->gsResources, ui->gsUBOs, ui->gsDescSets);
+  clearShaderState(ui->fsShader, ui->fsPipeLayout, ui->fsResources, ui->fsUBOs, ui->fsDescSets);
+  clearShaderState(ui->csShader, ui->csPipeLayout, ui->csResources, ui->csUBOs, ui->csDescSets);
 
   ui->xfbBuffers->clear();
 
@@ -1332,7 +1294,7 @@ void VulkanPipelineStateViewer::addResourceRow(const ShaderResource *shaderRes,
         a = 0;
         restype = TextureType::Buffer;
 
-        tag = QVariant::fromValue(VulkanBufferTag(used.access, used.descriptor, dynamicOffset));
+        tag = QVariant::fromValue(VulkanBufferTag(used.access, used.descriptor));
 
         isbuf = true;
       }
@@ -1579,7 +1541,7 @@ void VulkanPipelineStateViewer::addResourceRow(const ShaderResource *shaderRes,
     }
     else if(buf)
     {
-      setViewDetails(node, descriptor, buf, dynamicOffset);
+      setViewDetails(node, descriptor, buf);
     }
 
     resources->addTopLevelItem(node);
@@ -1595,7 +1557,7 @@ void VulkanPipelineStateViewer::addConstantBlockRow(const ConstantBlock *cblock,
 {
   const Descriptor &descriptor = used.descriptor;
 
-  VulkanCBufferTag tag(used.access.index, used.access.arrayElement, dynamicOffset);
+  VulkanCBufferTag tag(used.access.index, used.access.arrayElement);
 
   bool filledSlot = (descriptor.resource != ResourceId());
   // Vulkan does not report unused elements at all because we enumerate exclusively from the
@@ -1718,50 +1680,35 @@ void VulkanPipelineStateViewer::addConstantBlockRow(const ConstantBlock *cblock,
 }
 
 void VulkanPipelineStateViewer::setShaderState(const VKPipe::Pipeline &pipe,
-                                               const VKPipe::Shader &stage, RDLabel *pipeline,
-                                               RDLabel *shader, RDLabel *shaderDebug,
+                                               const VKPipe::Shader &stage, RDLabel *shader,
                                                RDLabel *pipeLayout, RDTreeWidget *descSets)
 {
-  const ShaderReflection *shaderDetails = stage.reflection;
+  ShaderReflection *shaderDetails = stage.reflection;
 
+  QString shText;
   if(stage.shaderObject)
-  {
-    pipeline->hide();
-    shader->setText(ToQStr(stage.resourceId));
-  }
+    shText = QFormatStr("%1").arg(ToQStr(stage.resourceId));
   else
-  {
-    pipeline->show();
-    pipeline->setText(ToQStr(pipe.pipelineResourceId));
-    shader->setText(ToQStr(stage.resourceId));
-  }
+    shText = QFormatStr("%1: %2").arg(ToQStr(pipe.pipelineResourceId)).arg(ToQStr(stage.resourceId));
 
   if(shaderDetails != NULL)
   {
     QString entryFunc = shaderDetails->entryPoint;
 
-    QString shText = entryFunc + lit("()");
+    if(entryFunc != lit("main"))
+      shText += lit(": ") + entryFunc + lit("()");
 
     const ShaderDebugInfo &dbg = shaderDetails->debugInfo;
     int entryFile = qMax(0, dbg.entryLocation.fileIndex);
 
     if(!dbg.files.isEmpty())
-    {
-      QString filename = QFileInfo(dbg.files[entryFile].filename).fileName();
-      TruncateStringFromEnd(filename);
-      shText += lit(" - ") + filename;
-    }
-
-    if(stage.requiredSubgroupSize != 0)
-      shText += tr(" (Subgroup size %1)").arg(stage.requiredSubgroupSize);
-
-    shaderDebug->show();
-    shaderDebug->setText(shText);
+      shText += lit(" - ") + QFileInfo(dbg.files[entryFile].filename).fileName();
   }
-  else
-  {
-    shaderDebug->hide();
-  }
+
+  if(stage.requiredSubgroupSize != 0)
+    shText += tr(" (Subgroup size %1)").arg(stage.requiredSubgroupSize);
+
+  shader->setText(shText);
 
   if(pipe.pipelineComputeLayoutResourceId != ResourceId())
   {
@@ -1778,135 +1725,15 @@ void VulkanPipelineStateViewer::setShaderState(const VKPipe::Pipeline &pipe,
                             .arg(ToQStr(pipe.pipelineFragmentLayoutResourceId)));
   }
 
-  bool descBuf = false;
+  descSets->clear();
   for(uint32_t i = 0; i < pipe.descriptorSets.size(); i++)
   {
-    if(pipe.descriptorSets[i].descriptorBufferIndex >= 0)
-    {
-      descBuf = true;
-      break;
-    }
+    RDTreeWidgetItem *item =
+        new RDTreeWidgetItem({i, pipe.descriptorSets[i].layoutResourceId,
+                              pipe.descriptorSets[i].descriptorSetResourceId, QString()});
+    item->setTag(i);
+    descSets->addTopLevelItem(item);
   }
-
-  if(descBuf)
-  {
-    descSets->setHeaderText(2, tr(" Buffer"));
-    descSets->header()->showSection(3);    // buffer offset
-    descSets->header()->showSection(4);    // set offset
-    descSets->header()->showSection(5);    // type
-  }
-  else
-  {
-    descSets->setHeaderText(2, tr("Set"));
-    descSets->header()->hideSection(3);    // buffer offset
-    descSets->header()->hideSection(4);    // set offset
-    descSets->header()->hideSection(5);    // type
-  }
-
-  descSets->clear();
-  if(descBuf)
-  {
-    for(uint32_t i = 0; i < pipe.descriptorSets.size(); i++)
-    {
-      RDTreeWidgetItem *item = new RDTreeWidgetItem(
-          {i, pipe.descriptorSets[i].layoutResourceId, QString(), QString(),
-           qulonglong(pipe.descriptorSets[i].descriptorBufferByteOffset), QString(), QString()});
-      item->setTag(i);
-
-      if(pipe.descriptorSets[i].descriptorBufferEmbeddedSamplers)
-      {
-        item->setText(2, tr("Embedded Samplers"));
-        item->setText(4, QString());
-        item->setText(5, tr("Immutable Samplers"));
-      }
-      else if(pipe.descriptorSets[i].pushDescriptor)
-      {
-        item->setText(2, tr("Bufferless"));
-
-        for(size_t b = 0; b < pipe.descriptorBuffers.size(); b++)
-          if(pipe.descriptorBuffers[b].pushBuffer != ResourceId())
-            item->setText(2, ToQStr(pipe.descriptorBuffers[b].pushBuffer));
-
-        item->setText(4, QString());
-
-        item->setText(5, tr("Push Descriptors"));
-      }
-      else if(pipe.descriptorSets[i].descriptorBufferIndex < 0 ||
-              pipe.descriptorSets[i].descriptorBufferIndex >= pipe.descriptorBuffers.count())
-      {
-        setEmptyRow(item);
-      }
-      else
-      {
-        const VKPipe::DescriptorBuffer &buf =
-            pipe.descriptorBuffers[pipe.descriptorSets[i].descriptorBufferIndex];
-        item->setText(2, buf.buffer);
-        item->setText(3, qulonglong(buf.offset));
-        QString type = tr("None");
-        if(buf.resourceBuffer && buf.samplerBuffer)
-          type = tr("Resources+Samplers");
-        else if(buf.resourceBuffer)
-          type = tr("Resources");
-        else if(buf.samplerBuffer)
-          type = tr("Samplers");
-
-        item->setText(5, type);
-      }
-
-      descSets->addTopLevelItem(item);
-    }
-  }
-  else
-  {
-    for(uint32_t i = 0; i < pipe.descriptorSets.size(); i++)
-    {
-      RDTreeWidgetItem *item = new RDTreeWidgetItem({i, pipe.descriptorSets[i].layoutResourceId,
-                                                     pipe.descriptorSets[i].descriptorSetResourceId,
-                                                     QString(), QString(), QString(), QString()});
-      item->setTag(i);
-      descSets->addTopLevelItem(item);
-    }
-  }
-}
-
-rdcpair<uint32_t, uint32_t> GetSetAndBind(const UsedDescriptor &a, const ShaderReflection *refl)
-{
-  rdcpair<uint32_t, uint32_t> ret = {~0U, ~0U};
-
-  if(!refl)
-    return ret;
-
-  DescriptorCategory category = CategoryForDescriptorType(a.access.type);
-  if(category == DescriptorCategory::ConstantBlock)
-  {
-    ret = {
-        refl->constantBlocks[a.access.index].fixedBindSetOrSpace,
-        refl->constantBlocks[a.access.index].fixedBindNumber,
-    };
-  }
-  else if(category == DescriptorCategory::ReadOnlyResource)
-  {
-    ret = {
-        refl->readOnlyResources[a.access.index].fixedBindSetOrSpace,
-        refl->readOnlyResources[a.access.index].fixedBindNumber,
-    };
-  }
-  else if(category == DescriptorCategory::ReadWriteResource)
-  {
-    ret = {
-        refl->readWriteResources[a.access.index].fixedBindSetOrSpace,
-        refl->readWriteResources[a.access.index].fixedBindNumber,
-    };
-  }
-  else if(category == DescriptorCategory::Sampler)
-  {
-    ret = {
-        refl->samplers[a.access.index].fixedBindSetOrSpace,
-        refl->samplers[a.access.index].fixedBindNumber,
-    };
-  }
-
-  return ret;
 }
 
 void VulkanPipelineStateViewer::setState()
@@ -1967,8 +1794,6 @@ void VulkanPipelineStateViewer::setState()
       raster = false;
     }
 
-    setOldMeshPipeFlow();
-
     if(state.geometryShader.resourceId == ResourceId() && xfbActive)
     {
       ui->pipeFlow->setStageName(4, lit("XFB"), tr("Transform Feedback"));
@@ -1978,6 +1803,7 @@ void VulkanPipelineStateViewer::setState()
       ui->pipeFlow->setStageName(4, lit("GS"), tr("Geometry Shader"));
     }
 
+    setOldMeshPipeFlow();
     ui->pipeFlow->setStagesEnabled(
         {true, true, state.tessControlShader.resourceId != ResourceId(),
          state.tessEvalShader.resourceId != ResourceId(),
@@ -1992,10 +1818,8 @@ void VulkanPipelineStateViewer::setState()
 
   if(m_MeshPipe)
   {
-    setShaderState(state.graphics, state.taskShader, ui->tsPipeline, ui->tsShader,
-                   ui->tsShaderDebug, ui->tsPipeLayout, ui->tsDescSets);
-    setShaderState(state.graphics, state.meshShader, ui->msPipeline, ui->msShader,
-                   ui->msShaderDebug, ui->msPipeLayout, ui->msDescSets);
+    setShaderState(state.graphics, state.taskShader, ui->tsShader, ui->tsPipeLayout, ui->tsDescSets);
+    setShaderState(state.graphics, state.meshShader, ui->msShader, ui->msPipeLayout, ui->msDescSets);
 
     if(state.meshShader.reflection)
       ui->msTopology->setText(ToQStr(state.meshShader.reflection->outputTopology));
@@ -2017,9 +1841,9 @@ void VulkanPipelineStateViewer::setState()
 
         if(state.vertexShader.resourceId != ResourceId())
         {
-          for(const SigParameter &sigParam : state.vertexShader.reflection->inputSignature)
+          for(SigParameter &sigParam : state.vertexShader.reflection->inputSignature)
           {
-            if(sigParam.regIndex == a.location && sigParam.systemValue == ShaderBuiltin::Undefined)
+            if(sigParam.regIndex == a.location)
             {
               name = sigParam.varName;
               usedSlot = true;
@@ -2086,7 +1910,7 @@ void VulkanPipelineStateViewer::setState()
         BufferDescription *buf = m_Ctx.GetBuffer(state.inputAssembly.indexBuffer.resourceId);
 
         if(buf)
-          length = qMin(state.inputAssembly.indexBuffer.byteSize, buf->length);
+          length = buf->length;
 
         RDTreeWidgetItem *node = new RDTreeWidgetItem(
             {tr("Index"), state.inputAssembly.indexBuffer.resourceId, tr("Index"), lit("-"),
@@ -2267,20 +2091,19 @@ void VulkanPipelineStateViewer::setState()
     ui->viBuffers->endUpdate();
     ui->viBuffers->verticalScrollBar()->setValue(vs);
 
-    setShaderState(state.graphics, state.vertexShader, ui->vsPipeline, ui->vsShader,
-                   ui->vsShaderDebug, ui->vsPipeLayout, ui->vsDescSets);
-    setShaderState(state.graphics, state.geometryShader, ui->gsPipeline, ui->gsShader,
-                   ui->gsShaderDebug, ui->gsPipeLayout, ui->gsDescSets);
-    setShaderState(state.graphics, state.tessControlShader, ui->tcsPipeline, ui->tcsShader,
-                   ui->tcsShaderDebug, ui->tcsPipeLayout, ui->tcsDescSets);
-    setShaderState(state.graphics, state.tessEvalShader, ui->tesPipeline, ui->tesShader,
-                   ui->tesShaderDebug, ui->tesPipeLayout, ui->tesDescSets);
+    setShaderState(state.graphics, state.vertexShader, ui->vsShader, ui->vsPipeLayout,
+                   ui->vsDescSets);
+    setShaderState(state.graphics, state.geometryShader, ui->gsShader, ui->gsPipeLayout,
+                   ui->gsDescSets);
+    setShaderState(state.graphics, state.tessControlShader, ui->tcsShader, ui->tcsPipeLayout,
+                   ui->tcsDescSets);
+    setShaderState(state.graphics, state.tessEvalShader, ui->tesShader, ui->tesPipeLayout,
+                   ui->tesDescSets);
   }
 
-  setShaderState(state.graphics, state.fragmentShader, ui->fsPipeline, ui->fsShader,
-                 ui->fsShaderDebug, ui->fsPipeLayout, ui->fsDescSets);
-  setShaderState(state.compute, state.computeShader, ui->csPipeline, ui->csShader,
-                 ui->csShaderDebug, ui->csPipeLayout, ui->csDescSets);
+  setShaderState(state.graphics, state.fragmentShader, ui->fsShader, ui->fsPipeLayout,
+                 ui->fsDescSets);
+  setShaderState(state.compute, state.computeShader, ui->csShader, ui->csPipeLayout, ui->csDescSets);
 
   // fill in descriptor access
   {
@@ -2310,6 +2133,7 @@ void VulkanPipelineStateViewer::setState()
       shaderRefls[(uint32_t)stage] = m_Ctx.CurPipelineState().GetShaderReflection(stage);
 
     rdcarray<UsedDescriptor> descriptors = m_Ctx.CurPipelineState().GetAllUsedDescriptors();
+    rdcarray<ResourceId> descSets;
 
     const VKPipe::Pipeline &pipeline =
         (action && (action->flags & ActionFlags::Dispatch)) ? state.compute : state.graphics;
@@ -2318,6 +2142,8 @@ void VulkanPipelineStateViewer::setState()
 
     for(const VKPipe::DescriptorSet &set : pipeline.descriptorSets)
     {
+      descSets.push_back(set.descriptorSetResourceId);
+
       for(const VKPipe::DynamicOffset &offs : set.dynamicOffsets)
       {
         dynamicOffsets[{set.descriptorSetResourceId, offs.descriptorByteOffset}] =
@@ -2326,33 +2152,27 @@ void VulkanPipelineStateViewer::setState()
     }
 
     std::sort(descriptors.begin(), descriptors.end(),
-              [&shaderRefls](const UsedDescriptor &a, const UsedDescriptor &b) {
-                // sort stages together, not really needed but keeps the code below simple
-                if(a.access.stage != b.access.stage)
-                  return a.access.stage < b.access.stage;
-
-                const ShaderReflection *refl = shaderRefls[(uint32_t)a.access.stage];
-
-                rdcpair<uint32_t, uint32_t> aBind = GetSetAndBind(a, refl);
-                rdcpair<uint32_t, uint32_t> bBind = GetSetAndBind(b, refl);
+              [descSets](const UsedDescriptor &a, const UsedDescriptor &b) {
+                int32_t a_set = descSets.indexOf(a.access.descriptorStore);
+                int32_t b_set = descSets.indexOf(b.access.descriptorStore);
 
                 // non-set associated things (specialisation constants, push constants, etc) to the end
-                if(a.access.type == DescriptorType::ConstantBuffer &&
-                   !refl->constantBlocks[a.access.index].bufferBacked)
-                  aBind.first = ~0U;
+                if(a_set == -1)
+                  a_set = descSets.count() + 1;
+                if(b_set == -1)
+                  b_set = descSets.count() + 1;
 
-                if(b.access.type == DescriptorType::ConstantBuffer &&
-                   !refl->constantBlocks[b.access.index].bufferBacked)
-                  bBind.first = ~0U;
-
-                // most things will have a set and binding, that sorting is enough
-                if(aBind.first != bBind.first)
-                  return aBind.first < bBind.first;
-                if(aBind.second != bBind.second)
-                  return aBind.second < bBind.second;
+                if(a_set != b_set)
+                  return a_set < b_set;
 
                 // for non-sets, sort by interface index
-                return a.access.index < b.access.index;
+                if(a_set == b_set && a_set > descSets.count())
+                {
+                  return a.access.index < b.access.index;
+                }
+
+                // otherwise for normal sets, sort by byte offset
+                return a.access.byteOffset < b.access.byteOffset;
               });
 
     for(const UsedDescriptor &used : descriptors)
@@ -3264,9 +3084,8 @@ void VulkanPipelineStateViewer::resource_itemActivated(RDTreeWidgetItem *item, i
 
     if(buf.descriptor.resource != ResourceId())
     {
-      IBufferViewer *viewer =
-          m_Ctx.ViewBuffer(buf.descriptor.byteOffset + buf.dynamicOffset, buf.descriptor.byteSize,
-                           buf.descriptor.resource, format);
+      IBufferViewer *viewer = m_Ctx.ViewBuffer(buf.descriptor.byteOffset, buf.descriptor.byteSize,
+                                               buf.descriptor.resource, format);
 
       m_Ctx.AddDockWindow(viewer->Widget(), DockReference::AddTo, this);
     }
@@ -3319,8 +3138,8 @@ void VulkanPipelineStateViewer::ubo_itemActivated(RDTreeWidgetItem *item, int co
   {
     if(cb.descriptor.resource != ResourceId())
     {
-      IBufferViewer *viewer = m_Ctx.ViewBuffer(cb.descriptor.byteOffset + cb.dynamicOffset,
-                                               cb.descriptor.byteSize, cb.descriptor.resource);
+      IBufferViewer *viewer =
+          m_Ctx.ViewBuffer(cb.descriptor.byteOffset, cb.descriptor.byteSize, cb.descriptor.resource);
 
       m_Ctx.AddDockWindow(viewer->Widget(), DockReference::AddTo, this);
     }
@@ -3346,31 +3165,11 @@ void VulkanPipelineStateViewer::descSet_itemActivated(RDTreeWidgetItem *item, in
       stage->stage == ShaderStage::Compute ? m_Ctx.CurVulkanPipelineState()->compute.descriptorSets
                                            : m_Ctx.CurVulkanPipelineState()->graphics.descriptorSets;
 
-  const rdcarray<VKPipe::DescriptorBuffer> &descBufs =
-      stage->stage == ShaderStage::Compute
-          ? m_Ctx.CurVulkanPipelineState()->compute.descriptorBuffers
-          : m_Ctx.CurVulkanPipelineState()->graphics.descriptorBuffers;
-
   if(index < descSets.count())
   {
-    if(descSets[index].descriptorBufferIndex >= 0)
-    {
-      if(descSets[index].descriptorBufferIndex < descBufs.count())
-      {
-        IBufferViewer *viewer =
-            m_Ctx.ViewBuffer(descBufs[descSets[index].descriptorBufferIndex].offset +
-                                 descSets[index].descriptorBufferByteOffset,
-                             0, descBufs[descSets[index].descriptorBufferIndex].buffer);
+    IDescriptorViewer *viewer = m_Ctx.ViewDescriptorStore(descSets[index].descriptorSetResourceId);
 
-        m_Ctx.AddDockWindow(viewer->Widget(), DockReference::AddTo, this);
-      }
-    }
-    else
-    {
-      IDescriptorViewer *viewer = m_Ctx.ViewDescriptorStore(descSets[index].descriptorSetResourceId);
-
-      m_Ctx.AddDockWindow(viewer->Widget(), DockReference::AddTo, this);
-    }
+    m_Ctx.AddDockWindow(viewer->Widget(), DockReference::AddTo, this);
   }
 }
 
@@ -3564,7 +3363,7 @@ void VulkanPipelineStateViewer::shaderView_clicked()
   if(stage == NULL || stage->resourceId == ResourceId())
     return;
 
-  const ShaderReflection *shaderDetails = stage->reflection;
+  ShaderReflection *shaderDetails = stage->reflection;
 
   ResourceId pipe = stage->stage == ShaderStage::Compute
                         ? m_Ctx.CurVulkanPipelineState()->compute.pipelineResourceId
@@ -3585,7 +3384,7 @@ void VulkanPipelineStateViewer::shaderSave_clicked()
   if(stage == NULL)
     return;
 
-  const ShaderReflection *shaderDetails = stage->reflection;
+  ShaderReflection *shaderDetails = stage->reflection;
 
   if(stage->resourceId == ResourceId())
     return;
@@ -3694,7 +3493,7 @@ void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::
     if(ib)
     {
       name = m_Ctx.GetResourceName(ia.indexBuffer.resourceId);
-      length = qMin(ib->length, ia.indexBuffer.byteSize);
+      length = ib->length;
     }
 
     QString ifmt = lit("UNKNOWN");
@@ -3722,7 +3521,7 @@ void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::
 
 void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::Shader &sh)
 {
-  const ShaderReflection *shaderDetails = sh.reflection;
+  ShaderReflection *shaderDetails = sh.reflection;
 
   {
     xml.writeStartElement(lit("h3"));
@@ -4916,7 +4715,6 @@ QVariant VulkanPipelineStateViewer::ConvertSDObjectToFossilizeJSON(const SDObjec
       return list;
     }
     case SDBasic::String: return QString(obj->AsString());
-    case SDBasic::GPUAddress:
     case SDBasic::Enum:
     case SDBasic::UnsignedInteger: return (qulonglong)obj->AsUInt64();
     case SDBasic::SignedInteger: return (qlonglong)obj->AsInt64();

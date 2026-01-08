@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -287,27 +287,6 @@ struct CachedHookData
     GetModuleFileNameW(module, modpath, 1023);
     if(modpath[0] == 0)
       return;
-
-    // windows 11 and newer versions have weird hotpatch DLLs that don't act like real DLLs. The
-    // LoadLibraryW below will fail for these DLLs even when using the module path provided.
-    // Only check the path for DLLs that might be a windows-hotpatch but if it matches we'll skip
-    // hooking these to avoid problems
-    if(strstr(lowername, "hotpatch"))
-    {
-      wchar_t lowerpath[1024] = {};
-
-      size_t i = 0;
-      while(modpath[i])
-      {
-        lowerpath[i] = towlower(modpath[i]);
-        i++;
-      }
-      lowerpath[i] = 0;
-
-      if(wcsstr(lowerpath, L"\\windows\\winsxs\\"))
-        return;
-    }
-
     // increment the module reference count, so it doesn't disappear while we're processing it
     // there's a very small race condition here between if GetModuleFileName returns, the module is
     // unloaded then we load it again. The only way around that is inserting very scary locks
@@ -315,7 +294,6 @@ struct CachedHookData
     // and FreeLibrary that I want to avoid. Worst case, we load a dll, hook it, then unload it
     // again.
     HMODULE refcountModHandle = LoadLibraryW(modpath);
-    RDCASSERTEQUAL(refcountModHandle, module);
     byte *baseAddress = (byte *)refcountModHandle;
 
     PIMAGE_DOS_HEADER dosheader = (PIMAGE_DOS_HEADER)baseAddress;
@@ -620,7 +598,7 @@ static void HookAllModules()
 
     for(FunctionLoadCallback cb : callbacks)
       if(cb)
-        cb(it->second.module, it->first.c_str());
+        cb(it->second.module);
   }
 
   Atomic::CmpExch32(&s_HookData->posthooking, 1, 0);

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -69,16 +69,10 @@ struct Layout
       return instanceDataStepRate < o.instanceDataStepRate;
     return false;
   }
-  DOCUMENT(R"(The semantic name for this input.
-
-:type: str
-)");
+  DOCUMENT("The semantic name for this input.");
   rdcstr semanticName;
 
-  DOCUMENT(R"(The semantic index for this input.
-
-:type: int
-)");
+  DOCUMENT("The semantic index for this input.");
   uint32_t semanticIndex = 0;
 
   DOCUMENT(R"(The format describing how the input data is interpreted.
@@ -87,10 +81,7 @@ struct Layout
 )");
   ResourceFormat format;
 
-  DOCUMENT(R"(The vertex buffer input slot where the data is sourced from.
-
-:type: int
-)");
+  DOCUMENT("The vertex buffer input slot where the data is sourced from.");
   uint32_t inputSlot = 0;
 
   DOCUMENT(R"(The byte offset from the start of the vertex data in the vertex buffer from
@@ -98,15 +89,10 @@ struct Layout
 
 If the value is :data:`TightlyPacked` then the element is packed tightly after the previous element, or 0
 if this is the first element.
-
-:type: int
 )");
   uint32_t byteOffset = 0;
 
-  DOCUMENT(R"(``True`` if the vertex data is instance-rate.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the vertex data is instance-rate.");
   bool perInstance = false;
 
   DOCUMENT(R"(If :data:`perInstance` is ``True`` then this is how many times each instance data is
@@ -114,8 +100,6 @@ used before advancing to the next instance.
 
 E.g. if this value is two, then two instances will be drawn with the first instance data, then two
 with the next instance data.
-
-:type: int
 )");
   uint32_t instanceDataStepRate = 0;
 
@@ -145,22 +129,13 @@ struct VertexBuffer
       return byteOffset < o.byteOffset;
     return false;
   }
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer bound to this slot.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the buffer bound to this slot.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(The byte offset from the start of the buffer to the beginning of the vertex data.
-
-:type: int
-)");
+  DOCUMENT("The byte offset from the start of the buffer to the beginning of the vertex data.");
   uint32_t byteOffset = 0;
 
-  DOCUMENT(R"(The byte stride between the start of one set of vertex data and the next.
-
-:type: int
-)");
+  DOCUMENT("The byte stride between the start of one set of vertex data and the next.");
   uint32_t byteStride = 0;
 };
 
@@ -172,22 +147,14 @@ struct IndexBuffer
   IndexBuffer(const IndexBuffer &) = default;
   IndexBuffer &operator=(const IndexBuffer &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the index buffer.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the index buffer.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(The byte offset from the start of the buffer to the beginning of the index data.
-
-:type: int
-)");
+  DOCUMENT("The byte offset from the start of the buffer to the beginning of the index data.");
   uint32_t byteOffset = 0;
 
   DOCUMENT(R"(The number of bytes for each index in the index buffer. Typically 2 or 4 bytes but
 it can be 0 if no index buffer is bound.
-
-:type: int
 )");
   uint32_t byteStride = 0;
 };
@@ -206,17 +173,14 @@ struct InputAssembly
 )");
   rdcarray<Layout> layouts;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the layout object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the layout object.");
   ResourceId resourceId;
 
   DOCUMENT(R"(The shader reflection for the bytecode used to create the input layout.
 
 :type: ShaderReflection
 )");
-  const ShaderReflection *bytecode = NULL;
+  ShaderReflection *bytecode = NULL;
 
   DOCUMENT(R"(The bound vertex buffers
 
@@ -245,22 +209,16 @@ struct Shader
   Shader(const Shader &) = default;
   Shader &operator=(const Shader &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the shader itself.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the shader itself.");
   ResourceId resourceId;
 
   DOCUMENT(R"(The reflection data for this shader.
 
 :type: ShaderReflection
 )");
-  const ShaderReflection *reflection = NULL;
+  ShaderReflection *reflection = NULL;
 
-  DOCUMENT(R"(A :class:`ShaderStage` identifying which stage this shader is bound to.
-
-:type: ShaderStage
-)");
+  DOCUMENT("A :class:`ShaderStage` identifying which stage this shader is bound to.");
   ShaderStage stage = ShaderStage::Vertex;
 
   DOCUMENT(R"(The bound class instance names.
@@ -290,16 +248,10 @@ struct StreamOutBind
       return byteOffset < o.byteOffset;
     return false;
   }
-  DOCUMENT(R"(The :class:`ResourceId` of the buffer.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the buffer.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(The byte offset of the stream-output binding.
-
-:type: int
-)");
+  DOCUMENT("The byte offset of the stream-output binding.");
   uint32_t byteOffset = 0;
 };
 
@@ -342,73 +294,39 @@ struct RasterizerState
   RasterizerState(const RasterizerState &) = default;
   RasterizerState &operator=(const RasterizerState &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the rasterizer state object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the rasterizer state object.");
   ResourceId resourceId;
-  DOCUMENT(R"(The polygon :class:`FillMode`.
-
-:type: FillMode
-)");
+  DOCUMENT("The polygon :class:`FillMode`.");
   FillMode fillMode = FillMode::Solid;
-  DOCUMENT(R"(The polygon :class:`CullMode`.
-
-:type: CullMode
-)");
+  DOCUMENT("The polygon :class:`CullMode`.");
   CullMode cullMode = CullMode::NoCull;
   DOCUMENT(R"(``True`` if counter-clockwise polygons are front-facing.
 ``False`` if clockwise polygons are front-facing.
-
-:type: bool
 )");
   bool frontCCW = false;
-  DOCUMENT(R"(The fixed depth bias value to apply to z-values.
-
-:type: int
-)");
+  DOCUMENT("The fixed depth bias value to apply to z-values.");
   int32_t depthBias = 0;
   DOCUMENT(R"(The clamp value for calculated depth bias from :data:`depthBias` and
 :data:`slopeScaledDepthBias`
-
-:type: float
 )");
   float depthBiasClamp = 0.0f;
-  DOCUMENT(R"(The slope-scaled depth bias value to apply to z-values.
-
-:type: float
-)");
+  DOCUMENT("The slope-scaled depth bias value to apply to z-values.");
   float slopeScaledDepthBias = 0.0f;
-  DOCUMENT(R"(``True`` if pixels outside of the near and far depth planes should be clipped.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if pixels outside of the near and far depth planes should be clipped.");
   bool depthClip = false;
-  DOCUMENT(R"(``True`` if the scissor test should be applied.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the scissor test should be applied.");
   bool scissorEnable = false;
-  DOCUMENT(R"(``True`` if the quadrilateral MSAA algorithm should be used on MSAA targets.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the quadrilateral MSAA algorithm should be used on MSAA targets.");
   bool multisampleEnable = false;
-  DOCUMENT(R"(``True`` if lines should be anti-aliased. Ignored if :data:`multisampleEnable` is  ``False``.
-
-:type: bool
-)");
+  DOCUMENT(
+      "``True`` if lines should be anti-aliased. Ignored if :data:`multisampleEnable` is "
+      "``False``.");
   bool antialiasedLines = false;
   DOCUMENT(R"(A sample count to force rasterization to when UAV rendering or rasterizing, or 0 to
 not force any sample count.
-
-:type: int
 )");
   uint32_t forcedSampleCount = 0;
-  DOCUMENT(R"(The current :class:`ConservativeRaster` mode.
-
-:type: ConservativeRaster
-)");
+  DOCUMENT("The current :class:`ConservativeRaster` mode.");
   ConservativeRaster conservativeRasterization = ConservativeRaster::Disabled;
 };
 
@@ -447,30 +365,15 @@ struct DepthStencilState
   DepthStencilState(const DepthStencilState &) = default;
   DepthStencilState &operator=(const DepthStencilState &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the depth-stencil state object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the depth-stencil state object.");
   ResourceId resourceId;
-  DOCUMENT(R"(``True`` if depth testing should be performed.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth testing should be performed.");
   bool depthEnable = false;
-  DOCUMENT(R"(The :class:`CompareFunction` to use for testing depth values.
-
-:type: CompareFunction
-)");
+  DOCUMENT("The :class:`CompareFunction` to use for testing depth values.");
   CompareFunction depthFunction = CompareFunction::AlwaysTrue;
-  DOCUMENT(R"(``True`` if depth values should be written to the depth target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth values should be written to the depth target.");
   bool depthWrites = false;
-  DOCUMENT(R"(``True`` if stencil operations should be performed.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if stencil operations should be performed.");
   bool stencilEnable = false;
 
   DOCUMENT(R"(The stencil state for front-facing polygons.
@@ -494,22 +397,14 @@ struct BlendState
   BlendState(const BlendState &) = default;
   BlendState &operator=(const BlendState &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the blend state object.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the blend state object.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(``True`` if alpha-to-coverage should be used when blending to an MSAA target.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if alpha-to-coverage should be used when blending to an MSAA target.");
   bool alphaToCoverage = false;
   DOCUMENT(R"(``True`` if independent blending for each target should be used.
 
 ``False`` if the first blend should be applied to all targets.
-
-:type: bool
 )");
   bool independentBlend = false;
 
@@ -524,10 +419,7 @@ struct BlendState
 :type: Tuple[float,float,float,float]
 )");
   rdcfixedarray<float, 4> blendFactor = {1.0f, 1.0f, 1.0f, 1.0f};
-  DOCUMENT(R"(The mask determining which samples are written to.
-
-:type: int
-)");
+  DOCUMENT("The mask determining which samples are written to.");
   uint32_t sampleMask = ~0U;
 };
 
@@ -557,10 +449,7 @@ struct OutputMerger
 )");
   rdcarray<Descriptor> renderTargets;
 
-  DOCUMENT(R"(Which slot in the output targets is the first UAV.
-
-:type: int
-)");
+  DOCUMENT("Which slot in the output targets is the first UAV.");
   uint32_t uavStartSlot = 0;
 
   DOCUMENT(R"(The currently bound depth-stencil target.
@@ -568,15 +457,9 @@ struct OutputMerger
 :type: Descriptor
 )");
   Descriptor depthTarget;
-  DOCUMENT(R"(``True`` if depth access to the depth-stencil target is read-only.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if depth access to the depth-stencil target is read-only.");
   bool depthReadOnly = false;
-  DOCUMENT(R"(``True`` if stencil access to the depth-stencil target is read-only.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if stencil access to the depth-stencil target is read-only.");
   bool stencilReadOnly = false;
 };
 
@@ -588,22 +471,13 @@ struct Predication
   Predication(const Predication &) = default;
   Predication &operator=(const Predication &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the active predicate.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the active predicate.");
   ResourceId resourceId;
 
-  DOCUMENT(R"(The value to go along with the predicate.
-
-:type: bool
-)");
+  DOCUMENT("The value to go along with the predicate.");
   bool value = false;
 
-  DOCUMENT(R"(``True`` if the current predicate would render.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the current predicate would render.");
   bool isPassing = false;
 };
 

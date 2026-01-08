@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -277,17 +277,12 @@ enum TexDisplayFlags
 
 struct ShaderDebugData
 {
-  enum
-  {
-    MAX_QUEUED_OPS = 128
-  };
   void Init(WrappedVulkan *driver, VkDescriptorPool descriptorPool);
   void Destroy(WrappedVulkan *driver);
 
-  VkDescriptorPool DescPool = VK_NULL_HANDLE;
   VkDescriptorSetLayout DescSetLayout = VK_NULL_HANDLE;
   VkPipelineLayout PipeLayout = VK_NULL_HANDLE;
-  VkDescriptorSet DescSets[MAX_QUEUED_OPS];
+  VkDescriptorSet DescSet = VK_NULL_HANDLE;
 
   VkPipeline MathPipe[3] = {};
 
@@ -342,7 +337,7 @@ public:
   TextureDescription GetTexture(ResourceId id);
 
   rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader);
-  const ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader, ShaderEntryPoint entry);
+  ShaderReflection *GetShader(ResourceId pipeline, ResourceId shader, ShaderEntryPoint entry);
 
   rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline);
   rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target);
@@ -388,6 +383,8 @@ public:
   void BindOutputWindow(uint64_t id, bool depth);
   bool IsOutputWindowVisible(uint64_t id);
   void FlipOutputWindow(uint64_t id);
+
+  ResourceId GetLiveID(ResourceId id);
 
   rdcarray<GPUCounter> EnumerateCounters();
   CounterDescription DescribeCounter(GPUCounter counterID);
@@ -738,11 +735,9 @@ private:
     GPUBuffer m_CheckerUBO;
 
     VkDescriptorSetLayout m_QuadDescSetLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_QuadDescBufLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_QuadDescSet = VK_NULL_HANDLE;
     VkPipelineLayout m_QuadResolvePipeLayout = VK_NULL_HANDLE;
     VkPipeline m_QuadResolvePipeline[8] = {VK_NULL_HANDLE};
-    GPUBuffer m_QuadDescriptor;
 
     VkDescriptorSetLayout m_DepthCopyDescSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_DepthCopyDescSet = VK_NULL_HANDLE;

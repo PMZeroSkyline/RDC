@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -63,10 +63,7 @@ RDOC_CONFIG(bool, Replay_Debug_SingleThreadedCompilation, false,
 // this is declared centrally so it can be shared with any backend - the name is a misnomer but kept
 // for backwards compatibility reasons.
 RDOC_CONFIG(rdcarray<rdcstr>, DXBC_Debug_SearchDirPaths, {},
-            "Paths to search for separated shader debug PDBs, including all types of paths.");
-RDOC_CONFIG(rdcarray<rdcstr>, Replay_Shader_LimitedSearchDirPaths, {},
-            "Companion array to DXBC.Debug.SearchDirPaths - listing paths which should not be "
-            "searched exhaustively but only used for simple lookups.");
+            "Paths to search for separated shader debug PDBs.");
 
 void LogReplayOptions(const ReplayOptions &opts)
 {
@@ -104,7 +101,7 @@ rdcstr DoStringise(const ResourceId &el)
   // hardcode empty/null ResourceId to both avoid special case below and fast-path a common case as
   // a string literal.
   if(num == 0)
-    return PREFIX "0"_lit;
+    return PREFIX "0";
 
   // enough for prefix and a 64-bit value in decimal
   char str[48] = {};
@@ -419,8 +416,6 @@ RenderDoc::RenderDoc()
 
   m_TargetControlThreadShutdown = false;
   m_ControlClientThreadShutdown = false;
-
-  ClearTrackedFiles();
 }
 
 void RenderDoc::Initialise()
@@ -533,8 +528,6 @@ void RenderDoc::Initialise()
   m_FrameTimer.InitTimers();
 
   m_ExHandler = NULL;
-
-  ClearTrackedFiles();
 
   RecreateCrashHandler();
 
@@ -809,21 +802,84 @@ void RenderDoc::InitialiseReplay(GlobalEnvironment env, const rdcarray<rdcstr> &
 
 #if ENABLED(RDOC_WIN32)
       {
-        // only print unique versions to avoid the case of loading multiple driver files and
-        // printing redundantly.
-        rdcarray<OSUtility::DLLFileVersion> versions;
+        using PFN_GetFileVersionInfoSizeW = decltype(&GetFileVersionInfoSizeW);
+        using PFN_GetFileVersionInfoW = decltype(&GetFileVersionInfoW);
+        using PFN_VerQueryValueA = decltype(&VerQueryValueA);
 
-        for(rdcstr &path : driverFilePaths)
+        PFN_GetFileVersionInfoSizeW getSize = NULL;
+        PFN_GetFileVersionInfoW getData = NULL;
+        PFN_VerQueryValueA queryValue = NULL;
+
+        HMODULE version = LoadLibraryA("version.dll");
+        if(version)
         {
-          OSUtility::DLLFileVersion ret = OSUtility::GetDLLVersion(path);
+          getSize = (PFN_GetFileVersionInfoSizeW)GetProcAddress(version, "GetFileVersionInfoSizeW");
+          getData = (PFN_GetFileVersionInfoW)GetProcAddress(version, "GetFileVersionInfoW");
+          queryValue = (PFN_VerQueryValueA)GetProcAddress(version, "VerQueryValueA");
 
-          if(!versions.contains(ret))
+          if(getSize && getData && queryValue)
           {
-            versions.push_back(ret);
-            RDCLOG("Driver: '%s' %u.%u.%u.%u %s", path.c_str(), ret.major, ret.minor, ret.build,
-                   ret.revision,
-                   StringFormat::sntimef(FileIO::GetModifiedTimestamp(path), "%Y-%m-%d").c_str());
+            // only print unique versions to avoid the case of loading multiple driver files and
+            // printing redundantly.
+            rdcarray<uint64_t> versions;
+
+            for(rdcstr &path : driverFilePaths)
+            {
+              rdcwstr wpath = StringFormat::UTF82Wide(path);
+              DWORD bytesNeeded = getSize(wpath.c_str(), NULL);
+
+              if(bytesNeeded > 0 && bytesNeeded < 1024 * 1024)
+              {
+                bytebuf blockData;
+                blockData.resize(bytesNeeded);
+
+                VS_FIXEDFILEINFO *verInfo = NULL;
+                UINT size = 0;
+                if(getData(wpath.c_str(), 0, bytesNeeded, blockData.data()) &&
+                   queryValue(blockData.data(), "\\", (void **)&verInfo, &size))
+                {
+                  if(size > 0 && verInfo && verInfo->dwSignature == 0xFEEF04BD)
+                  {
+                    uint64_t ver =
+                        uint64_t(verInfo->dwFileVersionMS) << 32 | verInfo->dwFileVersionLS;
+
+                    if(!versions.contains(ver))
+                    {
+                      versions.push_back(ver);
+                      RDCLOG("Driver: '%s' %u.%u.%u.%u %s", path.c_str(),
+                             verInfo->dwFileVersionMS >> 16, verInfo->dwFileVersionMS & 0xffff,
+                             verInfo->dwFileVersionLS >> 16, verInfo->dwFileVersionLS & 0xffff,
+                             StringFormat::sntimef(FileIO::GetModifiedTimestamp(path), "%Y-%m-%d")
+                                 .c_str());
+                    }
+                  }
+                  else
+                  {
+                    RDCWARN("Version data for '%s' invalid: %u %p %u", path.c_str(), size, verInfo,
+                            verInfo ? verInfo->dwSignature : 0);
+                  }
+                }
+                else
+                {
+                  RDCWARN("Couldn't get version data for '%s'", path.c_str());
+                }
+              }
+              else
+              {
+                RDCWARN("Bytes needed for '%s': %u", path.c_str(), bytesNeeded);
+              }
+            }
           }
+          else
+          {
+            RDCWARN("Couldn't get version API");
+          }
+
+          FreeLibrary(version);
+        }
+        else
+        {
+          RDCWARN("Couldn't load version.dll");
         }
       }
 #endif
@@ -2240,305 +2296,6 @@ bool RenderDoc::HasActiveFrameCapturer(RDCDriver driver)
       return true;
 
   return false;
-}
-
-bool RenderDoc::GetTrackedFileData(const rdcstr &nickname, bytebuf &data) const
-{
-  SCOPED_READLOCK(m_TrackedFilesLock);
-  for(const TrackedFile &f : m_TrackedFiles)
-  {
-    if(f.nickname == nickname)
-    {
-      data = f.data;
-      return true;
-    }
-  }
-  return false;
-}
-
-bool RenderDoc::DoesTrackedFileExist(const rdcstr &nickname) const
-{
-  SCOPED_READLOCK(m_TrackedFilesLock);
-  for(const TrackedFile &f : m_TrackedFiles)
-  {
-    if(f.nickname == nickname)
-      return true;
-  }
-  return false;
-}
-
-// return false if the nickname already exists
-bool RenderDoc::AddTrackedFileReference(const rdcstr &nickname, const rdcstr &filepath)
-{
-  if(DoesTrackedFileExist(nickname))
-    return false;
-  SCOPED_WRITELOCK(m_TrackedFilesLock);
-  m_TrackedFiles.emplace_back(nickname, filepath);
-  return true;
-}
-
-void RenderDoc::ClearTrackedFiles()
-{
-  SCOPED_WRITELOCK(m_TrackedFilesLock);
-  m_TrackedFiles.clear();
-}
-
-bool RenderDoc::HasTrackedFileData() const
-{
-  SCOPED_READLOCK(m_TrackedFilesLock);
-  return !m_TrackedFiles.empty();
-}
-
-rdcarray<rdcstr> RenderDoc::GetTrackedFileNicknames() const
-{
-  rdcarray<rdcstr> nickNames;
-  {
-    SCOPED_READLOCK(m_TrackedFilesLock);
-    for(const TrackedFile &f : m_TrackedFiles)
-      nickNames.push_back(f.nickname);
-  }
-  return nickNames;
-}
-
-RDResult RenderDoc::ReadExternalFiles(RDCFile *rdc)
-{
-  int32_t idx = rdc->SectionIndex(SectionType::EmbeddedExternalFiles);
-  if(idx < 0)
-    RETURN_WARNING_RESULT(ResultCode::DataNotAvailable, "No EmbeddedExternalFiles section");
-
-  // int32_t countFileEntries;
-  int32_t countFileEntries = 0;
-  bytebuf sectionData;
-  {
-    StreamReader *reader = rdc->ReadSection(idx);
-    sectionData.resize((size_t)reader->GetSize());
-    bool success = reader->Read(sectionData.data(), reader->GetSize());
-    delete reader;
-    if(!success)
-      sectionData.clear();
-  }
-  const uint32_t bufferSize = (uint32_t)sectionData.size();
-  uint32_t readSize = sizeof(countFileEntries);
-  uint32_t byteIndex = 0;
-  if(byteIndex + readSize > bufferSize)
-    RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                          "EmbeddedExternalFiles section does not have valid data");
-
-  const byte *bufferPtr = sectionData.data();
-  memcpy(&countFileEntries, bufferPtr, readSize);
-  byteIndex += readSize;
-  bufferPtr += readSize;
-
-  rdcarray<TrackedFile> externalFiles;
-  externalFiles.resize(countFileEntries);
-  // FileEntry fileEntries[];
-  for(int32_t i = 0; i < countFileEntries; ++i)
-  {
-    TrackedFile &externalFile = externalFiles[i];
-    externalFile.filepath.clear();
-
-    // FileEntry:
-    // uint32_t nameSize;
-    uint32_t nameSize = 0;
-    readSize = sizeof(nameSize);
-    if(byteIndex + readSize > bufferSize)
-      RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                            "EmbeddedExternalFiles section does not have valid data");
-    memcpy(&nameSize, bufferPtr, readSize);
-    byteIndex += readSize;
-    bufferPtr += readSize;
-
-    // char name[];
-    readSize = nameSize;
-    if(byteIndex + readSize > bufferSize)
-      RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                            "EmbeddedExternalFiles section does not have valid data");
-    externalFile.nickname.assign((const char *)bufferPtr, readSize);
-    byteIndex += readSize;
-    bufferPtr += readSize;
-
-    // uint32_t dataSize;
-    uint32_t dataSize = 0;
-    readSize = sizeof(dataSize);
-    if(byteIndex + readSize > bufferSize)
-      RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                            "EmbeddedExternalFiles section does not have valid data");
-    memcpy(&dataSize, bufferPtr, readSize);
-    byteIndex += readSize;
-    bufferPtr += readSize;
-
-    // byte data[];
-    readSize = dataSize;
-    if(byteIndex + readSize > bufferSize)
-      RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                            "EmbeddedExternalFiles section does not have valid data");
-    externalFile.data.assign(bufferPtr, readSize);
-    byteIndex += readSize;
-    bufferPtr += readSize;
-  }
-  if(byteIndex != bufferSize)
-    RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                          "EmbeddedExternalFiles section does not have valid data");
-
-  SCOPED_WRITELOCK(m_TrackedFilesLock);
-  for(const TrackedFile &f : externalFiles)
-  {
-    for(TrackedFile &file : m_TrackedFiles)
-    {
-      if(file.nickname == f.nickname)
-      {
-        file.data = f.data;
-        file.filepath.clear();
-        break;
-      }
-    }
-    m_TrackedFiles.emplace_back(f.nickname, f.data);
-  }
-
-  return RDResult();
-}
-
-RDResult RenderDoc::WriteExternalFiles(RDCFile *rdc, const rdcarray<TrackedFile> &trackedFiles)
-{
-  if(!rdc)
-    RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                          "Data missing for creation of file, set metadata first.");
-
-  RDResult rdcRes = rdc->Error();
-  if(rdcRes != ResultCode::Succeeded)
-    return rdcRes;
-
-  int32_t countFileEntries = trackedFiles.count();
-
-  bytebuf sectionData;
-
-  // int32_t countFileEntries;
-  sectionData.append((byte *)&countFileEntries, sizeof(countFileEntries));
-  // FileEntry fileEntries[];
-  for(const RenderDoc::TrackedFile &f : trackedFiles)
-  {
-    // FileEntry:
-    // uint32_t nameSize;
-    // char name[];
-    const rdcstr &name = f.nickname;
-    const uint32_t nameSize = (uint32_t)name.size();
-    sectionData.append((byte *)&nameSize, sizeof(nameSize));
-    sectionData.append((byte *)name.data(), nameSize);
-
-    // uint32_t dataSize;
-    // byte data[];
-    uint32_t dataSize = 0;
-    const byte *data = NULL;
-    bytebuf fileData;
-    if(!f.filepath.empty())
-    {
-      if(FileIO::ReadAll(f.filepath, fileData))
-      {
-        dataSize = (uint32_t)fileData.size();
-        data = fileData.data();
-      }
-      else
-      {
-        RDCWARN("Data missing for externally referenced file %s", f.filepath.c_str());
-      }
-    }
-    else
-    {
-      dataSize = (uint32_t)f.data.size();
-      data = f.data.data();
-    }
-    sectionData.append((byte *)&dataSize, sizeof(dataSize));
-    sectionData.append(data, dataSize);
-  }
-
-  SectionProperties props;
-  props.type = SectionType::EmbeddedExternalFiles;
-  props.flags = SectionFlags::ZstdCompressed;
-  props.version = 1;
-
-  StreamWriter *writer = rdc->WriteSection(props);
-  rdcRes = rdc->Error();
-  if(!writer || rdcRes != ResultCode::Succeeded)
-    return rdcRes;
-
-  writer->Write(sectionData.data(), sectionData.size());
-  writer->Finish();
-
-  delete writer;
-
-  return RDResult();
-}
-
-RDResult RenderDoc::EmbedExternalFiles(RDCFile *rdc)
-{
-  if(!rdc)
-    RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                          "Data missing for creation of file, set metadata first.");
-
-  RDResult rdcRes = rdc->Error();
-  if(rdcRes != ResultCode::Succeeded)
-    return rdcRes;
-
-  if(rdc->SectionIndex(SectionType::EmbeddedExternalFiles) >= 0)
-    RDCWARN("Capture already has embedded external files - replacing existing section.");
-
-  SCOPED_WRITELOCK(m_TrackedFilesLock);
-  const rdcarray<RenderDoc::TrackedFile> &trackedFiles = m_TrackedFiles;
-  if(trackedFiles.empty())
-    RDCWARN("No external files to embed.");
-
-  RDCLOG("Embedding %d external files", trackedFiles.count());
-  return RenderDoc::Inst().WriteExternalFiles(rdc, trackedFiles);
-}
-
-RDResult RenderDoc::RemoveExternalFiles(RDCFile *rdc)
-{
-  if(!rdc)
-    RETURN_WARNING_RESULT(ResultCode::FileCorrupted,
-                          "Data missing for creation of file, set metadata first.");
-
-  RDResult rdcRes = rdc->Error();
-  if(rdcRes != ResultCode::Succeeded)
-    return rdcRes;
-
-  RDResult result;
-  if(rdc->SectionIndex(SectionType::EmbeddedExternalFiles) < 0)
-    RETURN_WARNING_RESULT(ResultCode::DataNotAvailable,
-                          "Capture does not have any embedded external files.");
-
-  RDCLOG("Removing embedded external files (setting count to 0)");
-  rdcarray<RenderDoc::TrackedFile> trackedFiles;
-  return RenderDoc::Inst().WriteExternalFiles(rdc, trackedFiles);
-}
-
-bool RenderDoc::HasEmbeddedFiles(RDCFile *rdc) const
-{
-  if(!rdc)
-    return false;
-
-  RDResult rdcRes = rdc->Error();
-  if(rdcRes != ResultCode::Succeeded)
-    return false;
-
-  int32_t idx = rdc->SectionIndex(SectionType::EmbeddedExternalFiles);
-  if(idx < 0)
-    return false;
-
-  int32_t countFileEntries = 0;
-  bytebuf sectionData;
-  {
-    StreamReader *reader = rdc->ReadSection(idx);
-    sectionData.resize((size_t)reader->GetSize());
-    bool success = reader->Read(sectionData.data(), reader->GetSize());
-    delete reader;
-    if(!success)
-      sectionData.clear();
-  }
-  if(sectionData.size() < sizeof(countFileEntries))
-    return false;
-
-  memcpy(&countFileEntries, sectionData.data(), sizeof(countFileEntries));
-  return countFileEntries > 0;
 }
 
 #if ENABLED(ENABLE_UNIT_TESTS)

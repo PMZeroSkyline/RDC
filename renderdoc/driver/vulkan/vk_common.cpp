@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -166,19 +166,9 @@ void VkMarkerRegion::End(VkQueue q)
 }
 
 template <>
-VkObjectType objType<VkSampler>()
-{
-  return VK_OBJECT_TYPE_SAMPLER;
-}
-template <>
 VkObjectType objType<VkBuffer>()
 {
   return VK_OBJECT_TYPE_BUFFER;
-}
-template <>
-VkObjectType objType<VkDeviceMemory>()
-{
-  return VK_OBJECT_TYPE_DEVICE_MEMORY;
 }
 template <>
 VkObjectType objType<VkImage>()
@@ -219,7 +209,7 @@ void GPUBuffer::Create(WrappedVulkan *driver, VkDevice dev, VkDeviceSize size, u
   ringCount = ringSize;
 
   VkBufferCreateInfo bufInfo = {
-      VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, driver->DefaultBufferCreateFlags(), totalsize, 0,
+      VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, NULL, 0, totalsize, 0,
   };
 
   bufInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -271,14 +261,6 @@ void GPUBuffer::Create(WrappedVulkan *driver, VkDevice dev, VkDeviceSize size, u
     memFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
   }
 
-  if((driver->DefaultBufferCreateFlags() &
-      VK_BUFFER_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT) != 0)
-  {
-    allocInfo.pNext = &memFlags;
-    memFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT |
-                     VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT;
-  }
-
   vkr = ObjDisp(dev)->AllocateMemory(Unwrap(dev), &allocInfo, NULL, &mem);
   CHECK_VKR(driver, vkr);
 
@@ -288,7 +270,7 @@ void GPUBuffer::Create(WrappedVulkan *driver, VkDevice dev, VkDeviceSize size, u
   vkr = ObjDisp(dev)->BindBufferMemory(Unwrap(dev), buf, mem, 0);
   CHECK_VKR(driver, vkr);
 
-  if(useBufferAddressKHR && (flags & eGPUBufferAddressable))
+  if(flags & eGPUBufferAddressable)
   {
     RDCCOMPILE_ASSERT(VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO ==
                           VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_EXT,
@@ -433,14 +415,6 @@ bool VkInitParams::IsSupportedVersion(uint64_t ver)
   if(ver == CurrentVersion)
     return true;
 
-  // 0x17 -> 0x18 - added IDs generated at capture time for inline shaders
-  if(ver == 0x17)
-    return true;
-
-  // 0x16 -> 0x17 - added indication of reserved descriptors and descriptor buffer support for swapchains
-  if(ver == 0x16)
-    return true;
-
   // 0x15 -> 0x16 - added support for acceleration structures
   if(ver == 0x15)
     return true;
@@ -491,13 +465,6 @@ bool VkInitParams::IsSupportedVersion(uint64_t ver)
     return true;
 
   return false;
-}
-
-void SanitiseDescriptorBufferImageLayout(VkImageLayout &layout)
-{
-  // for descriptor buffers we intercept swapchain images so we have to remap present layouts to general
-  if(layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR || layout == VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR)
-    layout = VK_IMAGE_LAYOUT_GENERAL;
 }
 
 void SanitiseReplayImageLayout(VkImageLayout &layout)
@@ -677,55 +644,31 @@ VkShaderStageFlags ShaderMaskFromIndex(size_t index)
 void DoPipelineBarrier(VkCommandBuffer cmd, size_t count, const VkImageMemoryBarrier *barriers)
 {
   RDCASSERT(cmd != VK_NULL_HANDLE);
-  ObjDisp(cmd)->CmdPipelineBarrier(
-      Unwrap(cmd), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 0,
-      NULL,                          // global memory barriers
-      0, NULL,                       // buffer memory barriers
-      (uint32_t)count, barriers);    // image memory barriers
+  ObjDisp(cmd)->CmdPipelineBarrier(Unwrap(cmd), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
+                                   NULL,                          // global memory barriers
+                                   0, NULL,                       // buffer memory barriers
+                                   (uint32_t)count, barriers);    // image memory barriers
 }
 
 void DoPipelineBarrier(VkCommandBuffer cmd, size_t count, const VkBufferMemoryBarrier *barriers)
 {
   RDCASSERT(cmd != VK_NULL_HANDLE);
-  ObjDisp(cmd)->CmdPipelineBarrier(
-      Unwrap(cmd), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 0,
-      NULL,                         // global memory barriers
-      (uint32_t)count, barriers,    // buffer memory barriers
-      0, NULL);                     // image memory barriers
+  ObjDisp(cmd)->CmdPipelineBarrier(Unwrap(cmd), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
+                                   NULL,                         // global memory barriers
+                                   (uint32_t)count, barriers,    // buffer memory barriers
+                                   0, NULL);                     // image memory barriers
 }
 
 void DoPipelineBarrier(VkCommandBuffer cmd, size_t count, const VkMemoryBarrier *barriers)
 {
   RDCASSERT(cmd != VK_NULL_HANDLE);
-  ObjDisp(cmd)->CmdPipelineBarrier(
-      Unwrap(cmd), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, (uint32_t)count,
-      barriers,    // global memory barriers
-      0, NULL,     // buffer memory barriers
-      0, NULL);    // image memory barriers
-}
-
-VkDescriptorType MakeVkDescriptorType(DescriptorType type, bool inputAttachment)
-{
-  switch(type)
-  {
-    case DescriptorType::Unknown: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
-    case DescriptorType::Buffer: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
-    case DescriptorType::ConstantBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    case DescriptorType::Sampler: return VK_DESCRIPTOR_TYPE_SAMPLER;
-    case DescriptorType::ImageSampler: return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    case DescriptorType::Image:
-      return inputAttachment ? VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    case DescriptorType::TypedBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-    case DescriptorType::ReadWriteImage: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    case DescriptorType::ReadWriteTypedBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-    case DescriptorType::ReadWriteBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    case DescriptorType::AccelerationStructure:
-      return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-  }
-  return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+  ObjDisp(cmd)->CmdPipelineBarrier(Unwrap(cmd), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, (uint32_t)count,
+                                   barriers,    // global memory barriers
+                                   0, NULL,     // buffer memory barriers
+                                   0, NULL);    // image memory barriers
 }
 
 Topology MakePrimitiveTopology(VkPrimitiveTopology Topo, uint32_t patchControlPoints)
@@ -1051,138 +994,9 @@ void DoSerialise(SerialiserType &ser, VkInitParams &el)
   SERIALISE_MEMBER(Layers);
   SERIALISE_MEMBER(Extensions).Important();
   SERIALISE_MEMBER(InstanceID).TypedAs("VkInstance"_lit);
-  if(ser.VersionAtLeast(0x17))
-    SERIALISE_MEMBER(DescriptorsReserved);
-  else
-    SERIALISE_MEMBER_EMPTY(DescriptorsReserved);
 }
 
 INSTANTIATE_SERIALISE_TYPE(VkInitParams);
-
-void OpaqueDataForSerialising::fill(VkDevice wrappedDevice, VkSampler wrappedSampler,
-                                    VkPhysicalDeviceDescriptorBufferPropertiesEXT &props)
-{
-  VkSamplerCaptureDescriptorDataInfoEXT getInfo = {
-      VK_STRUCTURE_TYPE_SAMPLER_CAPTURE_DESCRIPTOR_DATA_INFO_EXT,
-      NULL,
-      Unwrap(wrappedSampler),
-  };
-
-  sz = props.samplerCaptureReplayDescriptorDataSize;
-
-  VkResult opaqueQuery =
-      ObjDisp(wrappedDevice)
-          ->GetSamplerOpaqueCaptureDescriptorDataEXT(Unwrap(wrappedDevice), &getInfo, data);
-  if(opaqueQuery != VK_SUCCESS)
-    RDCERR("Couldn't get opaque capture/replay data: %s", ToStr(opaqueQuery).c_str());
-}
-
-void OpaqueDataForSerialising::fill(VkDevice wrappedDevice, VkBuffer wrappedBuffer,
-                                    VkPhysicalDeviceDescriptorBufferPropertiesEXT &props)
-{
-  VkBufferCaptureDescriptorDataInfoEXT getInfo = {
-      VK_STRUCTURE_TYPE_BUFFER_CAPTURE_DESCRIPTOR_DATA_INFO_EXT,
-      NULL,
-      Unwrap(wrappedBuffer),
-  };
-
-  sz = props.bufferCaptureReplayDescriptorDataSize;
-
-  VkResult opaqueQuery =
-      ObjDisp(wrappedDevice)
-          ->GetBufferOpaqueCaptureDescriptorDataEXT(Unwrap(wrappedDevice), &getInfo, data);
-  if(opaqueQuery != VK_SUCCESS)
-    RDCERR("Couldn't get opaque capture/replay data: %s", ToStr(opaqueQuery).c_str());
-}
-
-void OpaqueDataForSerialising::fillUnwrapped(VkDevice wrappedDevice, VkImage unwrappedImage,
-                                             VkPhysicalDeviceDescriptorBufferPropertiesEXT &props)
-{
-  VkImageCaptureDescriptorDataInfoEXT getInfo = {
-      VK_STRUCTURE_TYPE_IMAGE_CAPTURE_DESCRIPTOR_DATA_INFO_EXT,
-      NULL,
-      unwrappedImage,
-  };
-
-  sz = props.imageCaptureReplayDescriptorDataSize;
-
-  VkResult opaqueQuery =
-      ObjDisp(wrappedDevice)
-          ->GetImageOpaqueCaptureDescriptorDataEXT(Unwrap(wrappedDevice), &getInfo, data);
-  if(opaqueQuery != VK_SUCCESS)
-    RDCERR("Couldn't get opaque capture/replay data: %s", ToStr(opaqueQuery).c_str());
-}
-
-void OpaqueDataForSerialising::fill(VkDevice wrappedDevice, VkImage wrappedImage,
-                                    VkPhysicalDeviceDescriptorBufferPropertiesEXT &props)
-{
-  VkImageCaptureDescriptorDataInfoEXT getInfo = {
-      VK_STRUCTURE_TYPE_IMAGE_CAPTURE_DESCRIPTOR_DATA_INFO_EXT,
-      NULL,
-      Unwrap(wrappedImage),
-  };
-
-  sz = props.imageCaptureReplayDescriptorDataSize;
-
-  VkResult opaqueQuery =
-      ObjDisp(wrappedDevice)
-          ->GetImageOpaqueCaptureDescriptorDataEXT(Unwrap(wrappedDevice), &getInfo, data);
-  if(opaqueQuery != VK_SUCCESS)
-    RDCERR("Couldn't get opaque capture/replay data: %s", ToStr(opaqueQuery).c_str());
-}
-
-void OpaqueDataForSerialising::fill(VkDevice wrappedDevice, VkImageView wrappedView,
-                                    VkPhysicalDeviceDescriptorBufferPropertiesEXT &props)
-{
-  VkImageViewCaptureDescriptorDataInfoEXT getInfo = {
-      VK_STRUCTURE_TYPE_IMAGE_VIEW_CAPTURE_DESCRIPTOR_DATA_INFO_EXT,
-      NULL,
-      Unwrap(wrappedView),
-  };
-
-  sz = props.imageViewCaptureReplayDescriptorDataSize;
-
-  VkResult opaqueQuery =
-      ObjDisp(wrappedDevice)
-          ->GetImageViewOpaqueCaptureDescriptorDataEXT(Unwrap(wrappedDevice), &getInfo, data);
-  if(opaqueQuery != VK_SUCCESS)
-    RDCERR("Couldn't get opaque capture/replay data: %s", ToStr(opaqueQuery).c_str());
-}
-
-void OpaqueDataForSerialising::fill(VkDevice wrappedDevice, VkAccelerationStructureKHR wrappedAS,
-                                    VkPhysicalDeviceDescriptorBufferPropertiesEXT &props)
-{
-  VkAccelerationStructureCaptureDescriptorDataInfoEXT getInfo = {
-      VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CAPTURE_DESCRIPTOR_DATA_INFO_EXT,
-      NULL,
-      Unwrap(wrappedAS),
-  };
-
-  sz = props.accelerationStructureCaptureReplayDescriptorDataSize;
-
-  VkResult opaqueQuery = ObjDisp(wrappedDevice)
-                             ->GetAccelerationStructureOpaqueCaptureDescriptorDataEXT(
-                                 Unwrap(wrappedDevice), &getInfo, data);
-  if(opaqueQuery != VK_SUCCESS)
-    RDCERR("Couldn't get opaque capture/replay data: %s", ToStr(opaqueQuery).c_str());
-}
-
-void OpaqueDataForSerialising::addForSerialising(VkBaseInStructure *serialisedCreateInfo)
-{
-  VkOpaqueCaptureDescriptorDataCreateInfoEXT *existing =
-      (VkOpaqueCaptureDescriptorDataCreateInfoEXT *)FindNextStruct(
-          serialisedCreateInfo, VK_STRUCTURE_TYPE_OPAQUE_CAPTURE_DESCRIPTOR_DATA_CREATE_INFO_EXT);
-
-  if(existing)
-  {
-    RDCASSERT(memcmp(data, existing->opaqueCaptureDescriptorData, sz) == 0);
-  }
-  else
-  {
-    pNext = serialisedCreateInfo->pNext;
-    serialisedCreateInfo->pNext = (VkBaseInStructure *)this;
-  }
-}
 
 void GetPhysicalDeviceDriverProperties(VkInstDispatchTable *instDispatchTable,
                                        VkPhysicalDevice unwrappedPhysicalDevice,
@@ -1332,22 +1146,6 @@ VkDriverInfo::VkDriverInfo(const VkPhysicalDeviceProperties &physProps,
         RDCLOG("Enabling NV workaround for static pipeline force-bind to preserve state");
       nvidiaStaticPipelineRebindStates = true;
     }
-
-#if ENABLED(RDOC_WIN32)
-    // this is fixed in a windows version but we can't easily query that, so instead we are waiting
-    // for a driver-based workaround and apply the workaround ourselves in the meantime
-    if(active)
-      RDCLOG("Enabling NV workaround for unaligned BDA memory capture/replay");
-    nvidiaUnalignedBDAIssue = true;
-#endif
-
-    // this was found in the initial implementation, if mesh output is fetched and a user descriptor
-    // set has no vertex bindings at all (and they're not also compute bindings) then a descriptor
-    // set layout devoid of any compute bindings being bound causes problems. To fix this we set one
-    // binding visible to all stages in every descriptor set layout.
-    if(active)
-      RDCLOG("Enabling NV workaround for descriptor buffers to preserve compute bindings");
-    nvidiaDescriptorBufferExtraBinding = true;
   }
 
   if(driverProps.driverID == VK_DRIVER_ID_AMD_PROPRIETARY ||
@@ -1486,14 +1284,13 @@ void DescriptorSetSlot::SetImage(VkDescriptorType writeType, const VkDescriptorI
     sampler = GetResID(imInfo.sampler);
   if(type != DescriptorSlotType::Sampler)
     resource = GetResID(imInfo.imageView);
-  imageLayoutOrFormat = convert(imInfo.imageLayout);
+  imageLayout = convert(imInfo.imageLayout);
 }
 
 void DescriptorSetSlot::SetTexelBuffer(VkDescriptorType writeType, ResourceId id)
 {
   type = convert(writeType);
   resource = id;
-  imageLayoutOrFormat = DescriptorSlotImageLayout::Undefined;
 }
 
 void DescriptorSetSlot::SetAccelerationStructure(VkDescriptorType writeType,
@@ -1501,98 +1298,6 @@ void DescriptorSetSlot::SetAccelerationStructure(VkDescriptorType writeType,
 {
   type = convert(writeType);
   resource = GetResID(accelerationStructure);
-}
-
-void DescriptorSetSlot::SetSampler(ResourceId samplerId)
-{
-  type = DescriptorSlotType::Sampler;
-  sampler = samplerId;
-}
-
-void DescriptorSetSlot::SetImageSampler(VkDescriptorType descType, ResourceId imageView,
-                                        ResourceId samplerId, VkImageLayout layout)
-{
-  type = convert(descType);
-  resource = imageView;
-  sampler = samplerId;
-  imageLayoutOrFormat = convert(layout);
-}
-
-void DescriptorSetSlot::SetBuffer(VkDescriptorType descType, ResourceId buffer,
-                                  uint64_t startOffset, uint64_t size, VkFormat format)
-{
-  type = convert(descType);
-  resource = buffer;
-  offset = startOffset;
-  range = size;
-  imageLayoutOrFormat = DescriptorSlotImageLayout(format & 0xff);
-  RDCASSERT(uint32_t(format) < 0xff, format);
-}
-
-void DescriptorSetSlot::SetDescriptor(WrappedVulkan *driver, const VkDescriptorGetInfoEXT &desc)
-{
-  type = convert(desc.type);
-  switch(desc.type)
-  {
-    case VK_DESCRIPTOR_TYPE_SAMPLER:
-    {
-      sampler = desc.data.pSampler ? GetResID(*desc.data.pSampler) : ResourceId();
-      break;
-    }
-    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-      // ignore the sampler part
-    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-    {
-      // sampled/storage/input attachment are identical in the union. Since the type forms part of
-      // our this logic can be done in common
-      if(desc.data.pCombinedImageSampler)
-      {
-        resource = GetResID(desc.data.pCombinedImageSampler->imageView);
-        sampler = GetResID(desc.data.pCombinedImageSampler->sampler);
-        imageLayoutOrFormat = convert(desc.data.pCombinedImageSampler->imageLayout);
-      }
-      break;
-    }
-    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-    {
-      // uniform/storage are identical in the union. Since the type forms part of our this
-      // logic can be done in common
-      if(desc.data.pUniformBuffer)
-      {
-        ResourceId id;
-        driver->GetResIDFromAddr(desc.data.pUniformBuffer->address, resource, offset);
-        range = desc.data.pUniformBuffer->range;
-        // we only expect texel buffers with the simple formats that come from vulkan base which are less than 256
-        imageLayoutOrFormat = DescriptorSlotImageLayout(desc.data.pUniformTexelBuffer->format & 0xff);
-        RDCASSERT(uint32_t(desc.data.pUniformTexelBuffer->format) < 0xff,
-                  desc.data.pUniformTexelBuffer->format);
-      }
-      break;
-    }
-    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-    {
-      if(desc.data.accelerationStructure)
-        resource = driver->GetASFromAddr(desc.data.accelerationStructure);
-      break;
-    }
-    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK:
-    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
-    case VK_DESCRIPTOR_TYPE_SAMPLE_WEIGHT_IMAGE_QCOM:
-    case VK_DESCRIPTOR_TYPE_BLOCK_MATCH_IMAGE_QCOM:
-    case VK_DESCRIPTOR_TYPE_MUTABLE_EXT:
-    case VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV:
-    case VK_DESCRIPTOR_TYPE_TENSOR_ARM:
-    case VK_DESCRIPTOR_TYPE_MAX_ENUM:
-      RDCERR("Invalid descriptor type passed to vkGetDescriptorEXT");
-      break;
-  }
 }
 
 void AddBindFrameRef(DescriptorBindRefs &refs, ResourceId id, FrameRefType ref)
@@ -1709,37 +1414,6 @@ void DescriptorSetSlot::AccumulateBindRefs(DescriptorBindRefs &refs, VulkanResou
   }
 }
 
-uint32_t DescriptorDataSize(const VkPhysicalDeviceDescriptorBufferPropertiesEXT &descSizes,
-                            VkDescriptorType type)
-{
-  size_t ret = 0;
-
-  switch(type)
-  {
-    case VK_DESCRIPTOR_TYPE_SAMPLER: ret = descSizes.samplerDescriptorSize; break;
-    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-      ret = descSizes.combinedImageSamplerDescriptorSize;
-      break;
-    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: ret = descSizes.inputAttachmentDescriptorSize; break;
-    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: ret = descSizes.sampledImageDescriptorSize; break;
-    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: ret = descSizes.storageImageDescriptorSize; break;
-    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-      ret = descSizes.uniformTexelBufferDescriptorSize;
-      break;
-    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-      ret = descSizes.storageTexelBufferDescriptorSize;
-      break;
-    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: ret = descSizes.uniformBufferDescriptorSize; break;
-    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: ret = descSizes.storageBufferDescriptorSize; break;
-    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-      ret = descSizes.accelerationStructureDescriptorSize;
-      break;
-    default: break;
-  }
-
-  return (uint32_t)ret;
-}
-
 void DynamicRenderingLocalRead::Init(const VkBaseInStructure *infoStruct)
 {
   const VkRenderingAttachmentLocationInfo *attachmentLocationInfo =
@@ -1825,7 +1499,7 @@ void DynamicRenderingLocalRead::SetLocations(VkCommandBuffer cmd)
   attachmentLocations.colorAttachmentCount = colorAttachmentLocations.count();
   attachmentLocations.pColorAttachmentLocations = colorAttachmentLocations.data();
 
-  ObjDisp(cmd)->CmdSetRenderingAttachmentLocations(Unwrap(cmd), &attachmentLocations);
+  ObjDisp(cmd)->CmdSetRenderingAttachmentLocationsKHR(Unwrap(cmd), &attachmentLocations);
 }
 
 void DynamicRenderingLocalRead::SetInputIndices(VkCommandBuffer cmd)
@@ -1839,7 +1513,7 @@ void DynamicRenderingLocalRead::SetInputIndices(VkCommandBuffer cmd)
   inputIndices.pStencilInputAttachmentIndex =
       isStencilInputAttachmentIndexImplicit ? NULL : &stencilInputAttachmentIndex;
 
-  ObjDisp(cmd)->CmdSetRenderingInputAttachmentIndices(Unwrap(cmd), &inputIndices);
+  ObjDisp(cmd)->CmdSetRenderingInputAttachmentIndicesKHR(Unwrap(cmd), &inputIndices);
 }
 
 #if ENABLED(ENABLE_UNIT_TESTS)

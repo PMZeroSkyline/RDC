@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2022-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -37,17 +37,12 @@
 
 #include "NvPerfCounterConfiguration.h"
 #include "NvPerfCounterData.h"
-#include "NvPerfMetricsConfigBuilder.h"
 #include "NvPerfMetricsEvaluator.h"
-
-#include <unordered_set>
 
 struct NVCounterEnumerator::Impl
 {
 public:
   nv::perf::MetricsEvaluator Evaluator;
-  nv::perf::RawCounterConfigBuilder RawCounterConfigBuilder;
-  bytebuf CounterAvailabilityImage;
 
   nv::perf::CounterConfiguration SelectedConfiguration;    // configImage etc. for the current selection
   rdcarray<GPUCounter> SelectedExternalIds;
@@ -116,13 +111,9 @@ static CounterUnit ToCounterUnit(const std::vector<NVPW_DimUnitFactor> &dimUnits
   return CounterUnit::Absolute;
 }
 
-bool NVCounterEnumerator::Init(nv::perf::MetricsEvaluator &&metricsEvaluator,
-                               nv::perf::RawCounterConfigBuilder &&rawCounterConfigBuilder,
-                               bytebuf &&counterAvailabilityImage)
+bool NVCounterEnumerator::Init(nv::perf::MetricsEvaluator &&metricsEvaluator)
 {
   m_Impl->Evaluator = std::move(metricsEvaluator);
-  m_Impl->RawCounterConfigBuilder = std::move(rawCounterConfigBuilder);
-  m_Impl->CounterAvailabilityImage = std::move(counterAvailabilityImage);
 
   return true;
 }
@@ -134,72 +125,6 @@ void NVCounterEnumerator::Impl::InitEnumerateCounters()
     return;
 
   m_EnumerationDone = true;
-
-  if(!CounterAvailabilityImage.empty())
-  {
-    NVPA_Status result;
-    NVPW_RawCounterConfig_SetCounterAvailability_Params params = {};
-    params.structSize = sizeof(params);
-    params.pRawCounterConfig = RawCounterConfigBuilder;
-    params.pCounterAvailabilityImage = CounterAvailabilityImage.data();
-    result = NVPW_RawCounterConfig_SetCounterAvailability(&params);
-    if(result != NVPA_STATUS_SUCCESS)
-    {
-      NV_PERF_LOG_ERR(50, "NvPerf could not determine counter availability for this GPU");
-      return;
-    }
-  }
-
-  rdcarray<uint32_t> availableDomains;
-  {
-    const std::vector<NVPW_RawCounterDomain> availableSCDs =
-        RawCounterConfigBuilder.GetAllAvailableSingularCounterDomains();
-    for(NVPW_RawCounterDomain scd : availableSCDs)
-    {
-      availableDomains.push_back((uint32_t)scd);
-    }
-
-    std::vector<uint32_t> availableCDGs =
-        RawCounterConfigBuilder.GetAllAvailableCooperativeDomainGroups();
-    for(uint32_t cdg : availableCDGs)
-    {
-      availableDomains.push_back(cdg);
-    }
-  }
-
-  std::unordered_set<rdcstr> availableCounters;
-  if(!RawCounterConfigBuilder.BeginPassGroupsAll())
-  {
-    NV_PERF_LOG_ERR(50, "NvPerf failed to begin pass group");
-    return;
-  }
-  for(uint32_t domain : availableDomains)
-  {
-    const size_t numCounters = RawCounterConfigBuilder.GetNumRawCounters(domain);
-    if(numCounters == SIZE_MAX)
-    {
-      NV_PERF_LOG_ERR(50,
-                      "NvPerf failed to determine number of raw counters available for this GPU");
-      return;
-    }
-    for(size_t counterIdx = 0; counterIdx < numCounters; ++counterIdx)
-    {
-      const char *pCounterName = RawCounterConfigBuilder.GetRawCounterName(domain, counterIdx);
-      if(!pCounterName)
-      {
-        NV_PERF_LOG_ERR(50, "NvPerf failed to obtain raw counter name");
-        return;
-      }
-      availableCounters.insert(pCounterName);
-    }
-  }
-  if(!RawCounterConfigBuilder.EndPassGroupsAll())
-  {
-    NV_PERF_LOG_ERR(50, "NvPerf failed to end pass group");
-    return;
-  }
-
-  std::vector<const char *> rawDependencies, optionalRawDependencies;
 
   struct MetricAttribute
   {
@@ -264,29 +189,6 @@ void NVCounterEnumerator::Impl::InitEnumerateCounters()
         if(itr != dimUnits.end())
           continue;
       }
-
-      //-----------------
-      // Filter out metrics that cannot be scheduled
-      rawDependencies.clear();
-      optionalRawDependencies.clear();
-      if(!Evaluator.GetMetricRawCounterDependencies(&evalReq, 1, rawDependencies,
-                                                    optionalRawDependencies))
-      {
-        NV_PERF_LOG_ERR(50, "NvPerf failed to determine raw counter dependencies for metric \"%s\"",
-                        counterName);
-        return;
-      }
-      bool metricAvailable = true;
-      for(const char *dependency : rawDependencies)
-      {
-        if(availableCounters.find(rdcstr(dependency)) == availableCounters.end())
-        {
-          metricAvailable = false;
-          break;
-        }
-      }
-      if(!metricAvailable)
-        continue;
 
       CounterDescription desc = {};
       desc.resultType = CompType::Float;
@@ -386,13 +288,13 @@ bool NVCounterEnumerator::HasCounter(GPUCounter counterID)
 }
 
 bool NVCounterEnumerator::CreateConfig(const char *pChipName,
-                                       NVPW_RawCounterConfig *pRawCounterConfig,
+                                       NVPA_RawMetricsConfig *pRawMetricsConfig,
                                        const rdcarray<GPUCounter> &counters)
 {
   nv::perf::MetricsConfigBuilder metricsConfigBuilder;
-  if(!metricsConfigBuilder.Initialize(m_Impl->Evaluator, pRawCounterConfig, pChipName))
+  if(!metricsConfigBuilder.Initialize(m_Impl->Evaluator, pRawMetricsConfig, pChipName))
   {
-    NV_PERF_LOG_ERR(50, "NvPerf failed to initialize config builder");
+    RDCERR("NvPerf failed to initialize config builder");
     return false;
   }
 
@@ -413,13 +315,13 @@ bool NVCounterEnumerator::CreateConfig(const char *pChipName,
       // std::string metricName = nv::perf::ToString(m_Impl->Evaluator, evalReq);
       const char *metricName = nv::perf::ToCString(
           m_Impl->Evaluator, (NVPW_MetricType)evalReq.metricType, evalReq.metricIndex);
-      NV_PERF_LOG_ERR(50, "NvPerf failed to configure metric: %s", metricName);
+      RDCERR("NvPerf failed to configure metric: %s", metricName);
     }
   }
 
   if(!metricsConfigBuilder.PrepareConfigImage())
   {
-    NV_PERF_LOG_ERR(50, "NvPerf failed to prepare config image");
+    RDCERR("NvPerf failed to prepare config image");
     return false;
   }
 
@@ -467,7 +369,7 @@ bool NVCounterEnumerator::EvaluateMetrics(const uint8_t *counterDataImage,
       m_Impl->Evaluator, counterDataImage, counterDataImageSize);
   if(!setDeviceSuccess)
   {
-    NV_PERF_LOG_ERR(50, "NvPerf failed to determine device attributes from counter data");
+    RDCERR("NvPerf failed to determine device attributes from counter data");
     return false;
   }
 
@@ -482,14 +384,14 @@ bool NVCounterEnumerator::EvaluateMetrics(const uint8_t *counterDataImage,
         counterDataImage, rangeIndex, '/', &leafRangeName);
     if(!leafRangeName)
     {
-      NV_PERF_LOG_ERR(50, "Failed to access NvPerf range name");
+      RDCERR("Failed to access NvPerf range name");
       continue;
     }
     errno = 0;
     uint32_t eid = (uint32_t)strtoul(leafRangeName, NULL, 10);
     if(errno != 0)
     {
-      NV_PERF_LOG_ERR(50, "Failed to parse NvPerf range name: %s", leafRangeName);
+      RDCERR("Failed to parse NvPerf range name: %s", leafRangeName);
       continue;
     }
 
@@ -499,7 +401,7 @@ bool NVCounterEnumerator::EvaluateMetrics(const uint8_t *counterDataImage,
                                       m_Impl->SelectedEvalRequests.data(), doubleValues.data());
     if(!evalSuccess)
     {
-      NV_PERF_LOG_ERR(50, "NvPerf failed to evaluate GPU metrics for range: %s", leafRangeName);
+      RDCERR("NvPerf failed to evaluate GPU metrics for range: %s", leafRangeName);
       continue;
     }
     for(size_t counterIndex = 0; counterIndex < m_Impl->SelectedExternalIds.size(); ++counterIndex)
@@ -533,7 +435,7 @@ bool NVCounterEnumerator::InitializeNvPerf()
   return nv::perf::InitializeNvPerf();
 }
 
-static CounterDescription DownloadLibraryMessage(const char *message)
+CounterDescription NVCounterEnumerator::LibraryNotFoundMessage()
 {
   rdcstr pluginPath = FileIO::GetAppFolderFilename(
 #if ENABLED(RDOC_WIN32)
@@ -556,7 +458,7 @@ static CounterDescription DownloadLibraryMessage(const char *message)
   CounterDescription desc = {};
   desc.resultType = CompType::Typeless;
   desc.resultByteWidth = 0;
-  desc.name = message;
+  desc.name = "ERROR: Could not find Nsight Perf SDK library";
   desc.description = StringFormat::Fmt(
       "To use these counters, please:"
       "<ol>"
@@ -581,15 +483,4 @@ static CounterDescription DownloadLibraryMessage(const char *message)
   FileIO::CreateParentDirectory(pluginPath);
 
   return desc;
-}
-
-CounterDescription NVCounterEnumerator::LibraryNotFoundMessage()
-{
-  return DownloadLibraryMessage("ERROR: Could not find Nsight Perf SDK library");
-}
-
-CounterDescription NVCounterEnumerator::LibraryNotSupportedMessage()
-{
-  return DownloadLibraryMessage(
-      "ERROR: Installed version of Nsight Perf SDK library is not supported");
 }

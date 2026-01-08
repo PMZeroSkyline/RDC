@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -66,90 +66,6 @@ Program::Program(const rdcarray<uint32_t> &words)
   m_Type = VersionToken::ProgramType.Get(cur[0]);
   m_Major = VersionToken::MajorVersion.Get(cur[0]);
   m_Minor = VersionToken::MinorVersion.Get(cur[0]);
-}
-
-void Program::CalculateEvalSampleCache(const DXDebug::InputFetcherConfig &cfg,
-                                       DXDebug::InputFetcher &fetcher) const
-{
-  // scan the instructions to see if it contains any evaluates.
-  for(size_t i = 0; i < GetNumInstructions(); i++)
-  {
-    const Operation &op = GetInstruction(i);
-
-    // skip any non-eval opcodes
-    if(op.operation != OPCODE_EVAL_CENTROID && op.operation != OPCODE_EVAL_SAMPLE_INDEX &&
-       op.operation != OPCODE_EVAL_SNAPPED)
-      continue;
-
-    // the generation of this key must match what we'll generate in the corresponding lookup
-    DXDebug::SampleEvalCacheKey key;
-
-    // all the eval opcodes have rDst, vIn as the first two operands
-    key.inputRegisterIndex = (int32_t)op.operands[1].indices[0].index;
-
-    for(int c = 0; c < 4; c++)
-    {
-      if(op.operands[0].comps[c] == 0xff)
-        break;
-
-      key.numComponents = c + 1;
-    }
-
-    key.firstComponent = op.operands[1].comps[op.operands[0].comps[0]];
-
-    fetcher.sampleEvalRegisterMask |= 1ULL << key.inputRegisterIndex;
-
-    if(op.operation == OPCODE_EVAL_CENTROID)
-    {
-      // nothing to do - default key is centroid, sample is -1 and offset x/y is 0
-      if(!fetcher.evalSampleCacheData.contains(key))
-        fetcher.evalSampleCacheData.push_back(key);
-    }
-    else if(op.operation == OPCODE_EVAL_SAMPLE_INDEX)
-    {
-      if(op.operands[2].type == TYPE_IMMEDIATE32 || op.operands[2].type == TYPE_IMMEDIATE64)
-      {
-        // hooray, only sampling a single index, just add this key
-        key.sample = (int32_t)op.operands[2].values[0];
-
-        if(!fetcher.evalSampleCacheData.contains(key))
-          fetcher.evalSampleCacheData.push_back(key);
-      }
-      else
-      {
-        // parameter is a register and we don't know which sample will be needed, fetch them
-        // all. In most cases this will be a loop over them all, so they'll all be needed anyway
-        for(uint32_t c = 0; c < cfg.outputSampleCount; c++)
-        {
-          key.sample = (int32_t)c;
-          fetcher.evalSampleCacheData.push_back(key);
-        }
-      }
-    }
-    else if(op.operation == OPCODE_EVAL_SNAPPED)
-    {
-      if(op.operands[2].type == TYPE_IMMEDIATE32 || op.operands[2].type == TYPE_IMMEDIATE64)
-      {
-        // hooray, only sampling a single offset, just add this key
-        key.offsetx = (int32_t)op.operands[2].values[0];
-        key.offsety = (int32_t)op.operands[2].values[1];
-
-        if(!fetcher.evalSampleCacheData.contains(key))
-          fetcher.evalSampleCacheData.push_back(key);
-      }
-      else
-      {
-        RDCWARN(
-            "EvaluateAttributeSnapped called with dynamic parameter, caching all possible "
-            "evaluations which could have performance impact.");
-
-        for(key.offsetx = -8; key.offsetx <= 7; key.offsetx++)
-          for(key.offsety = -8; key.offsety <= 7; key.offsety++)
-            if(!fetcher.evalSampleCacheData.contains(key))
-              fetcher.evalSampleCacheData.push_back(key);
-      }
-    }
-  }
 }
 
 void HandleResourceArrayIndices(const rdcarray<DXBCBytecode::RegIndex> &indices,
@@ -732,8 +648,6 @@ void Program::SetupRegisterFile(rdcarray<ShaderVariable> &registers) const
   for(size_t i = 0; i < m_IndexTempSizes.size(); i++)
   {
     registers.push_back(makeReg(GetRegisterName(TYPE_INDEXABLE_TEMP, (uint32_t)i)));
-    registers.back().rows = 0;
-    registers.back().columns = 0;
     registers.back().members.resize(m_IndexTempSizes[i]);
     for(uint32_t t = 0; t < m_IndexTempSizes[i]; t++)
       registers.back().members[t] = makeReg(StringFormat::Fmt("[%u]", t));
@@ -757,8 +671,6 @@ void Program::SetupRegisterFile(rdcarray<ShaderVariable> &registers) const
       continue;
 
     registers.push_back(makeReg(GetRegisterName(TYPE_THREAD_GROUP_SHARED_MEMORY, (uint32_t)i)));
-    registers.back().rows = 0;
-    registers.back().columns = 0;
     registers.back().members.resize(m_GroupsharedTempSizes[i].second);
     // nice case, groupshared is raw or structured with stride less than a register, we can treat
     // it as a simple array
@@ -780,8 +692,6 @@ void Program::SetupRegisterFile(rdcarray<ShaderVariable> &registers) const
       for(uint32_t t = 0; t < m_GroupsharedTempSizes[i].second; t++)
       {
         registers.back().members[t] = makeReg(StringFormat::Fmt("[%u]", t));
-        registers.back().members[t].rows = 0;
-        registers.back().members[t].columns = 0;
 
         registers.back().members[t].members.resize(AlignUp4(m_GroupsharedTempSizes[i].first) / 4);
 
@@ -851,7 +761,7 @@ uint32_t Program::GetRegisterIndex(OperandType type, uint32_t index) const
   else if(type == TYPE_THREAD_GROUP_SHARED_MEMORY)
   {
     return m_NumTemps + (uint32_t)m_IndexTempSizes.size() + m_NumOutputs + (m_OutputDepth ? 1 : 0) +
-           (m_OutputStencil ? 1 : 0) + (m_OutputCoverage ? 1 : 0) + index;
+           (m_OutputStencil ? 1 : 0) + (m_OutputCoverage ? 1 : 0);
   }
 
   RDCERR("Unexpected type for register index: %s", ToStr(type).c_str());

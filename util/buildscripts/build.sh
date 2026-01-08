@@ -142,7 +142,6 @@ TYPE=""
 SNAPNAME=""
 SYMSTORE=""
 SKIPCOMPILE=""
-STRICT=""
 LLVM_ARM32=$(realpath $(dirname $0)/support/llvm_arm32)
 LLVM_ARM64=$(realpath $(dirname $0)/support/llvm_arm64)
 
@@ -167,8 +166,6 @@ usage() {
 	echo "  --llvm_arm32 <path>         Give the path to an ARM32 build of LLVM, for android.";
 	echo "  --llvm_arm64 <path>         Give the path to an ARM64 build of LLVM, for android.";
 	echo "  --skipcompile               Skip compile steps, package already compiled binaries.";
-	echo "  --strict                    Require all build steps to complete successfully,";
-	echo "                              including optional steps e.g. android/installer.";
 }
 
 while [[ $# -gt 0 ]]; do
@@ -208,11 +205,6 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 
-		--strict)
-		STRICT="yes"
-		shift
-		;;
-
 		-h|-?|-help|--help)
 		usage;
 		exit 0;
@@ -240,8 +232,6 @@ if [[ "$TYPE" == "snapshot" ]] && [[ "$SNAPNAME" == "" ]]; then
 	usage;
 	exit 1;
 fi
-
-export STRICT;
 
 echo "Building $TYPE";
 
@@ -295,8 +285,6 @@ echo "Platform: $PLATFORM";
 echo "Build root: $BUILD_ROOT";
 echo "Repository root: $REPO_ROOT";
 
-export GITHASH=$(cd "${REPO_ROOT}" && git rev-parse HEAD)
-
 if [[ "$TYPE" == "official" ]]; then
 
 	sed -i.bak "s%RENDERDOC_OFFICIAL_BUILD 0%RENDERDOC_OFFICIAL_BUILD 1%" "${REPO_ROOT}"/renderdoc/api/replay/version.h
@@ -306,7 +294,7 @@ if [[ "$TYPE" == "official" ]]; then
 
 else # snapshot
 
-	export GITTAG=$GITHASH
+	export GITTAG=$(cd "${REPO_ROOT}" && git rev-parse HEAD)
 
 fi;
 
@@ -331,17 +319,9 @@ if [[ "$PLATFORM" == "Windows" ]]; then
 
 	./scripts/sign_files.sh
 
-	if [ $? -ne 0 ]; then
-		exit 1;
-	fi
-
 	cd "${BUILD_ROOT}"
 
 	./scripts/prepare_symbols.sh
-
-	if [ $? -ne 0 ]; then
-		exit 1;
-	fi
 
 fi
 
@@ -359,7 +339,3 @@ fi
 
 ./scripts/make_package.sh "${FILENAME}"
 
-if [ $? -ne 0 ]; then
-	rm -rf "${REPO_ROOT}"/package/
-	exit 1;
-fi

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -237,8 +237,7 @@ private:
 
   void PopulateCompileTools();
   void PopulateCompileToolParameters();
-  bool ProcessIncludeDirectives(QString &source, const rdcstrpairs &files,
-                                const rdcarray<rdcstr> &exclude = {});
+  bool ProcessIncludeDirectives(QString &source, const rdcstrpairs &files);
 
   void updateWindowTitle();
   void gotoSourceDebugging();

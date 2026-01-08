@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2022-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -30,13 +30,12 @@
 #include "api/replay/replay_enums.h"
 #include "common/common.h"
 
-struct NVPW_RawCounterConfig;
+struct NVPA_RawMetricsConfig;
 namespace nv
 {
 namespace perf
 {
 class MetricsEvaluator;
-class RawCounterConfigBuilder;
 }
 }
 
@@ -46,16 +45,14 @@ public:
   NVCounterEnumerator();
   ~NVCounterEnumerator();
 
-  // This function takes ownership of metricsEvaluator and rawCounterConfigBuilder.
-  bool Init(nv::perf::MetricsEvaluator &&metricsEvaluator,
-            nv::perf::RawCounterConfigBuilder &&rawCounterConfigBuilder,
-            bytebuf &&counterAvailabilityImage);
+  // This function takes ownership of metricsEvaluator.
+  bool Init(nv::perf::MetricsEvaluator &&metricsEvaluator);
 
   rdcarray<GPUCounter> GetPublicCounterIds();
   CounterDescription GetCounterDescription(GPUCounter counterID);
   bool HasCounter(GPUCounter counterID);
 
-  bool CreateConfig(const char *pChipName, NVPW_RawCounterConfig *pRawCounterConfig,
+  bool CreateConfig(const char *pChipName, NVPA_RawMetricsConfig *pRawMetricsConfig,
                     const rdcarray<GPUCounter> &counters);
   void GetConfig(const uint8_t *&pConfigImage, size_t &configImageSize,
                  const uint8_t *&pCounterDataPrefix, size_t &counterDataPrefixSize);
@@ -67,7 +64,6 @@ public:
 
   static bool InitializeNvPerf();
   static CounterDescription LibraryNotFoundMessage();
-  static CounterDescription LibraryNotSupportedMessage();
 
 private:
   struct Impl;

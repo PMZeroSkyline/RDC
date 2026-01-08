@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -93,14 +93,7 @@ void APIInspector::RevealParameter(SDObject *param)
           if(current->GetChild(i) == next)
           {
             current = next;
-
-            int idx = (int)i;
-
-            // revealing a parameter that wasn't added, bail out now
-            if(idx >= parent->childCount() || parent->child(idx)->tag().value<void *>() != next)
-              return;
-
-            item = parent->child(idx);
+            item = parent->child((int)i);
             break;
           }
         }

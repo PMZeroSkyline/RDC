@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -146,7 +146,7 @@ D3D12DebugManager::D3D12DebugManager(WrappedID3D12Device *wrapper)
   desc.NumDescriptors = rtvCount;
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 
-  RDCCOMPILE_ASSERT(MAX_RTV_SLOT < rtvCount, "Increase size of RTV heap");
+  RDCCOMPILE_ASSERT(LAST_WIN_RTV < rtvCount, "Increase size of RTV heap");
 
   hr = m_pDevice->CreateDescriptorHeap(&desc, __uuidof(ID3D12DescriptorHeap), (void **)&rtvHeap);
   m_pDevice->InternalRef();
@@ -163,7 +163,7 @@ D3D12DebugManager::D3D12DebugManager(WrappedID3D12Device *wrapper)
   desc.NumDescriptors = dsvCount;
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
 
-  RDCCOMPILE_ASSERT(MAX_DSV_SLOT < dsvCount, "Increase size of DSV heap");
+  RDCCOMPILE_ASSERT(LAST_WIN_DSV < dsvCount, "Increase size of DSV heap");
 
   hr = m_pDevice->CreateDescriptorHeap(&desc, __uuidof(ID3D12DescriptorHeap), (void **)&dsvHeap);
   m_pDevice->InternalRef();
@@ -175,12 +175,10 @@ D3D12DebugManager::D3D12DebugManager(WrappedID3D12Device *wrapper)
 
   rm->SetInternalResource(dsvHeap);
 
-  const uint32_t srvCount = 4096;
-
-  desc.NumDescriptors = srvCount;
+  desc.NumDescriptors = 4096;
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 
-  RDCCOMPILE_ASSERT(MAX_SRV_SLOT < srvCount, "Increase size of CBV/SRV/UAV heap");
+  RDCCOMPILE_ASSERT(MAX_SRV_SLOT < 4096, "Increase size of CBV/SRV/UAV heap");
 
   hr = m_pDevice->CreateDescriptorHeap(&desc, __uuidof(ID3D12DescriptorHeap), (void **)&uavClearHeap);
   m_pDevice->InternalRef();
@@ -205,12 +203,8 @@ D3D12DebugManager::D3D12DebugManager(WrappedID3D12Device *wrapper)
 
   rm->SetInternalResource(cbvsrvuavHeap);
 
-  const uint32_t samplerCount = 300;
-
-  desc.NumDescriptors = samplerCount;
+  desc.NumDescriptors = 16;
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
-
-  RDCCOMPILE_ASSERT(MAX_SAMPLER_SLOT < samplerCount, "Increase size of sampler heap");
 
   hr = m_pDevice->CreateDescriptorHeap(&desc, __uuidof(ID3D12DescriptorHeap), (void **)&samplerHeap);
   m_pDevice->InternalRef();
@@ -609,12 +603,6 @@ D3D12DebugManager::~D3D12DebugManager()
 
 bool D3D12DebugManager::CreateShaderDebugResources()
 {
-  // MathOp is 2, SampleGatherOp is 6
-  const uint64_t resultMaxElementSize = sizeof(Vec4f) * (2 + 6);
-  const uint32_t maxQueuedResults = ShaderDebugConstants::MAX_SHADER_DEBUG_QUEUED_OPS;
-  const uint64_t shaderDebugReadbackSize = resultMaxElementSize * maxQueuedResults;
-  RDCCOMPILE_ASSERT(shaderDebugReadbackSize < m_ReadbackSize, "Readback buffer is not big enough");
-
   rdcstr hlsl = GetEmbeddedResource(shaderdebug_hlsl);
 
   D3D12RootSignature rootSig;
@@ -1116,9 +1104,6 @@ ID3D12Resource *D3D12DebugManager::MakeCBuffer(UINT64 size)
 
 void D3D12DebugManager::FillBuffer(ID3D12Resource *buf, size_t offset, const void *data, size_t size)
 {
-  if(!buf)
-    return;
-
   D3D12_RANGE range = {offset, offset + size};
   byte *ptr = NULL;
   HRESULT hr = buf->Map(0, &range, (void **)&ptr);
@@ -1206,11 +1191,6 @@ rdcpair<ID3D12Resource *, UINT64> D3D12DebugManager::PatchExecuteIndirect(
     UINT maxCount)
 {
   rdcarray<uint32_t> argOffsets;
-
-  if(!m_EIPatchBufferData || maxCount == 0)
-  {
-    return {argBuf, argBufOffset};
-  }
 
   WrappedID3D12CommandSignature *wrappedComSig = (WrappedID3D12CommandSignature *)comSig;
   uint32_t offset = 0;
@@ -1326,9 +1306,9 @@ rdcpair<ID3D12Resource *, UINT64> D3D12DebugManager::PatchExecuteIndirect(
   cmd->SetComputeRootSignature(m_EIPatchRootSig);
   cmd->SetComputeRootConstantBufferView(0, UploadConstants(argOffsets.data(), argOffsets.byteSize()));
   if(countBufAddr == 0)
-    cmd->SetComputeRootShaderResourceView(1, UploadConstants(&maxCount, sizeof(uint32_t)));
+    cmd->SetComputeRootConstantBufferView(1, UploadConstants(&maxCount, sizeof(uint32_t)));
   else
-    cmd->SetComputeRootShaderResourceView(1, countBufAddr);
+    cmd->SetComputeRootConstantBufferView(1, countBufAddr);
   cmd->SetComputeRoot32BitConstant(2, maxCount, 0);
   cmd->SetComputeRootShaderResourceView(3, m_EIPatchBufferData->GetGPUVirtualAddress());
   cmd->SetComputeRootUnorderedAccessView(4, ret.first->GetGPUVirtualAddress() + ret.second);
@@ -1406,15 +1386,8 @@ void D3D12DebugManager::FillWithDiscardPattern(ID3D12GraphicsCommandListX *cmd,
       FillBuffer(patternBuf, 0, pattern.data(), size);
     }
 
-    D3D12_RESOURCE_BARRIER b = {};
-    b.Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
-
-    cmd->ResourceBarrier(1, &b);
-
     // fill the destination with a copy from the pattern buffer
     cmd->CopyBufferRegion(res, 0, patternBuf, 0, size);
-
-    cmd->ResourceBarrier(1, &b);
 
     return;
   }
@@ -1707,10 +1680,6 @@ void D3D12DebugManager::FillWithDiscardPattern(ID3D12GraphicsCommandListX *cmd,
 
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
 
-    // Special case for D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS
-    if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
-      b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-
     D3D12_TEXTURE_BARRIER tex = {};
     D3D12_BARRIER_GROUP group = {};
 
@@ -1725,10 +1694,6 @@ void D3D12DebugManager::FillWithDiscardPattern(ID3D12GraphicsCommandListX *cmd,
       tex.LayoutAfter = D3D12_BARRIER_LAYOUT_COPY_DEST;
       tex.AccessAfter = D3D12_BARRIER_ACCESS_COPY_DEST;
       tex.SyncAfter = D3D12_BARRIER_SYNC_COPY;
-
-      // Special case for D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS
-      if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
-        tex.LayoutAfter = D3D12_BARRIER_LAYOUT_COMMON;
 
       tex.Flags = D3D12_TEXTURE_BARRIER_FLAG_DISCARD;
       tex.Subresources.IndexOrFirstMipLevel = (UINT)sub;
@@ -1827,10 +1792,6 @@ void D3D12DebugManager::FillWithDiscardPattern(ID3D12GraphicsCommandListX *cmd,
         tex.LayoutAfter = D3D12_BARRIER_LAYOUT_COMMON;
       }
 
-      // Special case for D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS
-      if(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
-        tex.LayoutBefore = D3D12_BARRIER_LAYOUT_COMMON;
-
       cmd->Barrier(1, &group);
     }
     else
@@ -1914,7 +1875,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE D3D12DebugManager::GetTempDescriptor(const D3D12Desc
   D3D12_CPU_DESCRIPTOR_HANDLE ret = {};
 
   ID3D12Resource *res =
-      m_pDevice->GetResourceManager()->GetResAs<ID3D12Resource>(desc.GetResResourceId());
+      m_pDevice->GetResourceManager()->GetCurrentAs<ID3D12Resource>(desc.GetResResourceId());
 
   if(desc.GetType() == D3D12DescriptorType::RTV)
   {
@@ -1960,7 +1921,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE D3D12DebugManager::GetTempDescriptor(const D3D12Desc
     ret = GetUAVClearHandle(TMP_UAV);
 
     ID3D12Resource *counterRes =
-        m_pDevice->GetResourceManager()->GetResAs<ID3D12Resource>(desc.GetCounterResourceId());
+        m_pDevice->GetResourceManager()->GetCurrentAs<ID3D12Resource>(desc.GetCounterResourceId());
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC unpacked = desc.GetUAV();
 
@@ -2042,7 +2003,7 @@ void D3D12DebugManager::PrepareExecuteIndirectPatching(GPUAddressRangeTracker &o
     bytebuf root = EncodeRootSig(m_pDevice->RootSigVersion(),
                                  {
                                      cbvParam(D3D12_SHADER_VISIBILITY_ALL, 0, 0),
-                                     srvParam(D3D12_SHADER_VISIBILITY_ALL, 0, 1),
+                                     cbvParam(D3D12_SHADER_VISIBILITY_ALL, 0, 1),
                                      constParam(D3D12_SHADER_VISIBILITY_ALL, 0, 2, 1),
                                      srvParam(D3D12_SHADER_VISIBILITY_ALL, 0, 0),
                                      uavParam(D3D12_SHADER_VISIBILITY_ALL, 0, 0),
@@ -2100,7 +2061,7 @@ void D3D12DebugManager::PrepareExecuteIndirectPatching(GPUAddressRangeTracker &o
     b.origBase = addr.start;
     b.origEnd = addr.realEnd;
     b.newBase =
-        m_pDevice->GetResourceManager()->GetResAs<ID3D12Resource>(addr.id)->GetGPUVirtualAddress();
+        m_pDevice->GetResourceManager()->GetLiveAs<ID3D12Resource>(addr.id)->GetGPUVirtualAddress();
     buffers.push_back(b);
   }
 
@@ -2141,16 +2102,15 @@ void D3D12DebugManager::PrepareExecuteIndirectPatching(GPUAddressRangeTracker &o
     hr = m_pDevice->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, NULL,
         __uuidof(ID3D12Resource), (void **)&m_EIPatchScratchBuffer);
+    m_pDevice->RemoveReplayResource(GetResID(m_EIPatchScratchBuffer));
+
+    m_EIPatchScratchBuffer->SetName(L"m_EIPatchScratchBuffer");
 
     if(FAILED(hr))
     {
       RDCERR("Failed to create scratch buffer, HRESULT: %s", ToStr(hr).c_str());
       return;
     }
-
-    m_pDevice->RemoveReplayResource(GetResID(m_EIPatchScratchBuffer));
-
-    m_EIPatchScratchBuffer->SetName(L"m_EIPatchScratchBuffer");
   }
 }
 
@@ -3448,8 +3408,7 @@ uint32_t GetFreeRegSpace(const D3D12RootSignature &sig, const uint32_t registerS
   for(size_t i = 0; i < numParams; i++)
   {
     if(sig.Parameters[i].ShaderVisibility == visibility ||
-       sig.Parameters[i].ShaderVisibility == D3D12_SHADER_VISIBILITY_ALL ||
-       visibility == D3D12_SHADER_VISIBILITY_ALL)
+       sig.Parameters[i].ShaderVisibility == D3D12_SHADER_VISIBILITY_ALL)
     {
       D3D12_ROOT_PARAMETER_TYPE rootType = sig.Parameters[i].ParameterType;
       if(rootType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
@@ -3500,14 +3459,12 @@ uint32_t GetFreeRegSpace(const D3D12RootSignature &sig, const uint32_t registerS
 }
 
 void AddDebugDescriptorsToRenderState(WrappedID3D12Device *pDevice, D3D12RenderState &rs,
-                                      bool compute, const rdcarray<PortableHandle> &handles,
+                                      const rdcarray<PortableHandle> &handles,
                                       D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t sigElem,
                                       std::set<ResourceId> &copiedHeaps)
 {
-  D3D12RenderState::RootSignature &sig = compute ? rs.compute : rs.graphics;
-
-  if(sig.sigelems.size() <= sigElem)
-    sig.sigelems.resize(sigElem + 1);
+  if(rs.graphics.sigelems.size() <= sigElem)
+    rs.graphics.sigelems.resize(sigElem + 1);
 
   PortableHandle newHandle = handles[0];
 
@@ -3521,7 +3478,7 @@ void AddDebugDescriptorsToRenderState(WrappedID3D12Device *pDevice, D3D12RenderS
   for(size_t i = 0; i < rs.heaps.size(); i++)
   {
     WrappedID3D12DescriptorHeap *h =
-        pDevice->GetResourceManager()->GetResAs<WrappedID3D12DescriptorHeap>(rs.heaps[i]);
+        pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12DescriptorHeap>(rs.heaps[i]);
     if(h->GetDesc().Type == heapType)
     {
       // use the last descriptors
@@ -3535,7 +3492,8 @@ void AddDebugDescriptorsToRenderState(WrappedID3D12Device *pDevice, D3D12RenderS
         for(size_t j = 0; j < handles.size(); ++j)
         {
           WrappedID3D12DescriptorHeap *h2 =
-              pDevice->GetResourceManager()->GetResAs<WrappedID3D12DescriptorHeap>(handles[j].heap);
+              pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12DescriptorHeap>(
+                  handles[j].heap);
           D3D12_CPU_DESCRIPTOR_HANDLE src = h2->GetCPUDescriptorHandleForHeapStart();
           src.ptr += handles[j].index * sizeof(D3D12Descriptor);
 
@@ -3556,6 +3514,6 @@ void AddDebugDescriptorsToRenderState(WrappedID3D12Device *pDevice, D3D12RenderS
   if(newHandle.heap == handles[0].heap)
     rs.heaps.push_back(handles[0].heap);
 
-  sig.sigelems[sigElem] =
+  rs.graphics.sigelems[sigElem] =
       D3D12RenderState::SignatureElement(eRootTable, newHandle.heap, newHandle.index);
 }

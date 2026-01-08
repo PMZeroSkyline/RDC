@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -87,7 +87,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_Close(SerialiserType &ser)
     }
     else
     {
-      GetResourceManager()->GetResAs<WrappedID3D12GraphicsCommandList>(CommandList)->Close();
+      GetResourceManager()->GetLiveAs<WrappedID3D12GraphicsCommandList>(CommandList)->Close();
 
       {
         if(m_Cmd->GetActionStack().size() > 1)
@@ -214,10 +214,11 @@ bool WrappedID3D12GraphicsCommandList::Serialise_Reset(SerialiserType &ser,
         }
       }
 
+      if(rerecord)
       {
         ID3D12GraphicsCommandList *listptr = NULL;
         HRESULT hr =
-            m_pDevice->CreateCommandList(BakedCommandList, nodeMask, type, pAllocator, pInitialState,
+            m_pDevice->CreateCommandList(nodeMask, type, pAllocator, pInitialState,
                                          __uuidof(ID3D12GraphicsCommandList), (void **)&listptr);
 
         if(FAILED(hr))
@@ -230,27 +231,18 @@ bool WrappedID3D12GraphicsCommandList::Serialise_Reset(SerialiserType &ser,
         // this is a safe upcast because it's a wrapped object
         ID3D12GraphicsCommandListX *list = (ID3D12GraphicsCommandListX *)listptr;
 
-        if(rerecord)
-        {
-          // we store under both baked and non baked ID.
-          // The baked ID is the 'real' entry, the non baked is simply so it
-          // can be found in the subsequent serialised commands that ref the
-          // non-baked ID. The baked ID is referenced by the submit itself.
-          //
-          // In Close() we erase the non-baked reference, and since
-          // we know you can only be recording a command list once at a time
-          // (even if it's baked to several command listsin the frame)
-          // there's no issue with clashes here.
-          m_Cmd->m_RerecordCmds[BakedCommandList] = list;
-          m_Cmd->m_RerecordCmds[CommandList] = list;
-        }
-        else
-        {
-          list->Close();
-        }
+        // we store under both baked and non baked ID.
+        // The baked ID is the 'real' entry, the non baked is simply so it
+        // can be found in the subsequent serialised commands that ref the
+        // non-baked ID. The baked ID is referenced by the submit itself.
+        //
+        // In Close() we erase the non-baked reference, and since
+        // we know you can only be recording a command list once at a time
+        // (even if it's baked to several command listsin the frame)
+        // there's no issue with clashes here.
+        m_Cmd->m_RerecordCmds[BakedCommandList] = list;
+        m_Cmd->m_RerecordCmds[CommandList] = list;
 
-        // always create a version of this list even if we're not re-recording, so the serialisation
-        // has an object to find
         m_Cmd->m_RerecordCmdList.push_back(list);
       }
 
@@ -291,11 +283,11 @@ bool WrappedID3D12GraphicsCommandList::Serialise_Reset(SerialiserType &ser,
     }
     else
     {
-      if(!GetResourceManager()->HasResource(BakedCommandList))
+      if(!GetResourceManager()->HasLiveResource(BakedCommandList))
       {
         ID3D12GraphicsCommandList *list = NULL;
         HRESULT hr =
-            m_pDevice->CreateCommandList(BakedCommandList, nodeMask, type, pAllocator, pInitialState,
+            m_pDevice->CreateCommandList(nodeMask, type, pAllocator, pInitialState,
                                          __uuidof(ID3D12GraphicsCommandList), (void **)&list);
         RDCASSERTEQUAL(hr, S_OK);
 
@@ -312,21 +304,19 @@ bool WrappedID3D12GraphicsCommandList::Serialise_Reset(SerialiserType &ser,
           m_pDevice->GetResourceDesc(BakedCommandList).SetCustomName(descr.name + " (Baked)");
         }
 
+        GetResourceManager()->AddLiveResource(BakedCommandList, list);
+
         // whenever a command-building chunk asks for the command list, it
         // will get our baked version.
         if(GetResourceManager()->HasReplacement(CommandList))
           GetResourceManager()->RemoveReplacement(CommandList);
 
         GetResourceManager()->ReplaceResource(CommandList, BakedCommandList);
-
-        // this is a safe upcast because it's a wrapped object
-        ID3D12GraphicsCommandListX *listX = (ID3D12GraphicsCommandListX *)list;
-        m_Cmd->m_RerecordCmdList.push_back(listX);
       }
       else
       {
         ID3D12GraphicsCommandList *list =
-            GetResourceManager()->GetResAs<WrappedID3D12GraphicsCommandList>(BakedCommandList)->GetReal();
+            GetResourceManager()->GetLiveAs<WrappedID3D12GraphicsCommandList>(BakedCommandList)->GetReal();
         list->Reset(Unwrap(pAllocator), Unwrap(pInitialState));
       }
 
@@ -477,7 +467,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ResourceBarrier(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     rdcarray<D3D12_RESOURCE_BARRIER> filtered;
     {
@@ -626,7 +616,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearState(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -706,7 +696,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_IASetPrimitiveTopology(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -769,7 +759,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_RSSetViewports(SerialiserType &
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -836,7 +826,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_RSSetScissorRects(SerialiserTyp
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -901,7 +891,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_OMSetBlendFactor(SerialiserType
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -958,7 +948,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_OMSetStencilRef(SerialiserType 
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1019,7 +1009,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetDescriptorHeaps(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     rdcarray<ResourceId> heapIDs;
     rdcarray<ID3D12DescriptorHeap *> heaps;
@@ -1102,7 +1092,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_IASetIndexBuffer(SerialiserType
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1182,7 +1172,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_IASetVertexBuffers(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1261,7 +1251,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SOSetTargets(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1340,7 +1330,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetPipelineState(SerialiserType
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1509,7 +1499,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_OMSetRenderTargets(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     rdcarray<D3D12_CPU_DESCRIPTOR_HANDLE> unwrappedRTs;
     unwrappedRTs.resize(RTVs.size());
@@ -1633,7 +1623,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootSignature(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1668,7 +1658,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootSignature(
       // and all newly expected arguments must be set before Draw/Dispatch otherwise behavior is
       // undefined. If the root signature is redundantly set to the same one currently set, existing
       // root signature bindings do not become stale."
-      if(Unwrap(GetResourceManager()->GetResAs<ID3D12RootSignature>(state.compute.rootsig)) !=
+      if(Unwrap(GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.compute.rootsig)) !=
          Unwrap(pRootSignature))
         state.compute.sigelems.clear();
       state.compute.rootsig = GetResID(pRootSignature);
@@ -1700,7 +1690,7 @@ void WrappedID3D12GraphicsCommandList::SetComputeRootSignature(ID3D12RootSignatu
     // and all newly expected arguments must be set before Draw/Dispatch otherwise behavior is
     // undefined. If the root signature is redundantly set to the same one currently set, existing
     // root signature bindings do not become stale."
-    if(Unwrap(GetResourceManager()->GetResAs<ID3D12RootSignature>(
+    if(Unwrap(GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(
            m_CaptureComputeState.compute.rootsig)) != Unwrap(pRootSignature))
       m_CaptureComputeState.compute.sigelems.clear();
     m_CaptureComputeState.compute.rootsig = GetResID(pRootSignature);
@@ -1720,7 +1710,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootDescriptorTable(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1835,7 +1825,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRoot32BitConstant(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1913,7 +1903,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRoot32BitConstants(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -1998,7 +1988,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootConstantBufferVie
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(ValidateRootGPUVA(BufferLocation))
       return true;
@@ -2083,7 +2073,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootShaderResourceVie
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(ValidateRootGPUVA(BufferLocation))
       return true;
@@ -2168,7 +2158,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootUnorderedAccessVi
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(ValidateRootGPUVA(BufferLocation))
       return true;
@@ -2256,7 +2246,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootSignature(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -2291,7 +2281,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootSignature(
       // and all newly expected arguments must be set before Draw/Dispatch otherwise behavior is
       // undefined. If the root signature is redundantly set to the same one currently set, existing
       // root signature bindings do not become stale."
-      if(Unwrap(GetResourceManager()->GetResAs<ID3D12RootSignature>(state.graphics.rootsig)) !=
+      if(Unwrap(GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.graphics.rootsig)) !=
          Unwrap(pRootSignature))
         state.graphics.sigelems.clear();
       state.graphics.rootsig = GetResID(pRootSignature);
@@ -2332,7 +2322,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootDescriptorTable(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -2439,7 +2429,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRoot32BitConstant(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -2511,7 +2501,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRoot32BitConstants(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     bool stateUpdate = false;
 
@@ -2590,7 +2580,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootConstantBufferVi
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(ValidateRootGPUVA(BufferLocation))
       return true;
@@ -2669,7 +2659,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootShaderResourceVi
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(ValidateRootGPUVA(BufferLocation))
       return true;
@@ -2748,7 +2738,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootUnorderedAccessV
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(ValidateRootGPUVA(BufferLocation))
       return true;
@@ -2833,7 +2823,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_BeginQuery(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2881,7 +2871,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_EndQuery(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2933,7 +2923,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ResolveQueryData(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -2989,7 +2979,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetPredication(SerialiserType &
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     // don't replay predication at all
   }
@@ -3036,7 +3026,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetMarker(SerialiserType &ser, 
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3052,7 +3042,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetMarker(SerialiserType &ser, 
       D3D12MarkerRegion::Set(pCommandList, MarkerText);
 
       ActionDescription action;
-      action.customName = MarkerText.empty() ? "<empty>" : MarkerText;
+      action.customName = MarkerText;
       if(Color != 0)
       {
         action.markerColor = DecodePIXColor(Color);
@@ -3072,8 +3062,7 @@ void WrappedID3D12GraphicsCommandList::SetMarker(UINT Metadata, const void *pDat
   SERIALISE_TIME_CALL(m_pList->SetMarker(Metadata, pData, Size));
 
   if(m_AMDMarkers && Metadata == PIX_EVENT_UNICODE_VERSION)
-    m_AMDMarkers->SetMarker(
-        StringFormat::Wide2UTF8(rdcwstr((const wchar_t *)pData, Size / sizeof(wchar_t))).c_str());
+    m_AMDMarkers->SetMarker(StringFormat::Wide2UTF8((const wchar_t *)pData).c_str());
 
   if(IsCaptureMode(m_State))
   {
@@ -3108,7 +3097,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_BeginEvent(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3126,7 +3115,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_BeginEvent(SerialiserType &ser,
       D3D12MarkerRegion::Begin(pCommandList, MarkerText);
 
       ActionDescription action;
-      action.customName = MarkerText.empty() ? "<empty>" : MarkerText;
+      action.customName = MarkerText;
       if(Color != 0)
       {
         action.markerColor = DecodePIXColor(Color);
@@ -3146,8 +3135,7 @@ void WrappedID3D12GraphicsCommandList::BeginEvent(UINT Metadata, const void *pDa
   SERIALISE_TIME_CALL(m_pList->BeginEvent(Metadata, pData, Size));
 
   if(m_AMDMarkers && Metadata == PIX_EVENT_UNICODE_VERSION)
-    m_AMDMarkers->PushMarker(
-        StringFormat::Wide2UTF8(rdcwstr((const wchar_t *)pData, Size / sizeof(wchar_t))).c_str());
+    m_AMDMarkers->PushMarker(StringFormat::Wide2UTF8((const wchar_t *)pData).c_str());
 
   if(IsCaptureMode(m_State))
   {
@@ -3170,7 +3158,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_EndEvent(SerialiserType &ser)
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3239,7 +3227,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_DrawInstanced(SerialiserType &s
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3318,7 +3306,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_DrawIndexedInstanced(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3398,7 +3386,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_Dispatch(SerialiserType &ser, U
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3465,7 +3453,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteBundle(SerialiserType &s
   {
     m_pDevice->APIProps.D3D12Bundle = true;
 
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -3531,8 +3519,7 @@ void WrappedID3D12GraphicsCommandList::SaveExecuteIndirectParameters(
 
   BakedCmdListInfo &cmdListInfo = m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID];
 
-  const size_t argsSize =
-      comSig->sig.ByteStride * (RDCMAX(1U, MaxCommandCount) - 1) + comSig->sig.PackedByteSize;
+  const size_t argsSize = comSig->sig.ByteStride * (MaxCommandCount - 1) + comSig->sig.PackedByteSize;
   const size_t countSize = 16;
 
   // at most we need to copy two executes. The last may be partial and so contain some state set
@@ -3587,26 +3574,10 @@ void WrappedID3D12GraphicsCommandList::ResetAndRecordExecuteIndirectStates(
         case D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW: state.ibuffer = {}; break;
         case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT:
           if(arg.Constant.RootParameterIndex < state.graphics.sigelems.size())
-          {
-            for(uint32_t j = 0; j < arg.Constant.Num32BitValuesToSet; j++)
-            {
-              size_t index = j + arg.Constant.DestOffsetIn32BitValues;
-              state.graphics.sigelems[arg.Constant.RootParameterIndex].constants.resize_for_index(
-                  index);
-              state.graphics.sigelems[arg.Constant.RootParameterIndex].constants[index] = 0;
-            }
-          }
+            state.graphics.sigelems[arg.Constant.RootParameterIndex].constants.clear();
 
           if(arg.Constant.RootParameterIndex < state.compute.sigelems.size())
-          {
-            for(uint32_t j = 0; j < arg.Constant.Num32BitValuesToSet; j++)
-            {
-              size_t index = j + arg.Constant.DestOffsetIn32BitValues;
-              state.compute.sigelems[arg.Constant.RootParameterIndex].constants.resize_for_index(
-                  index);
-              state.compute.sigelems[arg.Constant.RootParameterIndex].constants[index] = 0;
-            }
-          }
+            state.compute.sigelems[arg.Constant.RootParameterIndex].constants.clear();
           break;
         case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW:
         case D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW:
@@ -3918,7 +3889,7 @@ void WrappedID3D12GraphicsCommandList::FinaliseExecuteIndirectEvents(BakedCmdLis
               uint64_t offs = 0;
               m_pDevice->GetResIDFromOrigAddr(*addr, id, offs);
 
-              ID3D12Resource *res = GetResourceManager()->GetResAs<ID3D12Resource>(id);
+              ID3D12Resource *res = GetResourceManager()->GetLiveAs<ID3D12Resource>(id);
               RDCASSERT(res);
               if(res)
                 *addr = res->GetGPUVirtualAddress() + offs;
@@ -3961,16 +3932,12 @@ void WrappedID3D12GraphicsCommandList::FinaliseExecuteIndirectEvents(BakedCmdLis
             structuriser.Serialise("Values"_lit, data32, arg.Constant.Num32BitValuesToSet).Important();
 
             if(arg.Constant.RootParameterIndex < state.graphics.sigelems.size())
-            {
-              state.graphics.sigelems[arg.Constant.RootParameterIndex].SetConstants(
-                  arg.Constant.Num32BitValuesToSet, data32, arg.Constant.DestOffsetIn32BitValues);
-            }
+              state.graphics.sigelems[arg.Constant.RootParameterIndex].constants.assign(
+                  data32, arg.Constant.Num32BitValuesToSet);
 
             if(arg.Constant.RootParameterIndex < state.compute.sigelems.size())
-            {
-              state.compute.sigelems[arg.Constant.RootParameterIndex].SetConstants(
-                  arg.Constant.Num32BitValuesToSet, data32, arg.Constant.DestOffsetIn32BitValues);
-            }
+              state.compute.sigelems[arg.Constant.RootParameterIndex].constants.assign(
+                  data32, arg.Constant.Num32BitValuesToSet);
 
             // advance only the EID, since we're still in the same action
             eid++;
@@ -3986,7 +3953,7 @@ void WrappedID3D12GraphicsCommandList::FinaliseExecuteIndirectEvents(BakedCmdLis
             uint64_t offs = 0;
             m_pDevice->GetResIDFromOrigAddr(vb->BufferLocation, id, offs);
 
-            ID3D12Resource *res = GetResourceManager()->GetResAs<ID3D12Resource>(id);
+            ID3D12Resource *res = GetResourceManager()->GetLiveAs<ID3D12Resource>(id);
             RDCASSERT(res);
             if(res)
               vb->BufferLocation = res->GetGPUVirtualAddress() + offs;
@@ -4017,7 +3984,7 @@ void WrappedID3D12GraphicsCommandList::FinaliseExecuteIndirectEvents(BakedCmdLis
             uint64_t offs = 0;
             m_pDevice->GetResIDFromOrigAddr(ib->BufferLocation, id, offs);
 
-            ID3D12Resource *res = GetResourceManager()->GetResAs<ID3D12Resource>(id);
+            ID3D12Resource *res = GetResourceManager()->GetLiveAs<ID3D12Resource>(id);
             RDCASSERT(res);
             if(res)
               ib->BufferLocation = res->GetGPUVirtualAddress() + offs;
@@ -4047,7 +4014,7 @@ void WrappedID3D12GraphicsCommandList::FinaliseExecuteIndirectEvents(BakedCmdLis
             uint64_t offs = 0;
             m_pDevice->GetResIDFromOrigAddr(*addr, id, offs);
 
-            ID3D12Resource *res = GetResourceManager()->GetResAs<ID3D12Resource>(id);
+            ID3D12Resource *res = GetResourceManager()->GetLiveAs<ID3D12Resource>(id);
             if(res)
               *addr = res->GetGPUVirtualAddress() + offs;
 
@@ -4137,7 +4104,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteIndirect(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     BakedCmdListInfo &cmdInfo = m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID];
 
@@ -4225,7 +4192,6 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteIndirect(
                   (pCountBuffer ? pCountBuffer->GetGPUVirtualAddress() : 0) + CountBufferOffset,
                   MaxCommandCount);
 
-          m_Cmd->m_IndirectData.commandSig = pCommandSignature;
           m_Cmd->m_IndirectData.argsBuffer = patched.first;
           m_Cmd->m_IndirectData.argsOffset = patched.second;
 
@@ -4244,35 +4210,25 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteIndirect(
             argOffset = patchedDispatch.resources.argumentBuffer->Offset();
 
             // restore state that would have been mutated by the patching process
-            Unwrap(list)->SetComputeRootSignature(
-                Unwrap(GetResourceManager()->GetResAs<ID3D12RootSignature>(state.compute.rootsig)));
+            Unwrap(list)->SetComputeRootSignature(Unwrap(
+                GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.compute.rootsig)));
             Unwrap4((ID3D12GraphicsCommandList4 *)list)
                 ->SetPipelineState1(
-                    Unwrap(GetResourceManager()->GetResAs<ID3D12StateObject>(state.stateobj)));
+                    Unwrap(GetResourceManager()->GetCurrentAs<ID3D12StateObject>(state.stateobj)));
             state.ApplyComputeRootElementsUnwrapped(Unwrap(list));
             m_Cmd->m_RayDispatches.push_back(patchedDispatch);
           }
 
           countToReplay = RDCMIN(countToReplay, maxCommands);
 
-          if(m_Cmd->m_FirstEventID > 1)
-          {
-            const uint32_t argidx = (curEID - baseEventID - 1);
-            const uint32_t execidx = argidx / comSig->sig.arguments.count();
-
-            argOffset += comSig->sig.ByteStride * execidx;
-          }
-
           for(uint32_t i = 0; i < countToReplay; i++)
           {
+            m_Cmd->m_IndirectData.commandSig = pCommandSignature;
             ActionFlags drawType =
                 comSig->sig.graphics ? ActionFlags::Drawcall : ActionFlags::Dispatch;
 
             uint32_t eventId =
                 m_Cmd->HandlePreCallback(list, drawType, (i + 1) * comSig->sig.arguments.count());
-
-            // Allow the callback to recreate the command signature i.e. to match the root signature
-            pCommandSignature = m_Cmd->m_IndirectData.commandSig;
 
             // action up to and including i. The previous draws will be nop'd out
             Unwrap(list)->ExecuteIndirect(Unwrap(pCommandSignature), 1, argBuffer, argOffset, NULL,
@@ -4297,12 +4253,12 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteIndirect(
               }
             }
 
+            m_Cmd->m_IndirectData.commandSig = NULL;
+            m_Cmd->m_IndirectData.argsBuffer = NULL;
+            m_Cmd->m_IndirectData.argsOffset = 0;
+
             argOffset += comSig->sig.ByteStride;
-            m_Cmd->m_IndirectData.argsOffset += comSig->sig.ByteStride;
           }
-          m_Cmd->m_IndirectData.commandSig = NULL;
-          m_Cmd->m_IndirectData.argsBuffer = NULL;
-          m_Cmd->m_IndirectData.argsOffset = 0;
 
           D3D12MarkerRegion::End(list);
         }
@@ -4330,11 +4286,11 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteIndirect(
             argOffset = patchedDispatch.resources.argumentBuffer->Offset();
 
             // restore state that would have been mutated by the patching process
-            Unwrap(list)->SetComputeRootSignature(
-                Unwrap(GetResourceManager()->GetResAs<ID3D12RootSignature>(state.compute.rootsig)));
+            Unwrap(list)->SetComputeRootSignature(Unwrap(
+                GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.compute.rootsig)));
             Unwrap4((ID3D12GraphicsCommandList4 *)list)
                 ->SetPipelineState1(
-                    Unwrap(GetResourceManager()->GetResAs<ID3D12StateObject>(state.stateobj)));
+                    Unwrap(GetResourceManager()->GetCurrentAs<ID3D12StateObject>(state.stateobj)));
             state.ApplyComputeRootElementsUnwrapped(Unwrap(list));
             m_Cmd->m_RayDispatches.push_back(patchedDispatch);
           }
@@ -4431,11 +4387,11 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ExecuteIndirect(
 
         // restore state that would have been mutated by the patching process
         Unwrap(pCommandList)
-            ->SetComputeRootSignature(
-                Unwrap(GetResourceManager()->GetResAs<ID3D12RootSignature>(state.compute.rootsig)));
+            ->SetComputeRootSignature(Unwrap(
+                GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.compute.rootsig)));
         Unwrap4((ID3D12GraphicsCommandList4 *)pCommandList)
             ->SetPipelineState1(
-                Unwrap(GetResourceManager()->GetResAs<ID3D12StateObject>(state.stateobj)));
+                Unwrap(GetResourceManager()->GetCurrentAs<ID3D12StateObject>(state.stateobj)));
         state.ApplyComputeRootElementsUnwrapped(Unwrap(pCommandList));
         m_Cmd->m_RayDispatches.push_back(std::move(patchedDispatch));
       }
@@ -4541,10 +4497,10 @@ void WrappedID3D12GraphicsCommandList::ExecuteIndirect(ID3D12CommandSignature *p
     argOffset = patchedDispatch.resources.argumentBuffer->Offset();
 
     // restore state that would have been mutated by the patching process
-    m_pList->SetComputeRootSignature(Unwrap(
-        GetResourceManager()->GetResAs<ID3D12RootSignature>(m_CaptureComputeState.compute.rootsig)));
-    m_pList4->SetPipelineState1(
-        Unwrap(GetResourceManager()->GetResAs<ID3D12StateObject>(m_CaptureComputeState.stateobj)));
+    m_pList->SetComputeRootSignature(Unwrap(GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(
+        m_CaptureComputeState.compute.rootsig)));
+    m_pList4->SetPipelineState1(Unwrap(
+        GetResourceManager()->GetCurrentAs<ID3D12StateObject>(m_CaptureComputeState.stateobj)));
     m_CaptureComputeState.ApplyComputeRootElementsUnwrapped(m_pList);
   }
 
@@ -4621,7 +4577,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearDepthStencilView(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -4656,7 +4612,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearDepthStencilView(
 
         ActionDescription action;
         action.flags |= ActionFlags::Clear | ActionFlags::ClearDepthStencil;
-        action.copyDestination = descriptor->GetResResourceId();
+        action.copyDestination = GetResourceManager()->GetOriginalID(descriptor->GetResResourceId());
         action.copyDestinationSubresource =
             Subresource(GetMipForDsv(descriptor->GetDSV()), GetSliceForDsv(descriptor->GetDSV()));
         m_Cmd->AddAction(action);
@@ -4726,7 +4682,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearRenderTargetView(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -4757,7 +4713,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearRenderTargetView(
 
         ActionDescription action;
         action.flags |= ActionFlags::Clear | ActionFlags::ClearColor;
-        action.copyDestination = descriptor->GetResResourceId();
+        action.copyDestination = GetResourceManager()->GetOriginalID(descriptor->GetResResourceId());
         action.copyDestinationSubresource =
             Subresource(GetMipForRtv(descriptor->GetRTV()), GetSliceForRtv(descriptor->GetRTV()));
         m_Cmd->AddAction(action);
@@ -4829,7 +4785,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearUnorderedAccessViewUint(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -4861,7 +4817,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearUnorderedAccessViewUint(
 
         ActionDescription action;
         action.flags |= ActionFlags::Clear;
-        action.copyDestination = GetResID(pResource);
+        action.copyDestination = GetResourceManager()->GetOriginalID(GetResID(pResource));
         action.copyDestinationSubresource = Subresource();
 
         m_Cmd->AddAction(action);
@@ -4940,7 +4896,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearUnorderedAccessViewFloat(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -4972,7 +4928,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ClearUnorderedAccessViewFloat(
 
         ActionDescription action;
         action.flags |= ActionFlags::Clear;
-        action.copyDestination = GetResID(pResource);
+        action.copyDestination = GetResourceManager()->GetOriginalID(GetResID(pResource));
         action.copyDestinationSubresource = Subresource();
 
         m_Cmd->AddAction(action);
@@ -5034,7 +4990,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_DiscardResource(SerialiserType 
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -5061,7 +5017,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_DiscardResource(SerialiserType 
 
         ActionDescription action;
         action.flags |= ActionFlags::Clear;
-        action.copyDestination = GetResID(pResource);
+        action.copyDestination = GetResourceManager()->GetOriginalID(GetResID(pResource));
         action.copyDestinationSubresource = Subresource();
 
         m_Cmd->AddAction(action);
@@ -5116,7 +5072,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyBufferRegion(SerialiserType
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -5144,9 +5100,9 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyBufferRegion(SerialiserType
         m_Cmd->AddEvent();
 
         ActionDescription action;
-        action.copySource = GetResID(pSrcBuffer);
+        action.copySource = GetResourceManager()->GetOriginalID(GetResID(pSrcBuffer));
         action.copySourceSubresource = Subresource();
-        action.copyDestination = GetResID(pDstBuffer);
+        action.copyDestination = GetResourceManager()->GetOriginalID(GetResID(pDstBuffer));
         action.copyDestinationSubresource = Subresource();
 
         action.flags |= ActionFlags::Copy;
@@ -5212,7 +5168,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyTextureRegion(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     D3D12_TEXTURE_COPY_LOCATION unwrappedDst = dst;
     unwrappedDst.pResource = Unwrap(unwrappedDst.pResource);
@@ -5244,8 +5200,8 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyTextureRegion(
         ResourceId liveSrc = GetResID(src.pResource);
         ResourceId liveDst = GetResID(dst.pResource);
 
-        ResourceId origSrc = liveSrc;
-        ResourceId origDst = liveDst;
+        ResourceId origSrc = GetResourceManager()->GetOriginalID(liveSrc);
+        ResourceId origDst = GetResourceManager()->GetOriginalID(liveDst);
 
         ActionDescription action;
         action.flags |= ActionFlags::Copy;
@@ -5331,7 +5287,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyResource(SerialiserType &se
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -5356,9 +5312,9 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyResource(SerialiserType &se
         m_Cmd->AddEvent();
 
         ActionDescription action;
-        action.copySource = GetResID(pSrcResource);
+        action.copySource = GetResourceManager()->GetOriginalID(GetResID(pSrcResource));
         action.copySourceSubresource = Subresource();
-        action.copyDestination = GetResID(pDstResource);
+        action.copyDestination = GetResourceManager()->GetOriginalID(GetResID(pDstResource));
         action.copyDestinationSubresource = Subresource();
 
         action.flags |= ActionFlags::Copy;
@@ -5421,7 +5377,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ResolveSubresource(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -5449,12 +5405,12 @@ bool WrappedID3D12GraphicsCommandList::Serialise_ResolveSubresource(
         m_Cmd->AddEvent();
 
         ActionDescription action;
-        action.copySource = GetResID(pSrcResource);
+        action.copySource = GetResourceManager()->GetOriginalID(GetResID(pSrcResource));
         action.copySourceSubresource =
             Subresource(GetMipForSubresource(pSrcResource, SrcSubresource),
                         GetSliceForSubresource(pSrcResource, SrcSubresource));
 
-        action.copyDestination = GetResID(pDstResource);
+        action.copyDestination = GetResourceManager()->GetOriginalID(GetResID(pDstResource));
         action.copyDestinationSubresource =
             Subresource(GetMipForSubresource(pDstResource, DstSubresource),
                         GetSliceForSubresource(pDstResource, DstSubresource));
@@ -5528,7 +5484,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyTiles(
 
   if(IsReplayingAndReading())
   {
-    m_Cmd->m_LastCmdListID = GetResID(pCommandList);
+    m_Cmd->m_LastCmdListID = GetResourceManager()->GetOriginalID(GetResID(pCommandList));
 
     if(IsActiveReplaying(m_State))
     {
@@ -5562,8 +5518,8 @@ bool WrappedID3D12GraphicsCommandList::Serialise_CopyTiles(
         if(Flags & D3D12_TILE_COPY_FLAG_SWIZZLED_TILED_RESOURCE_TO_LINEAR_BUFFER)
           std::swap(liveSrc, liveDst);
 
-        ResourceId origSrc = liveSrc;
-        ResourceId origDst = liveDst;
+        ResourceId origSrc = GetResourceManager()->GetOriginalID(liveSrc);
+        ResourceId origDst = GetResourceManager()->GetOriginalID(liveDst);
 
         ActionDescription action;
         action.flags |= ActionFlags::Copy;

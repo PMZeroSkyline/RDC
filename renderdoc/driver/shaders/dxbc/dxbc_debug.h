@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -48,6 +48,8 @@ enum DXGI_FORMAT;
 
 namespace DXBCDebug
 {
+using namespace DXDebug;
+
 typedef DXDebug::SampleGatherResourceData SampleGatherResourceData;
 typedef DXDebug::SampleGatherSamplerData SampleGatherSamplerData;
 typedef DXDebug::BindingSlot BindingSlot;
@@ -127,9 +129,42 @@ public:
 
   rdcarray<groupsharedMem> groupshared;
 
+  struct SampleEvalCacheKey
+  {
+    int32_t quadIndex = -1;              // index of this thread in the quad
+    int32_t inputRegisterIndex = -1;     // index of the input register
+    int32_t firstComponent = 0;          // the first component in the register
+    int32_t numComponents = 0;           // how many components in the register
+    int32_t sample = -1;                 // -1 for offset-from-centroid lookups
+    int32_t offsetx = 0, offsety = 0;    // integer offset from centroid
+
+    bool operator<(const SampleEvalCacheKey &o) const
+    {
+      if(quadIndex != o.quadIndex)
+        return quadIndex < o.quadIndex;
+
+      if(inputRegisterIndex != o.inputRegisterIndex)
+        return inputRegisterIndex < o.inputRegisterIndex;
+
+      if(firstComponent != o.firstComponent)
+        return firstComponent < o.firstComponent;
+
+      if(numComponents != o.numComponents)
+        return numComponents < o.numComponents;
+
+      if(sample != o.sample)
+        return sample < o.sample;
+
+      if(offsetx != o.offsetx)
+        return offsetx < o.offsetx;
+
+      return offsety < o.offsety;
+    }
+  };
+
   // a bitmask of which registers were fetched into the cache, for quick checking
   uint64_t sampleEvalRegisterMask = 0;
-  std::map<DXDebug::SampleEvalCacheKey, ShaderVariable> sampleEvalCache;
+  std::map<SampleEvalCacheKey, ShaderVariable> sampleEvalCache;
 
   // copied from the parent trace
   rdcarray<ShaderVariable> constantBlocks;
@@ -191,8 +226,6 @@ public:
     uint32_t isFrontFace;
   } semantics;
 
-  DXBC::ShaderType GetType() { return program->GetShaderType(); }
-
   uint32_t nextInstruction;
   GlobalState &global;
   rdcarray<ShaderVariable> inputs;
@@ -216,8 +249,6 @@ private:
   // file and applying any masking or swizzling
   void SetDst(ShaderDebugState *state, const DXBCBytecode::Operand &dstoper,
               const DXBCBytecode::Operation &op, const ShaderVariable &val);
-  void GetGroupsharedSrc(uint32_t gsmIndex, const uint32_t byteOffset, const uint32_t countBytes,
-                         uint32_t *gsmData) const;
   void SetGroupsharedDst(ShaderDebugState *state, uint32_t gsmIndex, const uint32_t byteOffset,
                          ShaderVariable &val);
 
@@ -269,6 +300,9 @@ struct InterpretDebugger : public DXBCContainerDebugger
 uint32_t GetLogicalIdentifierForBindingSlot(const DXBCBytecode::Program &program,
                                             DXBCBytecode::OperandType declType,
                                             const DXBCDebug::BindingSlot &slot);
+
+void ApplyAllDerivatives(GlobalState &global, rdcarray<ThreadState> &quad, int destIdx,
+                         const rdcarray<PSInputElement> &initialValues, float *data);
 
 void AddCBufferToGlobalState(const DXBCBytecode::Program &program, GlobalState &global,
                              rdcarray<SourceVariableMapping> &sourceVars,

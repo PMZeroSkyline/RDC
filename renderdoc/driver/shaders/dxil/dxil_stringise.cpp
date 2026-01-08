@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,6 @@
 
 #include "dxil_bytecode.h"
 #include "dxil_common.h"
-#include "dxil_debug.h"
 #include "dxil_debuginfo.h"
 
 template <>
@@ -136,17 +135,6 @@ rdcstr DoStringise(const DXIL::QuadOpKind &el)
     STRINGISE_ENUM_CLASS(ReadAcrossX)
     STRINGISE_ENUM_CLASS(ReadAcrossY)
     STRINGISE_ENUM_CLASS(ReadAcrossDiagonal)
-  }
-  END_ENUM_STRINGISE();
-};
-
-template <>
-rdcstr DoStringise(const DXIL::QuadVoteOpKind &el)
-{
-  BEGIN_ENUM_STRINGISE(DXIL::QuadVoteOpKind)
-  {
-    STRINGISE_ENUM_CLASS(All)
-    STRINGISE_ENUM_CLASS(Any)
   }
   END_ENUM_STRINGISE();
 };
@@ -837,94 +825,6 @@ rdcstr DoStringise(const DXIL::ResourceKind &el)
     STRINGISE_ENUM_CLASS(FeedbackTexture2DArray);
     STRINGISE_ENUM_CLASS(StructuredBufferWithCounter);
     STRINGISE_ENUM_CLASS(SamplerComparison);
-  }
-  END_ENUM_STRINGISE();
-};
-
-template <>
-rdcstr DoStringise(const DXIL::WaveOpCode &el)
-{
-  BEGIN_ENUM_STRINGISE(DXIL::WaveOpCode)
-  {
-    STRINGISE_ENUM_CLASS(Sum)
-    STRINGISE_ENUM_CLASS(Product)
-    STRINGISE_ENUM_CLASS(Min)
-    STRINGISE_ENUM_CLASS(Max)
-  }
-  END_ENUM_STRINGISE();
-}
-
-template <>
-rdcstr DoStringise(const DXIL::SignedOpKind &el)
-{
-  BEGIN_ENUM_STRINGISE(DXIL::SignedOpKind)
-  {
-    STRINGISE_ENUM_CLASS(Signed)
-    STRINGISE_ENUM_CLASS(Unsigned)
-  }
-  END_ENUM_STRINGISE();
-}
-
-template <>
-rdcstr DoStringise(const DXIL::WaveBitOpCode &el)
-{
-  BEGIN_ENUM_STRINGISE(DXIL::WaveBitOpCode)
-  {
-    STRINGISE_ENUM_CLASS(And)
-    STRINGISE_ENUM_CLASS(Or)
-    STRINGISE_ENUM_CLASS(Xor)
-  }
-  END_ENUM_STRINGISE();
-}
-
-template <>
-rdcstr DoStringise(const DXIL::WaveMultiPrefixOpCode &el)
-{
-  BEGIN_ENUM_STRINGISE(DXIL::WaveMultiPrefixOpCode)
-  {
-    STRINGISE_ENUM_CLASS(Sum)
-    STRINGISE_ENUM_CLASS(And)
-    STRINGISE_ENUM_CLASS(Or)
-    STRINGISE_ENUM_CLASS(Xor)
-    STRINGISE_ENUM_CLASS(Product)
-  }
-  END_ENUM_STRINGISE();
-}
-
-template <>
-rdcstr DoStringise(const DXILDebug::StepThreadMode &el)
-{
-  BEGIN_ENUM_STRINGISE(DXILDebug::StepThreadMode)
-  {
-    STRINGISE_ENUM_CLASS(RUN_SINGLE_STEP)
-    STRINGISE_ENUM_CLASS(RUN_MULTIPLE_STEPS)
-    STRINGISE_ENUM_CLASS(QUEUE_SINGLE_STEP)
-    STRINGISE_ENUM_CLASS(QUEUE_MULTIPLE_STEPS)
-  }
-  END_ENUM_STRINGISE();
-};
-
-template <>
-rdcstr DoStringise(const DXILDebug::DeviceOpResult &el)
-{
-  BEGIN_ENUM_STRINGISE(DXILDebug::DeviceOpResult)
-  {
-    STRINGISE_ENUM_CLASS(Unknown)
-    STRINGISE_ENUM_CLASS(Succeeded)
-    STRINGISE_ENUM_CLASS(Failed)
-    STRINGISE_ENUM_CLASS(NeedsDevice)
-  }
-  END_ENUM_STRINGISE();
-};
-
-template <>
-rdcstr DoStringise(const DXILDebug::ThreadState::PendingResultStatus &el)
-{
-  BEGIN_ENUM_STRINGISE(DXILDebug::ThreadState::PendingResultStatus)
-  {
-    STRINGISE_ENUM_CLASS(Unknown)
-    STRINGISE_ENUM_CLASS(Pending)
-    STRINGISE_ENUM_CLASS(Ready)
   }
   END_ENUM_STRINGISE();
 };

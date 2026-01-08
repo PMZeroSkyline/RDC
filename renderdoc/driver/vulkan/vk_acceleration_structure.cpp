@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -171,16 +171,6 @@ rdcarray<VkAccelerationStructureBuildRangeInfoKHR> VkAccelerationStructureInfo::
 VulkanAccelerationStructureManager::VulkanAccelerationStructureManager(WrappedVulkan *driver)
     : m_pDriver(driver)
 {
-}
-
-void VulkanAccelerationStructureManager::Cleanup()
-{
-  if(!scratchBuffers.empty())
-  {
-    const VkDevice d = m_pDriver->GetDev();
-    for(VkBuffer buf : scratchBuffers)
-      ObjDisp(d)->DestroyBuffer(Unwrap(d), buf, NULL);
-  }
 }
 
 RDResult VulkanAccelerationStructureManager::CopyInputBuffers(
@@ -677,7 +667,7 @@ template bool VulkanAccelerationStructureManager::Serialise(ReadSerialiser &ser,
 void VulkanAccelerationStructureManager::Apply(ResourceId id, VkInitialContents &initial)
 {
   const VkAccelerationStructureKHR wrappedAS =
-      m_pDriver->GetResourceManager()->GetHandle<VkAccelerationStructureKHR>(id);
+      m_pDriver->GetResourceManager()->GetCurrentHandle<VkAccelerationStructureKHR>(id);
   VkAccelerationStructureInfo *asInfo = initial.accelerationStructureInfo;
   RDCASSERT(asInfo);
 
@@ -864,7 +854,7 @@ VulkanAccelerationStructureManager::Allocation VulkanAccelerationStructureManage
   const VkBufferCreateInfo bufInfo = {
       VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
       NULL,
-      m_pDriver->DefaultBufferCreateFlags(),
+      0,
       size,
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | extraUsageFlags,
@@ -976,7 +966,9 @@ void VulkanAccelerationStructureManager::UpdateScratch(VkDeviceSize requiredSize
     scratchAddressUnion.deviceAddress =
         ObjDisp(d)->GetBufferDeviceAddressKHR(Unwrap(d), &scratchAddressInfo);
 
-    scratchBuffers.push_back(scratch.buf);
+    // We do not need the buffer object, only the mem address
+    m_pDriver->AddPendingObjectCleanup(
+        [d, buf = scratch.buf]() { ObjDisp(d)->DestroyBuffer(Unwrap(d), buf, NULL); });
   }
 }
 

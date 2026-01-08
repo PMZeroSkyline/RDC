@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2017-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -515,7 +515,7 @@ BoundVBuffer PipeState::GetIBuffer() const
       ret.resourceId = m_Vulkan->inputAssembly.indexBuffer.resourceId;
       ret.byteOffset = m_Vulkan->inputAssembly.indexBuffer.byteOffset;
       ret.byteStride = m_Vulkan->inputAssembly.indexBuffer.byteStride;
-      ret.byteSize = m_Vulkan->inputAssembly.indexBuffer.byteSize;
+      ret.byteSize = ~0ULL;
     }
   }
 
@@ -711,7 +711,7 @@ rdcarray<VertexInputAttribute> PipeState::GetVertexInputs() const
 
         if(m_D3D11->inputAssembly.bytecode != NULL)
         {
-          const rdcarray<SigParameter> &sig = m_D3D11->inputAssembly.bytecode->inputSignature;
+          rdcarray<SigParameter> &sig = m_D3D11->inputAssembly.bytecode->inputSignature;
           for(int ia = 0; ia < sig.count(); ia++)
           {
             if(striequal(semName, sig[ia].semanticName) &&
@@ -769,7 +769,7 @@ rdcarray<VertexInputAttribute> PipeState::GetVertexInputs() const
 
         if(m_D3D12->vertexShader.reflection != NULL)
         {
-          const rdcarray<SigParameter> &sig = m_D3D12->vertexShader.reflection->inputSignature;
+          rdcarray<SigParameter> &sig = m_D3D12->vertexShader.reflection->inputSignature;
           for(int ia = 0; ia < sig.count(); ia++)
           {
             if(striequal(semName, sig[ia].semanticName) &&
@@ -1042,7 +1042,7 @@ rdcarray<UsedDescriptor> PipeState::GetSamplers(ShaderStage stage, bool onlyUsed
     if(m_Access[i].stage == stage && IsSamplerDescriptor(m_Access[i].type) &&
        (onlyUsed == false || !m_Access[i].staticallyUnused))
     {
-      if(i < m_SamplerDescriptors.size())
+      if(i < m_Descriptors.size())
       {
         ret.push_back({m_Access[i], Descriptor(), m_SamplerDescriptors[i]});
         ApplyVulkanDynamicOffsets(ret.back());
@@ -1062,11 +1062,8 @@ rdcarray<UsedDescriptor> PipeState::GetReadWriteResources(ShaderStage stage, boo
     if(m_Access[i].stage == stage && IsReadWriteDescriptor(m_Access[i].type) &&
        (onlyUsed == false || !m_Access[i].staticallyUnused))
     {
-      if(i < m_Descriptors.size())
-      {
+      if(i < m_SamplerDescriptors.size())
         ret.push_back({m_Access[i], m_Descriptors[i], SamplerDescriptor()});
-        ApplyVulkanDynamicOffsets(ret.back());
-      }
     }
   }
 

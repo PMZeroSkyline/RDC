@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2021-2026 Baldur Karlsson
+ * Copyright (c) 2021-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -43,8 +43,7 @@ HRESULT WrappedID3D12Device::CreateShaderCacheSession(_In_ const D3D12_SHADER_CA
 
   if(SUCCEEDED(ret))
   {
-    WrappedID3D12ShaderCacheSession *wrapped =
-        new WrappedID3D12ShaderCacheSession(ResourceId(), real, this);
+    WrappedID3D12ShaderCacheSession *wrapped = new WrappedID3D12ShaderCacheSession(real, this);
 
     if(riid == __uuidof(ID3D12ShaderCacheSession))
       *ppvSession = (ID3D12ShaderCacheSession *)wrapped;
@@ -99,7 +98,9 @@ bool WrappedID3D12Device::Serialise_CreateCommandQueue1(SerialiserType &ser,
     {
       SetObjName(ret, StringFormat::Fmt("Command Queue %s", ToStr(pCommandQueue).c_str()));
 
-      ret = new WrappedID3D12CommandQueue(pCommandQueue, ret, this, m_State);
+      ret = new WrappedID3D12CommandQueue(ret, this, m_State);
+
+      GetResourceManager()->AddLiveResource(pCommandQueue, ret);
 
       AddResource(pCommandQueue, ResourceType::Queue, "Command Queue");
 
@@ -144,8 +145,7 @@ HRESULT WrappedID3D12Device::CreateCommandQueue1(const D3D12_COMMAND_QUEUE_DESC 
 
   if(SUCCEEDED(ret))
   {
-    WrappedID3D12CommandQueue *wrapped =
-        new WrappedID3D12CommandQueue(ResourceId(), real, this, m_State);
+    WrappedID3D12CommandQueue *wrapped = new WrappedID3D12CommandQueue(real, this, m_State);
 
     if(IsCaptureMode(m_State))
     {
@@ -155,6 +155,10 @@ HRESULT WrappedID3D12Device::CreateCommandQueue1(const D3D12_COMMAND_QUEUE_DESC 
       Serialise_CreateCommandQueue1(ser, pDesc, CreatorID, riid, (void **)&wrapped);
 
       wrapped->GetCreationRecord()->AddChunk(scope.Get());
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
     }
 
     if(pDesc->Type == D3D12_COMMAND_LIST_TYPE_DIRECT && m_Queue == NULL)

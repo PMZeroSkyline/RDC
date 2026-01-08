@@ -1,8 +1,4 @@
-if (NOT CMAKE_VERSION VERSION_LESS "4.0")
-  cmake_minimum_required(VERSION 3.5)
-else()
-  cmake_minimum_required(VERSION 2.8.12)
-endif()
+cmake_minimum_required(VERSION 2.8.12)
 
 if(APPLE)
   # Building for Apple requires at least CMake 3.23.0
@@ -405,12 +401,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
             list(APPEND warning_flags -Wimplicit-fallthrough=2)
         endif()
-
-        # False positives due to function inlining decisions
-        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103993
-        if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 11.0.9)
-            list(APPEND warning_flags -Wno-mismatched-new-delete)
-        endif()
         
         if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 11.9)
             list(APPEND warning_flags -Wno-unused-value)
@@ -444,15 +434,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.1 AND APPLE)
         list(APPEND warning_flags -Wno-unused-but-set-variable -Wno-deprecated-copy)
-    endif()
-
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.1)
-        list(APPEND warning_flags -Wno-deprecated-literal-operator)
-    endif()
-
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17 AND APPLE)
-        # See related https://github.com/swig/swig/issues/1259
-        list(APPEND warning_flags -Wno-cast-function-type-mismatch)
     endif()
 
     if(NOT RELEASE_MODE)

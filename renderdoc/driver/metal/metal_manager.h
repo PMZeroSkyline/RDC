@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2021-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -83,14 +83,16 @@ public:
     // if any objects leaked past, it's no longer safe to delete them as we would
     // be calling Shutdown() after the device that owns them is destroyed. Instead
     // we just have to leak ourselves.
+    RDCASSERT(m_LiveResourceMap.empty());
     RDCASSERT(m_InitialContents.empty());
     RDCASSERT(m_ResourceRecords.empty());
-    RDCASSERT(m_ResourceMap.empty());
+    RDCASSERT(m_CurrentResourceMap.empty());
     RDCASSERT(m_WrapperMap.empty());
 
+    m_LiveResourceMap.clear();
     m_InitialContents.clear();
     m_ResourceRecords.clear();
-    m_ResourceMap.clear();
+    m_CurrentResourceMap.clear();
     m_WrapperMap.clear();
   }
 
@@ -105,24 +107,16 @@ public:
   // ResourceManager interface
 
   template <typename realtype>
-  ResourceId WrapResource(ResourceId id, realtype obj,
-                          typename UnwrapHelper<realtype>::Outer *&wrapped)
+  ResourceId WrapResource(realtype obj, typename UnwrapHelper<realtype>::Outer *&wrapped)
   {
     RDCASSERT(obj != NULL);
     RDCASSERT(m_Device != NULL);
 
-    // on replay, we provide an ID for replayed versions of capture-time resources. For
-    // replay-only/internal resources, we auto-gen a resource id.
-    // during capture we should always be auto-gen'ing a resource id for obvious reasons.
-    if(id == ResourceId())
-      id = ResourceIDGen::GetNewUniqueID();
-    else
-      RDCASSERT(IsReplayMode(m_State));
-
+    ResourceId id = ResourceIDGen::GetNewUniqueID();
     using WrappedType = typename UnwrapHelper<realtype>::Outer;
     wrapped = new WrappedType(obj, id, m_Device);
     wrapped->m_Real = obj;
-    AddResource(id, wrapped);
+    AddCurrentResource(id, wrapped);
 
     // TODO: implement RD MTL replay
     //    if(IsReplayMode(m_State))
@@ -137,7 +131,7 @@ public:
 
     // TODO: implement RD MTL replay
 
-    ResourceManager::ReleaseResource(id);
+    ResourceManager::ReleaseCurrentResource(id);
     MetalResourceRecord *record = GetRecord(wrapped);
     if(record)
     {

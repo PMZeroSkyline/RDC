@@ -84,11 +84,7 @@ class Iter_Test(rdtest.TestCase):
             rdtest.log.print("No debug result")
             return
 
-        try:
-            cycles, variables = self.process_trace(trace)
-        except rdtest.TestFailureException as err:
-            rdtest.log.error(f"Error debugging: {err.message}")
-            return
+        cycles, variables = self.process_trace(trace)
 
         rdtest.log.success(f'Successfully debugged compute shader in {cycles} cycles {len(refl.outputSignature)}')
 
@@ -160,11 +156,7 @@ class Iter_Test(rdtest.TestCase):
             rdtest.log.print("No debug result")
             return
 
-        try:
-            cycles, variables = self.process_trace(trace)
-        except rdtest.TestFailureException as err:
-            rdtest.log.error(f"Error debugging: {err.message}")
-            return
+        cycles, variables = self.process_trace(trace)
 
         outputs = 0
 
@@ -327,11 +319,7 @@ class Iter_Test(rdtest.TestCase):
                 rdtest.log.print("No debug result")
                 return
 
-            try:
-                cycles, variables = self.process_trace(trace)
-            except rdtest.TestFailureException as err:
-                rdtest.log.error(f"Error debugging: {err.message}")
-                return
+            cycles, variables = self.process_trace(trace)
 
             output_index = [o.resource for o in pipe.GetOutputTargets()].index(target)
 
@@ -362,21 +350,14 @@ class Iter_Test(rdtest.TestCase):
                         if debugged.value.u32v[idx] == 0xcccccccc:
                             debuggedValue[idx] = lastmod.shaderOut.col.floatValue[idx]
 
-                    historyValue = list(lastmod.shaderOut.col.floatValue)
-
-                    tex = self.get_texture(target)
-
-                    historyValue = historyValue[0:tex.format.compCount]
-                    debuggedValue = debuggedValue[0:tex.format.compCount]
-
                     # Unfortunately we can't ever trust that we should get back a matching results, because some shaders
                     # rely on undefined/inaccurate maths that we don't emulate.
                     # So the best we can do is log an error for manual verification
-                    is_eq, diff_amt = rdtest.value_compare_diff(historyValue, debuggedValue, eps=5.0E-06)
+                    is_eq, diff_amt = rdtest.value_compare_diff(lastmod.shaderOut.col.floatValue, debuggedValue, eps=5.0E-06)
                     if not is_eq:
                         rdtest.log.error(
                             "Debugged value {} at EID {} {},{}: {} difference. {} doesn't exactly match history shader output {}".format(
-                                debugged.name, lastmod.eventId, x, y, diff_amt, debuggedValue, historyValue))
+                                debugged.name, lastmod.eventId, x, y, diff_amt, debuggedValue, lastmod.shaderOut.col.floatValue))
 
                     rdtest.log.success('Successfully debugged pixel in {} cycles, result matches'.format(cycles))
                 else:
@@ -470,11 +451,6 @@ class Iter_Test(rdtest.TestCase):
                         break
                     else:
                         c -= chance
-
-                fatal = self.controller.GetFatalErrorStatus()
-                if fatal.code != rd.ResultCode.Succeeded:
-                    rdtest.log.error(f"Fatal error detected: {fatal.Message()}")
-                    break
 
             action = action.next
 

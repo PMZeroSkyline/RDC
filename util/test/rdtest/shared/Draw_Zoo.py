@@ -172,13 +172,11 @@ class Draw_Zoo(rdtest.TestCase):
                            .format(vtx, inst))
 
     def check_capture(self):
-        test_marker: rd.ActionDescription = self.find_action("Test")
-        self.check_capture_action(test_marker)
-
-    def check_capture_action(self, marker: rd.ActionDescription):
         self.props: rd.APIProperties = self.controller.GetAPIProperties()
 
-        action: rd.ActionDescription = marker.next
+        test_marker: rd.ActionDescription = self.find_action("Test")
+
+        action: rd.ActionDescription = test_marker.next
 
         rdtest.log.begin_section("Non-indexed, non-instanced cases")
 

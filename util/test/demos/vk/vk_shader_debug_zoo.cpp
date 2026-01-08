@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2020-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -183,11 +183,6 @@ layout(set = 0, binding = 31) uniform sampler2DMSArray queryTestMS;
 
 layout(set = 0, binding = 32) uniform texture2D depthImage;
 
-layout(set = 0, binding = 33) uniform samplerBuffer texBuffer1010102unorm;
-layout(set = 0, binding = 34, rgb10_a2) uniform imageBuffer storeTexBuffer1010102unorm;
-layout(set = 0, binding = 35) uniform usamplerBuffer texBuffer1010102uint;
-layout(set = 0, binding = 36, rgb10_a2ui) uniform uimageBuffer storeTexBuffer1010102uint;
-
 #if TEST_DESC_INDEXING
 
 layout(set = 1, binding = 1) uniform sampler pointSamplers[14];
@@ -296,19 +291,7 @@ layout(location = 0, index = 0) out vec4 Color;
 )EOSHADER" + v2f +
                             R"EOSHADER(
 
-vec2 inner_func(in vec2 modified)
-{
-  modified.x += modified.y * 2.0f;
-  vec2 ret = modified;
-  return ret;
-}
-
-struct ScopeTest
-{
-  vec2 modified;
-};
-
-vec4 varscope_test(int coord, vec2 inpos_param, vec2 inpos_incr_param, in ScopeTest scopeTest)
+vec4 varscope_test(int coord, vec2 inpos_param, vec2 inpos_incr_param)
 {
   float never_in_scope;
 
@@ -339,9 +322,6 @@ vec4 varscope_test(int coord, vec2 inpos_param, vec2 inpos_incr_param, in ScopeT
   {
     ret = vec4(1.0, 1.0, 1.0, 0.0);
   }
-
-  ret.xy += inner_func(scopeTest.modified);
-  ret.zw += inner_func(scopeTest.modified);
 
   ret.w += long_scope;
 
@@ -375,8 +355,6 @@ void main()
   int flatLocalCoord = localCoord.x + localCoord.y * 4;
 
   int flatGlobalCoord = int(gl_FragCoord.x) + int(gl_FragCoord.y) * 1024;
-  ScopeTest scopeTest;
-  scopeTest.modified = inposIncreased;
 
   Color = vec4(0,0,0,0);
   switch(test)
@@ -1581,7 +1559,7 @@ void main()
     case 175:
     {
       // this isn't really intended as a true test but more a convenience for manual testing.
-      Color = varscope_test(flatLocalCoord, inpos, inposIncreased, scopeTest);
+      Color = varscope_test(flatLocalCoord, inpos, inposIncreased);
       break;
     }
     case 176:
@@ -1596,83 +1574,6 @@ void main()
         Color.r = Color.r;
       }
       Color += vec4(1.0, 1.0, 1.0, 1.0);
-      break;
-    }
-    case 177:
-    {
-      Color = imageLoad(storeTexBuffer, 1) + imageLoad(storeTexBuffer, 4);
-      break;
-    }
-    case 178:
-    {
-      imageStore(storeTexBuffer, 5, vec4(3.1f, 4.1f, 5.9f, 2.6f));
-      Color = imageLoad(storeTexBuffer, 5);
-      break;
-    }
-    case 179:
-    {
-      Color = texelFetch(texBuffer1010102unorm, int(1));
-      break;
-    }
-    case 180:
-    {
-      Color = vec4(texelFetch(texBuffer1010102uint, int(1)));
-      break;
-    }
-    case 181:
-    {
-      Color = imageLoad(storeTexBuffer1010102unorm, int(1)) + imageLoad(storeTexBuffer1010102unorm, int(4));
-      break;
-    }
-    case 182:
-    {
-      Color = vec4(imageLoad(storeTexBuffer1010102uint, int(1))) + vec4(imageLoad(storeTexBuffer1010102uint, int(4)));
-      break;
-    }
-    case 183:
-    {
-      imageStore(storeTexBuffer1010102unorm, 5, vec4(200.1f/1023.0f, 400.1f/1023.0f, 800.1f/1023.0f, 1.0f));
-      Color = imageLoad(storeTexBuffer1010102unorm, int(1)) + imageLoad(storeTexBuffer1010102unorm, int(5));
-      break;
-    }
-    case 184:
-    {
-      imageStore(storeTexBuffer1010102uint, 5, uvec4(20, 40, 80, 1));
-      Color = vec4(imageLoad(storeTexBuffer1010102uint, int(1))) + vec4(imageLoad(storeTexBuffer1010102uint, int(5)));
-      break;
-    }
-    case 185:
-    {
-      // this is intended to test triggering a mixture of GPU math and GPU sample ops
-      vec2 coord = vec2(zerof + 0.5, zerof + 0.15);
-      if (localCoord.x % 2 == 0)
-      {
-        Color = textureLod(sampler2D(sampledImage, pointSampler), coord, 0.0);
-        for (int i = 0; i < 100; i++)
-        {
-          Color += textureLod(sampler2D(sampledImage, pointSampler), coord, float(i));
-        }
-      }
-      else
-      {
-        Color = vec4(pow(posone*2.5f, posone*1.3f), pow(posone*2.5f, posone*0.45f),
-                     pow(vec2(posone*2.5f, posone*1.3f), vec2(posone*0.9f, posone*8.5f)));
-        for (int i = 0; i < 100; i++)
-        {
-          vec4 value = vec4(pow(posone*2.5f+float(i), posone*1.3f), pow(posone*2.5f, posone*0.45f),
-                        pow(vec2(posone*2.5f, posone*1.3f), vec2(posone*0.9f, posone*8.5f)));
-          Color += value / 100.0;
-        }
-      }
-      break;
-    }
-    case 186:
-    {
-      float x = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.1f, 0.5f));
-      float y = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.3f, 0.5f));
-      float z = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.7f, 0.5f));
-      float w = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.9f, 0.5f));
-      Color = vec4(x, y, z, w);
       break;
     }
     default: break;
@@ -1905,182 +1806,11 @@ void main()
       Color = gl_FrontFacing ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
       break;
     }
-    case 20:
-    {
-      Color = imageLoad(storeTexBuffer, 1)+imageLoad(storeTexBuffer, 5);
-      break;
-    }
-    case 21:
-    {
-      Color = imageLoad(storeTexBuffer1010102unorm, int(1)) + imageLoad(storeTexBuffer1010102unorm, int(5));
-    }
-    case 22:
-    {
-      Color = vec4(imageLoad(storeTexBuffer1010102uint, int(1))) + vec4(imageLoad(storeTexBuffer1010102uint, int(5)));
-    }
     default: break;
   }
 }
 
 )EOSHADER";
-
-  std::string computeShaderDerivs = R"EOSHADER(
-
-#version 460 core
-#extension GL_NV_compute_shader_derivatives : require
-
-#if SUBGROUP_SUPPORT
-#extension GL_KHR_shader_subgroup_basic : require
-#extension GL_KHR_shader_subgroup_ballot : require
-#extension GL_KHR_shader_subgroup_vote : require
-#extension GL_KHR_shader_subgroup_arithmetic : require
-#endif // #if SUBGROUP_SUPPORT
-
-layout(push_constant) uniform PushData
-{
-  uint test;
-} push;
-
-struct Output
-{
-  vec4 vals[1024];
-};
-
-layout(binding = 0, std430) buffer outbuftype {
-  Output data[COMP_TESTS];
-} outbuf;
-
-layout(set = 0, binding = 14) uniform sampler2D linearSampledImage;
-layout(set = 0, binding = 19) uniform sampler shadowSampler;
-layout(set = 0, binding = 32) uniform texture2D depthImage;
-
-uint GetTest() { return push.test; }
-
-#define IsTest(x) (GetTest() == x)
-
-layout(local_size_x = GROUP_SIZE_X, local_size_y = GROUP_SIZE_Y, local_size_z = GROUP_SIZE_Z) in;
-
-layout(QUAD_LAYOUT) in;
-
-uvec3 tid;
-uint flatId;
-
-#if WORKGROUP_SUPPORT
-shared uvec4 gsmUint4[1024];
-#endif // #if WORKGROUP_SUPPORT
-
-void SetOutput(vec4 val)
-{
-  outbuf.data[push.test].vals[flatId] = val;
-}
-
-void Init(vec4 val)
-{
-  tid = gl_LocalInvocationID;
-  flatId = tid.z * gl_WorkGroupSize.x * gl_WorkGroupSize.y + tid.y * gl_WorkGroupSize.x + tid.x;
-  SetOutput(val);
-}
-
-void main()
-{
-  vec4 testResult = vec4(0);
-  Init(testResult);
-  uint id = flatId;
-  uint ZERO = id / 10000;
-  vec2 inpos;
-  inpos.xy = gl_LocalInvocationID.xy / 8.0;
-
-#if WORKGROUP_SUPPORT
-  gsmUint4[flatId].xyz = tid;
-#endif // #if WORKGROUP_SUPPORT
-#if SUBGROUP_SUPPORT
-  id += gl_SubgroupInvocationID * ZERO;
-#endif // #if SUBGROUP_SUPPORT
-
-  if(IsTest(0))
-  {
-    vec4 test0;
-    test0.x = dFdx(0.5f);
-    test0.y = dFdy(0.5f);
-    test0.z = dFdxFine(0.5f);
-    test0.w = dFdyFine(0.5f);
-    testResult = test0;
-  }
-  if(IsTest(1))
-  {
-    vec3 test1 = dFdx(gl_LocalInvocationID*gl_LocalInvocationID);
-    testResult.xyz = test1;
-  }
-  if(IsTest(2))
-  {
-    vec3 test2 = dFdy(gl_LocalInvocationID*gl_LocalInvocationID);
-    testResult.xyz = test2;
-  }
-  if(IsTest(3))
-  {
-    vec3 test3 = dFdxFine(gl_LocalInvocationID*gl_LocalInvocationID);
-    testResult.xyz = test3;
-  }
-  if(IsTest(4))
-  {
-    vec3 test4 = dFdyFine(gl_LocalInvocationID*gl_LocalInvocationID);
-    testResult.xyz = test4;
-  }
-  if(IsTest(5))
-  {
-    vec3 test5 = dFdxCoarse(gl_LocalInvocationID*gl_LocalInvocationID);
-    testResult.xyz = test5;
-  }
-  if(IsTest(6))
-  {
-    vec3 test6 = dFdyCoarse(gl_LocalInvocationID*gl_LocalInvocationID);
-    testResult.xyz = test6;
-  }
-  if(IsTest(7))
-  {
-    // OpImageQueryLod
-    vec2 test7 = textureQueryLod(linearSampledImage, inpos);
-    testResult.xy = test7;
-  }
-  if(IsTest(8))
-  {
-    // OpImageSampleProjImplicitLod
-    vec4 test8 = textureProj(linearSampledImage, vec3(inpos, 0.5f));
-    testResult = test8;
-  }
-  if(IsTest(9))
-  {
-    // OpImageSampleImplicitLod
-    vec4 test9 = texture(linearSampledImage, inpos);
-    testResult = test9;
-  }
-  if(IsTest(10))
-  {
-    // OpImageSampleDrefImplicitLod
-    vec4 test10;
-    test10.x = texture(sampler2DShadow(depthImage, shadowSampler), vec3(inpos, 0.1f));
-    test10.y = texture(sampler2DShadow(depthImage, shadowSampler), vec3(inpos, 0.3f));
-    test10.z = texture(sampler2DShadow(depthImage, shadowSampler), vec3(inpos, 0.7f));
-    test10.w = texture(sampler2DShadow(depthImage, shadowSampler), vec3(inpos, 0.9f));
-    testResult = test10;
-  }
-  if(IsTest(11))
-  {
-    // OpImageSampleProjDrefImplicitLod
-    vec4 test11;
-    test11.x = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.1f, 0.5f));
-    test11.y = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.3f, 0.5f));
-    test11.z = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.7f, 0.5f));
-    test11.w = textureProj(sampler2DShadow(depthImage, shadowSampler), vec4(inpos, 0.9f, 0.5f));
-    testResult = test11;
-  }
-
-  SetOutput(testResult);
-}
-)EOSHADER";
-
-#if 0
-#endif    // #if 0
 
   std::string capabilities = "OpCapability Shader\n";
   std::string spv_extensions;
@@ -4155,9 +3885,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
   VkPhysicalDeviceBufferDeviceAddressFeaturesEXT bdaFeatures = {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR,
   };
-  VkPhysicalDeviceComputeShaderDerivativesFeaturesNV csDerivFeatures = {
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_NV,
-  };
 
   void Prepare(int argc, char **argv)
   {
@@ -4177,9 +3904,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
 
     // add BDA extension
     optDevExts.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
-
-    // compute shader derivatives
-    optDevExts.push_back(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
 
     // we require this to pixel shader debug anyway, so we might as well require it for all tests.
     features.fragmentStoresAndAtomics = VK_TRUE;
@@ -4202,9 +3926,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
                                        VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME) != devExts.end();
     const bool bda = std::find(devExts.begin(), devExts.end(),
                                VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != devExts.end();
-    const bool csDerivatives =
-        std::find(devExts.begin(), devExts.end(), VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) !=
-        devExts.end();
 
     vk_version = 0x10;
 
@@ -4225,33 +3946,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
       LIMIT_CHECK(maxPerStageDescriptorSamplers, 64);
       LIMIT_CHECK(maxPerStageDescriptorStorageBuffers, 16);
       LIMIT_CHECK(maxPerStageDescriptorStorageImages, 64);
-    }
-
-    VkFormatProperties props = {};
-    vkGetPhysicalDeviceFormatProperties(phys, VK_FORMAT_A2B10G10R10_UINT_PACK32, &props);
-
-    if((props.bufferFeatures & VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT) == 0)
-    {
-      Avail = "VK_FORMAT_A2B10G10R10_UINT_PACK32 not supported in texel buffers";
-      return;
-    }
-    if((props.bufferFeatures & VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT) == 0)
-    {
-      Avail = "VK_FORMAT_A2B10G10R10_UINT_PACK32 not supported in texel buffers";
-      return;
-    }
-
-    vkGetPhysicalDeviceFormatProperties(phys, VK_FORMAT_A2B10G10R10_UNORM_PACK32, &props);
-
-    if((props.bufferFeatures & VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT) == 0)
-    {
-      Avail = "VK_FORMAT_A2B10G10R10_UNORM_PACK32 not supported in texel buffers";
-      return;
-    }
-    if((props.bufferFeatures & VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT) == 0)
-    {
-      Avail = "VK_FORMAT_A2B10G10R10_UNORM_PACK32 not supported in texel buffers";
-      return;
     }
 
     // enable features we can optionally test with.
@@ -4344,13 +4038,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
       bdaFeatures.pNext = (void *)devInfoNext;
       devInfoNext = &bdaFeatures;
     }
-
-    if(csDerivatives)
-    {
-      getPhysFeatures2(&csDerivFeatures);
-      csDerivFeatures.pNext = (void *)devInfoNext;
-      devInfoNext = &csDerivFeatures;
-    }
   }
 
   int main()
@@ -4371,51 +4058,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
                                        VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME) != devExts.end();
     const bool bda = std::find(devExts.begin(), devExts.end(),
                                VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME) != devExts.end();
-    const bool csDerivatives =
-        std::find(devExts.begin(), devExts.end(), VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) !=
-        devExts.end();
-
-    bool subgroupSupport = true;
-    static VkPhysicalDeviceSubgroupProperties subProps = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
-    };
-
-    if(devVersion < VK_API_VERSION_1_1)
-    {
-      TEST_LOG("Disabled subgroup support: Vulkan device version isn't 1.1");
-      subgroupSupport = false;
-    }
-    if(subgroupSupport)
-    {
-      getPhysProperties2(&subProps);
-
-      if(subProps.subgroupSize < 16)
-      {
-        TEST_LOG("Disabled subgroup support: Subgroup size is less than 16");
-        subgroupSupport = false;
-      }
-    }
-    if(subgroupSupport)
-    {
-      // require at least a few ops so we only have a few conditional compilations
-      const VkSubgroupFeatureFlags requiredOps =
-          VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT |
-          VK_SUBGROUP_FEATURE_ARITHMETIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT;
-
-      if((subProps.supportedOperations & requiredOps) != requiredOps)
-      {
-        TEST_LOG("Disabled subgroup support: Missing ops support");
-        subgroupSupport = false;
-      }
-    }
-    if(subgroupSupport)
-    {
-      if((subProps.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0)
-      {
-        TEST_LOG("Disabled subgroup support: Missing compute subgroup support");
-        subgroupSupport = false;
-      }
-    }
 
     if(storage16)
       TEST_LOG("Running tests on 16-bit storage");
@@ -4428,14 +4070,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
 
     if(bda)
       TEST_LOG("Running tests on buffer device address");
-
-    if(csDerivatives)
-    {
-      if(subgroupSupport)
-        TEST_LOG("Running tests on compute shader derivatives + suubgroup");
-      else
-        TEST_LOG("Running tests on compute shader derivatives");
-    }
 
     if(features.shaderFloat64)
       TEST_LOG("Running tests on doubles");
@@ -4484,10 +4118,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
         {30, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
         {31, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
         {32, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {33, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {34, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {35, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
-        {36, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT},
     }));
 
     std::vector<VkDescriptorSetLayout> setLayouts = {setlayout0};
@@ -4661,138 +4291,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
     };
 
     VkPipeline asmpipe = createGraphicsPipeline(pipeCreateInfo);
-
-    VkDescriptorSetLayout compSetlayout =
-        createDescriptorSetLayout(vkh::DescriptorSetLayoutCreateInfo({
-            {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-            {14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-            {19, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-            {32, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT},
-        }));
-
-    VkPipelineLayout compLayout = createPipelineLayout(vkh::PipelineLayoutCreateInfo(
-        {compSetlayout}, {vkh::PushConstantRange(VK_SHADER_STAGE_ALL, 0, 8)}));
-
-    std::map<std::string, std::string> macros;
-    int numCompTests = 0;
-    size_t pos = 0;
-    while(pos != std::string::npos)
-    {
-      pos = computeShaderDerivs.find("IsTest(", pos);
-      if(pos == std::string::npos)
-        break;
-      pos += sizeof("IsTest(") - 1;
-      numCompTests = std::max(numCompTests, atoi(computeShaderDerivs.c_str() + pos) + 1);
-    }
-    macros["COMP_TESTS"] = fmt::format("{}", numCompTests);
-
-    // Must be a multiple of 4 in X
-    // Must be a multiple of 2 in Y
-    macros["GROUP_SIZE_X"] = "8";
-    macros["GROUP_SIZE_Y"] = "4";
-    macros["GROUP_SIZE_Z"] = "1";
-
-    std::string comppipe_name[8];
-    VkPipeline compPipes[8];
-    uint32_t countCompPipes = 0;
-    if(csDerivatives)
-    {
-      macros["WORKGROUP_SUPPORT"] = "0";
-      macros["SUBGROUP_SUPPORT"] = "0";
-      macros["QUAD_LAYOUT"] = "derivative_group_quadsNV";
-      comppipe_name[countCompPipes] =
-          fmt::format("{}x{}x{} : {}", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"],
-                      macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-
-      compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-          compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                          "main", macros, SPIRVTarget::vulkan11)));
-      ++countCompPipes;
-
-      macros["QUAD_LAYOUT"] = "derivative_group_LinearNV";
-      comppipe_name[countCompPipes] =
-          fmt::format("{}x{}x{} : {}", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"],
-                      macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-      compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-          compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                          "main", macros, SPIRVTarget::vulkan11)));
-      ++countCompPipes;
-
-      // with workgroup
-      macros["WORKGROUP_SUPPORT"] = "1";
-      macros["QUAD_LAYOUT"] = "derivative_group_quadsNV";
-      comppipe_name[countCompPipes] =
-          fmt::format("{}x{}x{} : {} + Workgroup", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"],
-                      macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-      compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-          compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                          "main", macros, SPIRVTarget::vulkan11)));
-      ++countCompPipes;
-
-      macros["QUAD_LAYOUT"] = "derivative_group_LinearNV";
-      comppipe_name[countCompPipes] =
-          fmt::format("{}x{}x{} : {} + Workgroup", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"],
-                      macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-      compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-          compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                          "main", macros, SPIRVTarget::vulkan11)));
-      ++countCompPipes;
-
-      if(subgroupSupport)
-      {
-        // with subgroup
-        macros["WORKGROUP_SUPPORT"] = "0";
-        macros["SUBGROUP_SUPPORT"] = "1";
-        macros["QUAD_LAYOUT"] = "derivative_group_quadsNV";
-        comppipe_name[countCompPipes] =
-            fmt::format("{}x{}x{} : {} + Subgroup", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"],
-                        macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-        compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-            compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                            "main", macros, SPIRVTarget::vulkan11)));
-        ++countCompPipes;
-
-        macros["QUAD_LAYOUT"] = "derivative_group_LinearNV";
-        comppipe_name[countCompPipes] =
-            fmt::format("{}x{}x{} : {} + Subgroup", macros["GROUP_SIZE_X"], macros["GROUP_SIZE_Y"],
-                        macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-        compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-            compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                            "main", macros, SPIRVTarget::vulkan11)));
-        ++countCompPipes;
-
-        // with subgroup and workgroup
-        macros["WORKGROUP_SUPPORT"] = "1";
-        macros["SUBGROUP_SUPPORT"] = "1";
-        macros["QUAD_LAYOUT"] = "derivative_group_quadsNV";
-        comppipe_name[countCompPipes] =
-            fmt::format("{}x{}x{} : {} + Subgroup + Workgroup", macros["GROUP_SIZE_X"],
-                        macros["GROUP_SIZE_Y"], macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-        compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-            compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                            "main", macros, SPIRVTarget::vulkan11)));
-        ++countCompPipes;
-
-        macros["QUAD_LAYOUT"] = "derivative_group_LinearNV";
-        comppipe_name[countCompPipes] =
-            fmt::format("{}x{}x{} : {} + Subgroup + Workgroup", macros["GROUP_SIZE_X"],
-                        macros["GROUP_SIZE_Y"], macros["GROUP_SIZE_Z"], macros["QUAD_LAYOUT"]);
-        compPipes[countCompPipes] = createComputePipeline(vkh::ComputePipelineCreateInfo(
-            compLayout, CompileShaderModule(computeShaderDerivs, ShaderLang::glsl, ShaderStage::comp,
-                                            "main", macros, SPIRVTarget::vulkan11)));
-        ++countCompPipes;
-      }
-    }
-
-    AllocatedBuffer bufout(
-        this,
-        vkh::BufferCreateInfo(sizeof(Vec4f) * 1024 * numCompTests,
-                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
-
-    setName(bufout.buffer, "bufout");
-
-    VkDescriptorSet compSet = allocateDescriptorSet(compSetlayout);
 
     float triWidth = 8.0f / float(texWidth);
     float triHeight = 8.0f / float(texHeight);
@@ -4995,23 +4493,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
       descset2 = allocateDescriptorSet(setlayout2);
     }
 
-    vkh::updateDescriptorSets(
-        device,
-        {
-            vkh::WriteDescriptorSet(compSet, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                    {vkh::DescriptorBufferInfo(bufout.buffer)}),
-            vkh::WriteDescriptorSet(
-                compSet, 14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                {vkh::DescriptorImageInfo(smileyview, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                          linearsampler)}),
-            vkh::WriteDescriptorSet(
-                compSet, 19, VK_DESCRIPTOR_TYPE_SAMPLER,
-                {vkh::DescriptorImageInfo(VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, shadowsampler)}),
-            vkh::WriteDescriptorSet(
-                compSet, 32, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                {vkh::DescriptorImageInfo(shadowview, VK_IMAGE_LAYOUT_GENERAL, VK_NULL_HANDLE)}),
-        });
-
     Vec4f cbufferdata[64] = {};
 
     AllocatedBuffer cb(
@@ -5088,37 +4569,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
                                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT),
         VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}));
 
-    AllocatedBuffer texbuffer_1010102unorm(
-        this,
-        vkh::BufferCreateInfo(1024 * sizeof(uint32_t), VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
-                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
-
-    AllocatedBuffer store_texbuffer_1010102unorm(
-        this,
-        vkh::BufferCreateInfo(1024 * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
-                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}));
-
-    uint32_t unormdata[64] = {};
-    memset(unormdata, 0x42, sizeof(unormdata));
-
-    texbuffer_1010102unorm.upload(unormdata);
-
-    AllocatedBuffer texbuffer_1010102uint(
-        this,
-        vkh::BufferCreateInfo(1024 * sizeof(uint32_t), VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
-                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
-
-    texbuffer_1010102uint.upload(unormdata);
-
-    AllocatedBuffer store_texbuffer_1010102uint(
-        this,
-        vkh::BufferCreateInfo(1024 * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
-                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}));
-
     VkBuffer bda_data_buffer = VK_NULL_HANDLE;
     VkDeviceMemory bda_deviceMem = VK_NULL_HANDLE;
     byte *bda_base_gpuptr = NULL;
@@ -5193,15 +4643,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
     VkBufferView store_bufview = createBufferView(
         vkh::BufferViewCreateInfo(store_texbuffer.buffer, VK_FORMAT_R32G32B32A32_SFLOAT));
 
-    VkBufferView bufview_1010102unorm = createBufferView(vkh::BufferViewCreateInfo(
-        texbuffer_1010102unorm.buffer, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 96));
-    VkBufferView store_bufview_1010102unorm = createBufferView(vkh::BufferViewCreateInfo(
-        store_texbuffer_1010102unorm.buffer, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 96));
-    VkBufferView bufview_1010102uint = createBufferView(vkh::BufferViewCreateInfo(
-        texbuffer_1010102uint.buffer, VK_FORMAT_A2B10G10R10_UINT_PACK32, 96));
-    VkBufferView store_bufview_1010102uint = createBufferView(vkh::BufferViewCreateInfo(
-        store_texbuffer_1010102uint.buffer, VK_FORMAT_A2B10G10R10_UINT_PACK32, 96));
-
     setName(pointsampler, "pointsampler");
     setName(linearsampler, "linearsampler");
     setName(mipsampler, "mipsampler");
@@ -5214,10 +4655,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
     setName(store_texbuffer.buffer, "store_texbuffer");
     setName(store_image.image, "store_image");
     setName(atomic_image.image, "atomic_image");
-    setName(bufview_1010102unorm, "bufview_1010102unorm");
-    setName(store_bufview_1010102unorm, "store_texbuffer_1010102unorm");
-    setName(bufview_1010102uint, "bufview_1010102uint");
-    setName(store_bufview_1010102uint, "store_bufview_1010102uint");
 
     AllocatedImage storezoo_u2D(
         this,
@@ -5280,15 +4717,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
             vkh::WriteDescriptorSet(
                 descset0, 32, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                 {vkh::DescriptorImageInfo(shadowview, VK_IMAGE_LAYOUT_GENERAL, VK_NULL_HANDLE)}),
-
-            vkh::WriteDescriptorSet(descset0, 33, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
-                                    {bufview_1010102unorm}),
-            vkh::WriteDescriptorSet(descset0, 34, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
-                                    {store_bufview_1010102unorm}),
-            vkh::WriteDescriptorSet(descset0, 35, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
-                                    {bufview_1010102uint}),
-            vkh::WriteDescriptorSet(descset0, 36, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
-                                    {store_bufview_1010102uint}),
         });
 
     if(descIndexing)
@@ -5381,12 +4809,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
                                        VK_ACCESS_TRANSFER_WRITE_BIT, atomic_buffer.buffer),
               vkh::BufferMemoryBarrier(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                                        VK_ACCESS_TRANSFER_WRITE_BIT, store_texbuffer.buffer),
-              vkh::BufferMemoryBarrier(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                                       VK_ACCESS_TRANSFER_WRITE_BIT,
-                                       store_texbuffer_1010102uint.buffer),
-              vkh::BufferMemoryBarrier(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                                       VK_ACCESS_TRANSFER_WRITE_BIT,
-                                       store_texbuffer_1010102unorm.buffer),
           });
 
       vkCmdClearDepthStencilImage(cmd, shadowimg.image, VK_IMAGE_LAYOUT_GENERAL,
@@ -5403,13 +4825,7 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
                            vkh::ClearColorValue(8U, 18U, 28U, 38U), 1, vkh::ImageSubresourceRange());
       vkCmdFillBuffer(cmd, store_buffer.buffer, 0, VK_WHOLE_SIZE, 0x42424242);
       vkCmdFillBuffer(cmd, atomic_buffer.buffer, 0, VK_WHOLE_SIZE, 0x42424242);
-      const float val = 1.234f;
-      vkCmdFillBuffer(cmd, store_texbuffer.buffer, 0, 128, *(uint32_t *)&val);
-      vkCmdFillBuffer(cmd, store_texbuffer.buffer, 128, VK_WHOLE_SIZE, 0);
-      vkCmdFillBuffer(cmd, store_texbuffer_1010102uint.buffer, 0, 104, 0x42424242);
-      vkCmdFillBuffer(cmd, store_texbuffer_1010102uint.buffer, 104, VK_WHOLE_SIZE, 0);
-      vkCmdFillBuffer(cmd, store_texbuffer_1010102unorm.buffer, 0, 104, 0x42424242);
-      vkCmdFillBuffer(cmd, store_texbuffer_1010102unorm.buffer, 104, VK_WHOLE_SIZE, 0);
+      vkCmdFillBuffer(cmd, store_texbuffer.buffer, 0, VK_WHOLE_SIZE, 0);
 
       vkh::cmdPipelineBarrier(
           cmd,
@@ -5565,37 +4981,6 @@ OpMemberDecorate %cbuffer_struct 17 Offset 216    ; double doublePackSource
 
       FinishUsingBackbuffer(cmd, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL);
 
-      pushMarker(cmd, "Compute Tests");
-
-      for(size_t p = 0; p < countCompPipes; p++)
-      {
-        vkh::cmdPipelineBarrier(
-            cmd, {},
-            {vkh::BufferMemoryBarrier(VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                                      bufout.buffer, 0, sizeof(Vec4f) * 1024 * numCompTests)});
-
-        vkCmdFillBuffer(cmd, bufout.buffer, 0, sizeof(Vec4f) * 1024 * numCompTests, 0);
-
-        vkh::cmdPipelineBarrier(
-            cmd, {},
-            {vkh::BufferMemoryBarrier(VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                                      bufout.buffer, 0, sizeof(Vec4f) * 1024 * numCompTests)});
-
-        pushMarker(cmd, comppipe_name[p]);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compPipes[p]);
-        vkh::cmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compLayout, 0, {compSet}, {});
-
-        for(int i = 0; i < numCompTests; i++)
-        {
-          vkh::cmdPushConstants(cmd, compLayout, i);
-          vkCmdDispatch(cmd, 2, 1, 1);
-        }
-
-        popMarker(cmd);
-      }
-
-      popMarker(cmd);
       vkEndCommandBuffer(cmd);
 
       Submit(0, 1, {cmd});

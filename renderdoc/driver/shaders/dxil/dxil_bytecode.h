@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -620,39 +620,6 @@ enum class AtomicBinOpCode : uint32_t
   Invalid    // Must be last.
 };
 
-// WaveOp / WavePrefixOp
-enum class WaveOpCode : uint32_t
-{
-  Sum = 0,
-  Product = 1,
-  Min = 2,
-  Max = 3,
-};
-
-// WaveBitOp
-enum class WaveBitOpCode : uint32_t
-{
-  And = 0,
-  Or = 1,
-  Xor = 2,
-};
-
-// WaveMultiPrefixOp
-enum class WaveMultiPrefixOpCode : uint32_t
-{
-  Sum = 0,
-  And = 1,
-  Or = 2,
-  Xor = 3,
-  Product = 4,
-};
-
-enum class SignedOpKind : uint32_t
-{
-  Signed = 0,      // signed integer or floating-point operands
-  Unsigned = 1,    // unsigned integer operands
-};
-
 enum class QuadOpKind : uint32_t
 {
   ReadAcrossX = 0,           // returns the value from the other lane in the quad in the
@@ -661,12 +628,6 @@ enum class QuadOpKind : uint32_t
                              // vertical direction
   ReadAcrossDiagonal = 2,    // returns the value from the lane across the quad in
                              // horizontal and vertical direction
-};
-
-enum class QuadVoteOpKind : uint32_t
-{
-  All = 1,    // true if all conditions are true in this quad
-  Any = 0,    // true if any condition is true in this quad
 };
 
 // Packing/unpacking intrinsics
@@ -1573,15 +1534,12 @@ struct EntryPointInterface
   struct ResourceBase
   {
     ResourceBase(ResourceClass resourceClass, const Metadata *resourceBase);
-    // lowerBound -> upperBound : is inclusive i.e. 1 -> 1 for a single binding
     bool MatchesBinding(uint32_t lowerBound, uint32_t upperBound, uint32_t spaceID) const
     {
       if(space != spaceID)
         return false;
       if(regBase > lowerBound)
         return false;
-      if(upperBound == UINT_MAX)
-        return true;
       if(regBase + regCount <= upperBound)
         return false;
       return true;
@@ -1617,9 +1575,9 @@ struct ResourceReference
 {
   ResourceReference(const rdcstr &handleStr, const EntryPointInterface::ResourceBase &resBase,
                     uint32_t idx)
-      : handleString(handleStr), resourceBase(resBase), resourceIndex(idx){};
+      : handleID(handleStr), resourceBase(resBase), resourceIndex(idx){};
 
-  rdcstr handleString;
+  rdcstr handleID;
   EntryPointInterface::ResourceBase resourceBase;
   uint32_t resourceIndex;
 };
@@ -1687,6 +1645,7 @@ public:
   void GetLineInfo(size_t instruction, uintptr_t offset, LineColumnInfo &lineInfo) const override;
   void GetCallstack(size_t instruction, uintptr_t offset, rdcarray<rdcstr> &callstack) const override;
 
+  bool HasSourceMapping() const override;
   void GetLocals(const DXBC::DXBCContainer *dxbc, size_t instruction, uintptr_t offset,
                  rdcarray<SourceVariableMapping> &locals) const override;
   // IDebugInfo interface
@@ -1727,12 +1686,12 @@ protected:
   void AssignMetaSlot(rdcarray<Metadata *> &metaSlots, uint32_t &nextMetaSlot, DebugLocation &l);
 
   const ResourceReference *GetResourceReference(const DXILDebug::Id handleId) const;
+  rdcstr GetHandleAlias(const rdcstr &handleStr) const;
   static DXILDebug::Id GetResultSSAId(const DXIL::Instruction &inst);
-  rdcstr GetInstResultName(const DXIL::Instruction *inst) const;
-  void GetSSAName(DXILDebug::Id id, rdcstr &name) const;
-  void SetSSAName(DXILDebug::Id id, const rdcstr &name, bool overwrite = false);
-  rdcstr GetArgString(const Instruction &inst, uint32_t arg) const;
-  rdcstr GetValueString(const Value *v) const;
+  static void MakeResultId(const Instruction &inst, rdcstr &resultId);
+  rdcstr GetArgId(const Instruction &inst, uint32_t arg) const;
+  rdcstr GetArgId(const Value *v) const;
+  rdcstr GetArgumentName(const Value *v) const;
 
   const Metadata *FindMetadata(uint32_t slot) const;
   rdcstr ArgToString(const Value *v, bool withTypes, const rdcstr &attrString = "") const;
@@ -1805,9 +1764,9 @@ protected:
 
   rdcarray<EntryPointInterface> m_EntryPointInterfaces;
   std::map<DXILDebug::Id, size_t> m_ResourceByIdHandles;
+  std::map<rdcstr, rdcstr> m_SsaAliases;
+  std::map<rdcstr, uint32_t> m_ResourceAnnotateCounts;
   rdcarray<LocalSourceVariable> m_Locals;
-  std::map<DXILDebug::Id, rdcstr> m_SsaNames;
-  std::map<DXILDebug::Id, rdcstr> m_SsaHandles;
 
   rdcarray<ResourceReference> m_ResourceReferences;
   rdcstr m_Disassembly;
@@ -1848,17 +1807,15 @@ bool IsLLVMIntrinsicCall(const Instruction &inst);
 bool ShouldIgnoreSourceMapping(const Instruction &inst);
 
 bool isUndef(const Value *v);
+
+void SanitiseName(rdcstr &name);
+
 };    // namespace DXIL
 
 DECLARE_REFLECTION_ENUM(DXIL::Attribute);
 DECLARE_STRINGISE_TYPE(DXIL::InstructionFlags);
 DECLARE_STRINGISE_TYPE(DXIL::AtomicBinOpCode);
-DECLARE_STRINGISE_TYPE(DXIL::WaveOpCode);
-DECLARE_STRINGISE_TYPE(DXIL::WaveBitOpCode);
-DECLARE_STRINGISE_TYPE(DXIL::WaveMultiPrefixOpCode);
-DECLARE_STRINGISE_TYPE(DXIL::SignedOpKind);
 DECLARE_STRINGISE_TYPE(DXIL::QuadOpKind);
-DECLARE_STRINGISE_TYPE(DXIL::QuadVoteOpKind);
 DECLARE_STRINGISE_TYPE(DXIL::PackMode);
 DECLARE_STRINGISE_TYPE(DXIL::UnpackMode);
 DECLARE_STRINGISE_TYPE(DXIL::Operation);

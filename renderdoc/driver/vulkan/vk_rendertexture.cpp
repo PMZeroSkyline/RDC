@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -190,7 +190,7 @@ bool VulkanReplay::RenderTextureInternal(TextureDisplay cfg, const ImageState &i
 
   VulkanCreationInfo::Image &iminfo = m_pDriver->m_CreationInfo.m_Image[cfg.resourceId];
   TextureDisplayViews &texviews = m_TexRender.TextureViews[cfg.resourceId];
-  VkImage liveIm = m_pDriver->GetResourceManager()->GetHandle<VkImage>(cfg.resourceId);
+  VkImage liveIm = m_pDriver->GetResourceManager()->GetCurrentHandle<VkImage>(cfg.resourceId);
 
   CreateTexImageView(liveIm, iminfo, cfg.typeCast, texviews);
 
@@ -245,6 +245,8 @@ bool VulkanReplay::RenderTextureInternal(TextureDisplay cfg, const ImageState &i
 
   if(!data)
     return false;
+
+  data->Padding = 0;
 
   float x = cfg.xOffset;
   float y = cfg.yOffset;
@@ -330,14 +332,9 @@ bool VulkanReplay::RenderTextureInternal(TextureDisplay cfg, const ImageState &i
   data->TextureResolutionPS.z = float(RDCMAX(1, tex_z >> cfg.subresource.mip));
 
   if(mipShift)
-  {
-    data->MipShift.x = float(tex_x) / float(RDCMAX(1, tex_x >> cfg.subresource.mip));
-    data->MipShift.y = float(tex_y) / float(RDCMAX(1, tex_y >> cfg.subresource.mip));
-  }
+    data->MipShift = float(1 << cfg.subresource.mip);
   else
-  {
-    data->MipShift.x = data->MipShift.y = 1.0f;
-  }
+    data->MipShift = 1.0f;
 
   data->Scale = cfg.scale;
 

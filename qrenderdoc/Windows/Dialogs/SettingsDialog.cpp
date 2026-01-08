@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -618,15 +618,7 @@ void SettingsDialog::on_chooseSearchPaths_clicked()
   listEditor.setWindowTitle(tr("Shader debug info search paths"));
   listEditor.setWindowFlags(listEditor.windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
-  OrderedListEditor::CustomProp customProp = {
-      tr("Recursive"),
-      tr("Recursively search through all subdirectories"
-         "under this path to find matching debug files"),
-      true,
-  };
-
-  OrderedListEditor list(tr("Search Path"),
-                         OrderedItemExtras::BrowseFolder | OrderedItemExtras::Delete, customProp);
+  OrderedListEditor list(tr("Search Path"), ItemButton::BrowseFolder);
 
   QVBoxLayout layout;
   QDialogButtonBox okCancel;
@@ -638,37 +630,21 @@ void SettingsDialog::on_chooseSearchPaths_clicked()
   QObject::connect(&okCancel, &QDialogButtonBox::rejected, &listEditor, &QDialog::reject);
 
   listEditor.setLayout(&layout);
-  listEditor.resize(750, 500);
 
   const SDObject *getPaths = RENDERDOC_GetConfigSetting("DXBC.Debug.SearchDirPaths");
 
   QStringList items;
-  QList<bool> recursive;
 
   for(const SDObject *c : *getPaths)
-  {
     items << c->data.str;
-    recursive << true;
-  }
 
-  const SDObject *getLimitedPaths =
-      RENDERDOC_GetConfigSetting("Replay.Shader.LimitedSearchDirPaths");
-
-  for(const SDObject *c : *getLimitedPaths)
-  {
-    int idx = items.indexOf(c->data.str);
-    if(idx >= 0)
-      recursive[idx] = false;
-  }
-
-  list.setItemsAndProp(items, recursive);
+  list.setItems(items);
 
   int res = RDDialog::show(&listEditor);
 
   if(res)
   {
     items = list.getItems();
-    recursive = list.getItemProps();
 
     SDObject *setPaths = RENDERDOC_SetConfigSetting("DXBC.Debug.SearchDirPaths");
 
@@ -677,20 +653,6 @@ void SettingsDialog::on_chooseSearchPaths_clicked()
 
     for(int i = 0; i < items.size(); i++)
       setPaths->AddAndOwnChild(makeSDString("$el"_lit, items[i]));
-
-    SDObject *setLimitedPaths = RENDERDOC_SetConfigSetting("Replay.Shader.LimitedSearchDirPaths");
-
-    QStringList limited;
-
-    for(int i = 0; i < recursive.count() && i < items.count(); i++)
-      if(recursive[i] == false)
-        limited << items[i];
-
-    setLimitedPaths->DeleteChildren();
-    setLimitedPaths->ReserveChildren(limited.size());
-
-    for(int i = 0; i < limited.size(); i++)
-      setLimitedPaths->AddAndOwnChild(makeSDString("$el"_lit, limited[i]));
 
     RENDERDOC_SaveConfigSettings();
   }
@@ -703,7 +665,7 @@ void SettingsDialog::on_chooseIgnores_clicked()
   listEditor.setWindowTitle(tr("Ignored DLLs for callstack symbol resolution"));
   listEditor.setWindowFlags(listEditor.windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
-  OrderedListEditor list(tr("Ignored DLL"), OrderedItemExtras::Delete);
+  OrderedListEditor list(tr("Ignored DLL"), ItemButton::Delete);
 
   list.setAllowAddition(false);
 
@@ -799,7 +761,7 @@ void SettingsDialog::on_TextureViewer_ChooseShaderDirectories_clicked()
   listEditor.setWindowTitle(tr("Custom shaders search directories"));
   listEditor.setWindowFlags(listEditor.windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
-  OrderedListEditor list(tr("Shaders Directory"), OrderedItemExtras::BrowseFolder);
+  OrderedListEditor list(tr("Shaders Directory"), ItemButton::BrowseFolder);
 
   QVBoxLayout layout;
   QDialogButtonBox okCancel;

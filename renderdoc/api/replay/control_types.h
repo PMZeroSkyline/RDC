@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -36,20 +36,11 @@ DOCUMENT(R"(The size information for a task group.
 )");
 struct TaskGroupSize
 {
-  DOCUMENT(R"(The size in the x dimension.
-
-:type: int
-)");
+  DOCUMENT("The size in the x dimension.");
   uint32_t x;
-  DOCUMENT(R"(The size in the y dimension.
-
-:type: int
-)");
+  DOCUMENT("The size in the y dimension.");
   uint32_t y;
-  DOCUMENT(R"(The size in the z dimension.
-
-:type: int
-)");
+  DOCUMENT("The size in the z dimension.");
   uint32_t z;
 
   DOCUMENT("");
@@ -72,15 +63,10 @@ DOCUMENT(R"(The size information for a meshlet.
 )");
 struct MeshletSize
 {
-  DOCUMENT(R"(The number of indices in the meshlet.
-
-:type: int
-)");
+  DOCUMENT("The number of indices in the meshlet.");
   uint32_t numIndices;
   DOCUMENT(R"(The number of vertices in this meshlet. This may be larger or smaller than the number
 of indices.
-
-:type: int
 )");
   uint32_t numVertices;
 
@@ -110,51 +96,24 @@ struct MeshFormat
   MeshFormat(const MeshFormat &o) = default;
   MeshFormat &operator=(const MeshFormat &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the index buffer that goes with this mesh element.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the index buffer that goes with this mesh element.");
   ResourceId indexResourceId;
-  DOCUMENT(R"(The offset in bytes where the indices start in idxbuf.
-
-:type: int
-)");
+  DOCUMENT("The offset in bytes where the indices start in idxbuf.");
   uint64_t indexByteOffset = 0;
-  DOCUMENT(R"(The width in bytes of each index. Valid values are 1 (depending on API), 2 or 4.
-
-:type: int
-)");
+  DOCUMENT("The width in bytes of each index. Valid values are 1 (depending on API), 2 or 4.");
   uint32_t indexByteStride = 0;
-  DOCUMENT(R"(The number of bytes to use from the index buffer. Only valid on APIs that allow it.
-
-:type: int
-)");
+  DOCUMENT("The number of bytes to use from the index buffer. Only valid on APIs that allow it.");
   uint64_t indexByteSize = 0;
-  DOCUMENT(R"(For indexed meshes, a value added to each index before using it to read the vertex.
-
-:type: int
-)");
+  DOCUMENT("For indexed meshes, a value added to each index before using it to read the vertex.");
   int32_t baseVertex = 0;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the vertex buffer containing this mesh element.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the vertex buffer containing this mesh element.");
   ResourceId vertexResourceId;
-  DOCUMENT(R"(The offset in bytes to the start of the vertex data.
-
-:type: int
-)");
+  DOCUMENT("The offset in bytes to the start of the vertex data.");
   uint64_t vertexByteOffset = 0;
-  DOCUMENT(R"(The stride in bytes between the start of one vertex and the start of another.
-
-:type: int
-)");
+  DOCUMENT("The stride in bytes between the start of one vertex and the start of another.");
   uint32_t vertexByteStride = 0;
-  DOCUMENT(R"(The number of bytes to use from the vertex buffer. Only valid on APIs that allow it.
-
-:type: int
-)");
+  DOCUMENT("The number of bytes to use from the vertex buffer. Only valid on APIs that allow it.");
   uint64_t vertexByteSize = 0;
 
   DOCUMENT(R"(The size of each meshlet, for a meshlet based draw.
@@ -195,8 +154,6 @@ meshlet to consider skipped before :data:`meshletSizes`.
 Primarily useful for keeping a consistent colouring of meshlets when filtering to a subset
 
 See also :data:`meshletIndexOffset`.
-
-:type: int
 )");
   uint32_t meshletOffset = 0;
 
@@ -206,23 +163,17 @@ vertices to consider skipped before :data:`meshletSizes` - equivalent to baseVer
 Primarily useful for keeping a consistent colouring of meshlets when filtering to a subset
 
 See also :data:`meshletOffset`.
-
-:type: int
 )");
   uint32_t meshletIndexOffset = 0;
 
   DOCUMENT(R"(The offset in bytes to the start of the per-primitive rate vertex data.
 
 Only for meshlet outputs.
-
-:type: int
 )");
   uint64_t perPrimitiveOffset = 0;
   DOCUMENT(R"(The stride in bytes of the per-primitive rate vertex data.
 
 Only for meshlet outputs.
-
-:type: int
 )");
   uint32_t perPrimitiveStride = 0;
 
@@ -238,65 +189,32 @@ Only for meshlet outputs.
 )");
   FloatVector meshColor;
 
-  DOCUMENT(R"(The :class:`Topology` that describes the primitives in this mesh.
-
-:type: Topology
-)");
+  DOCUMENT("The :class:`Topology` that describes the primitives in this mesh.");
   Topology topology = Topology::Unknown;
-  DOCUMENT(R"(The number of vertices in the mesh.
-
-:type: int
-)");
+  DOCUMENT("The number of vertices in the mesh.");
   uint32_t numIndices = 0;
-  DOCUMENT(R"(The number of instances to render with the same value. See :data:`instanced`.
-
-:type: int
-)");
+  DOCUMENT("The number of instances to render with the same value. See :data:`instanced`.");
   uint32_t instStepRate = 1;
-  DOCUMENT(R"(The primitive restart index to use, if possible. See :data:`allowRestart`.
-
-:type: int
-)");
+  DOCUMENT("The primitive restart index to use, if possible. See :data:`allowRestart`.");
   uint32_t restartIndex = 0xffffffff;
 
-  DOCUMENT(R"(The near plane for the projection matrix.
-
-:type: float
-)");
+  DOCUMENT("The near plane for the projection matrix.");
   float nearPlane = 0.1f;
-  DOCUMENT(R"(The far plane for the projection matrix.
-
-:type: float
-)");
+  DOCUMENT("The far plane for the projection matrix.");
   float farPlane = 100.0f;
-  DOCUMENT(R"(``True`` if this mesh element contains post-projection positional data.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if this mesh element contains post-projection positional data.");
   bool unproject = false;
 
-  DOCUMENT(R"(``True`` if there is an implicit Y-flip to account for in the projection.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if there is an implicit Y-flip to account for in the projection.");
   bool flipY = false;
 
-  DOCUMENT(R"(``True`` if this mesh element comes from instanced data. See :data:`instStepRate`.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if this mesh element comes from instanced data. See :data:`instStepRate`.");
   bool instanced = false;
 
-  DOCUMENT(R"(``True`` if the alpha component of this element should be used.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the alpha component of this element should be used.");
   bool showAlpha = false;
 
-  DOCUMENT(R"(``True`` if the primitive restart index feature should be used.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the primitive restart index feature should be used.");
   bool allowRestart = true;
 
   DOCUMENT(R"(A string with the status of this mesh format - only used when a mesh format is
@@ -328,10 +246,7 @@ struct MeshDisplay
   MeshDisplay(const MeshDisplay &) = default;
   MeshDisplay &operator=(const MeshDisplay &) = default;
 
-  DOCUMENT(R"(The :class:`MeshDataStage` where this mesh data comes from.
-
-:type: MeshDataStage
-)");
+  DOCUMENT("The :class:`MeshDataStage` where this mesh data comes from.");
   MeshDataStage type = MeshDataStage::VSIn;
 
   DOCUMENT(R"(The camera to use when rendering all of the meshes.
@@ -346,52 +261,30 @@ struct MeshDisplay
 )");
   AxisMapping axisMapping;
 
-  DOCUMENT(R"(``True`` if the projection matrix to use when unprojecting vertex positions is orthographic.
-
-:type: bool
-)");
+  DOCUMENT(
+      "``True`` if the projection matrix to use when unprojecting vertex positions is "
+      "orthographic.");
   bool ortho = false;
-  DOCUMENT(R"(The field of view to use when calculating a perspective projection matrix.
-
-:type: float
-)");
+  DOCUMENT("The field of view to use when calculating a perspective projection matrix.");
   float fov = 90.0f;
-  DOCUMENT(R"(The aspect ratio to use when calculating a perspective projection matrix.
-
-:type: float
-)");
+  DOCUMENT("The aspect ratio to use when calculating a perspective projection matrix.");
   float aspect = 1.0f;
 
-  DOCUMENT(R"(``True`` if all previous instances in the drawcall should be drawn as secondary meshes.
-
-:type: bool
-)");
+  DOCUMENT(
+      "``True`` if all previous instances in the drawcall should be drawn as secondary meshes.");
   bool showPrevInstances = false;
-  DOCUMENT(R"(``True`` if all instances in the drawcall should be drawn as secondary meshes.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if all instances in the drawcall should be drawn as secondary meshes.");
   bool showAllInstances = false;
-  DOCUMENT(R"(``True`` if all draws in the current pass up to the current draw should be drawn as secondary meshes.
-
-:type: bool
-)");
+  DOCUMENT(
+      "``True`` if all draws in the current pass up to the current draw should be drawn as "
+      "secondary meshes.");
   bool showWholePass = false;
-  DOCUMENT(R"(The index of the currently selected instance in the drawcall.
-
-:type: int
-)");
+  DOCUMENT("The index of the currently selected instance in the drawcall.");
   uint32_t curInstance = 0;
-  DOCUMENT(R"(The index of the currently selected multiview view in the drawcall.
-
-:type: int
-)");
+  DOCUMENT("The index of the currently selected multiview view in the drawcall.");
   uint32_t curView = 0;
 
-  DOCUMENT(R"(The index of the vertex to highlight, or :data:`NoHighlight` to select no vertex.
-
-:type: int
-)");
+  DOCUMENT("The index of the vertex to highlight, or :data:`NoHighlight` to select no vertex.");
   uint32_t highlightVert = ~0U;
   DOCUMENT(R"(The configuration for the primary mesh's position data.
 
@@ -414,31 +307,17 @@ struct MeshDisplay
 :type: FloatVector
 )");
   FloatVector maxBounds;
-  DOCUMENT(R"(``True`` if the bounding box around the mesh should be rendered.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the bounding box around the mesh should be rendered.");
   bool showBBox = false;
 
-  DOCUMENT(R"(The :class:`visualisation mode <Visualisation>` to use when rendering the current mesh.
-
-:type: Visualisation
-)");
+  DOCUMENT(
+      "The :class:`visualisation mode <Visualisation>` to use when rendering the current mesh.");
   Visualisation visualisationMode = Visualisation::NoSolid;
-  DOCUMENT(R"(``True`` if the wireframe of the mesh should be rendered as well as solid shading.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the wireframe of the mesh should be rendered as well as solid shading.");
   bool wireframeDraw = true;
-  DOCUMENT(R"(Displace/explode vertices to help visualise vertex reuse vs disjointedness.
-
-:type: float
-)");
+  DOCUMENT("Displace/explode vertices to help visualise vertex reuse vs disjointedness.");
   float vtxExploderSliderSNorm = 0.0f;
-  DOCUMENT(R"(Scales the exploded vertex displacement.
-
-:type: float
-)");
+  DOCUMENT("Scales the exploded vertex displacement.");
   float exploderScale = 1.0f;
 
   static const uint32_t NoHighlight = ~0U;
@@ -468,10 +347,7 @@ struct TextureDisplay
   TextureDisplay(const TextureDisplay &) = default;
   TextureDisplay &operator=(const TextureDisplay &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the texture to display.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the texture to display.");
   ResourceId resourceId;
 
   DOCUMENT(R"(If possible interpret the texture with this type instead of its normal type.
@@ -479,52 +355,36 @@ struct TextureDisplay
 If set to :data:`CompType.Typeless` then no cast is applied, otherwise where allowed the texture
 data will be reinterpreted - e.g. from unsigned integers to floats, or to unsigned normalised
 values.
-
-:type: CompType
 )");
   CompType typeCast = CompType::Typeless;
 
-  DOCUMENT(R"(The value in each channel to map to the black point.
-
-:type: float
-)");
+  DOCUMENT("The value in each channel to map to the black point.");
   float rangeMin = 0.0f;
 
-  DOCUMENT(R"(The value in each channel to map to the white point.
-
-:type: float
-)");
+  DOCUMENT("The value in each channel to map to the white point.");
   float rangeMax = 1.0f;
 
   DOCUMENT(R"(The scale to apply to the texture when rendering as a floating point value.
 
 ``1.0`` corresponds to ``100%``
-
-:type: float
 )");
   float scale = 1.0f;
 
   DOCUMENT(R"(``True`` if the red channel should be visible.
 
 If only one channel is selected, it will be rendered in grayscale
-
-:type: bool
 )");
   bool red = true;
 
   DOCUMENT(R"(``True`` if the green channel should be visible.
 
 If only one channel is selected, it will be rendered in grayscale
-
-:type: bool
 )");
   bool green = true;
 
   DOCUMENT(R"(``True`` if the blue channel should be visible.
 
 If only one channel is selected, it will be rendered in grayscale
-
-:type: bool
 )");
   bool blue = true;
 
@@ -532,42 +392,27 @@ If only one channel is selected, it will be rendered in grayscale
 texture will be blended to the background color or checkerboard.
 
 If only one channel is selected, it will be rendered in grayscale
-
-:type: bool
 )");
   bool alpha = false;
 
-  DOCUMENT(R"(``True`` if the texture should be flipped vertically when rendering.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the texture should be flipped vertically when rendering.");
   bool flipY = false;
 
-  DOCUMENT(R"(If ``>= 0.0`` the RGBA values will be viewed as HDRM with this as the multiplier.
-
-:type: float
-)");
+  DOCUMENT("If ``>= 0.0`` the RGBA values will be viewed as HDRM with this as the multiplier.");
   float hdrMultiplier = -1.0f;
 
-  DOCUMENT(R"(``True`` if the texture should be decoded as if it contains YUV data.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the texture should be decoded as if it contains YUV data.");
   bool decodeYUV = false;
 
   DOCUMENT(R"(``True`` if the texture should be interpreted as gamma.
 
 See :ref:`the FAQ entry <gamma-linear-display>`.
-
-:type: bool
 )");
   bool linearDisplayAsGamma = true;
 
   DOCUMENT(R"(The :class:`ResourceId` of a custom shader to use when rendering.
 
 See :meth:`ReplayController.BuildCustomShader` for creating an appropriate custom shader.
-
-:type: ResourceId
 )");
   ResourceId customShaderId;
 
@@ -584,21 +429,13 @@ will be performed that averages all samples.
 
 This is primarily useful when rendering to a floating point target for retrieving pixel data from
 the input texture in cases where it isn't easy to directly fetch the input texture data.
-
-:type: bool
 )");
   bool rawOutput = false;
 
-  DOCUMENT(R"(The offset to pan in the X axis.
-
-:type: float
-)");
+  DOCUMENT("The offset to pan in the X axis.");
   float xOffset = 0.0f;
 
-  DOCUMENT(R"(The offset to pan in the Y axis.
-
-:type: float
-)");
+  DOCUMENT("The offset to pan in the Y axis.");
   float yOffset = 0.0f;
 
   DOCUMENT(R"(The background color to use behind the texture display.
@@ -609,10 +446,7 @@ If set to (0, 0, 0, 0) the global checkerboard colors are used.
 )");
   FloatVector backgroundColor;
 
-  DOCUMENT(R"(Selects a :class:`DebugOverlay` to draw over the top of the texture.
-
-:type: DebugOverlay
-)");
+  DOCUMENT("Selects a :class:`DebugOverlay` to draw over the top of the texture.");
   DebugOverlay overlay = DebugOverlay::NoOverlay;
 
   static const uint32_t ResolveSamples = ~0U;
@@ -629,15 +463,9 @@ struct TextureComponentMapping
   TextureComponentMapping(const TextureComponentMapping &) = default;
   TextureComponentMapping &operator=(const TextureComponentMapping &) = default;
 
-  DOCUMENT(R"(The value that should be mapped to ``0``
-
-:type: float
-)");
+  DOCUMENT("The value that should be mapped to ``0``");
   float blackPoint = 0.0f;
-  DOCUMENT(R"(The value that should be mapped to ``255``
-
-:type: float
-)");
+  DOCUMENT("The value that should be mapped to ``255``");
   float whitePoint = 1.0f;
 };
 
@@ -662,16 +490,12 @@ in-place, so it would be slice 0: sample 0, slice 0: sample 1, slice 1: sample 0
 
 This then follows the mapping for array slices as with any other array texture. :data:`sampleIndex`
 is ignored.
-
-:type: bool
 )");
   bool mapToArray = false;
 
   DOCUMENT(R"(
 If :data:`mapToArray` is ``False`` this selects which sample should be extracted to treat as a
 normal 2D image. If set to :data:`ResolveSamples` then instead there's a default average resolve.
-
-:type: int
 )");
   uint32_t sampleIndex = ~0U;
 
@@ -697,8 +521,6 @@ Selects the (depth/array) slice to save.
 
 If this is -1, then all slices are written out as detailed below. This is only supported in formats
 that don't support slices natively, and will be done in RGBA8.
-
-:type: int
 )");
   int32_t sliceIndex = -1;
 
@@ -707,15 +529,10 @@ that don't support slices natively, and will be done in RGBA8.
   DOCUMENT(R"(
 If ``True``, write out the slices as a 2D grid with the width given in :data:`sliceGridWidth`. Any
 empty slices in the grid are written as transparent black.
-
-:type: bool
 )");
   bool slicesAsGrid = false;
 
-  DOCUMENT(R"(The width of a grid if :data:`slicesAsGrid` is ``True``.
-
-:type: int
-)");
+  DOCUMENT("The width of a grid if :data:`slicesAsGrid` is ``True``.");
   int32_t sliceGridWidth = 1;
 
   DOCUMENT(R"(Write out 6 slices in a cruciform pattern::
@@ -732,8 +549,6 @@ empty slices in the grid are written as transparent black.
           +----+
 
 With the gaps filled in with transparent black.
-
-:type: bool
 )");
   bool cubeCruciform = false;
 };
@@ -748,10 +563,7 @@ struct TextureSave
   TextureSave(const TextureSave &) = default;
   TextureSave &operator=(const TextureSave &) = default;
 
-  DOCUMENT(R"(The :class:`ResourceId` of the texture to save.
-
-:type: ResourceId
-)");
+  DOCUMENT("The :class:`ResourceId` of the texture to save.");
   ResourceId resourceId;
 
   DOCUMENT(R"(If possible interpret the texture with this type instead of its normal type.
@@ -759,15 +571,10 @@ struct TextureSave
 If set to :data:`CompType.Typeless` then no cast is applied, otherwise where allowed the texture
 data will be reinterpreted - e.g. from unsigned integers to floats, or to unsigned normalised
 values.
-
-:type: CompType
 )");
   CompType typeCast = CompType::Typeless;
 
-  DOCUMENT(R"(The :class:`FileType` to use when saving to the destination file.
-
-:type: FileType
-)");
+  DOCUMENT("The :class:`FileType` to use when saving to the destination file.");
   FileType destType = FileType::DDS;
 
   // mip == -1 writes out all mips where allowed by file format
@@ -776,8 +583,6 @@ values.
 
 If set to ``-1`` then all mips are written, where allowed by file format. If not allowed, mip 0 is
 written
-
-:type: int
 )");
   int32_t mip = -1;
 
@@ -801,10 +606,7 @@ and above the white point are clamped, and the values in between are evenly dist
 )");
   TextureSliceMapping slice;
 
-  DOCUMENT(R"(Selects a single component out of a texture to save as grayscale, or -1 to save all.
-
-:type: int
-)");
+  DOCUMENT("Selects a single component out of a texture to save as grayscale, or -1 to save all.");
   int channelExtract = -1;
 
   // for formats without an alpha channel, define how it should be
@@ -814,8 +616,6 @@ and above the white point are clamped, and the values in between are evenly dist
 alpha.
 
 It is an :class:`AlphaMapping` that controls what behaviour to use.
-
-:type: AlphaMapping
 )");
   AlphaMapping alpha = AlphaMapping::Preserve;
 
@@ -825,10 +625,7 @@ It is an :class:`AlphaMapping` that controls what behaviour to use.
 )");
   FloatVector alphaCol;
 
-  DOCUMENT(R"(The quality to use when saving to a ``JPG`` file. Valid values are between 1 and 100.
-
-:type: int
-)");
+  DOCUMENT("The quality to use when saving to a ``JPG`` file. Valid values are between 1 and 100.");
   int jpegQuality = 90;
 };
 
@@ -846,35 +643,19 @@ struct DescriptorRange
   {
     offset = access.byteOffset;
     descriptorSize = access.byteSize;
-    type = access.type;
   }
 
-  DOCUMENT(R"(The offset in the descriptor storage where the descriptor range starts.
-
-:type: int
-)");
+  DOCUMENT("The offset in the descriptor storage where the descriptor range starts.");
   uint32_t offset = 0;
-  DOCUMENT(R"(The size of each descriptor in the range.
-
-:type: int
-)");
+  DOCUMENT("The size of each descriptor in the range.");
   uint32_t descriptorSize = 1;
-  DOCUMENT(R"(The number of descriptors in this range.
-
-:type: int
-)");
+  DOCUMENT("The number of descriptors in this range.");
   uint32_t count = 1;
-  DOCUMENT(R"(The type of descriptor in the descriptor range.
-
-:type: DescriptorType
-)");
-  DescriptorType type = DescriptorType::Unknown;
 
   DOCUMENT("");
   bool operator==(const DescriptorRange &o) const
   {
-    return offset == o.offset && descriptorSize == o.descriptorSize && count == o.count &&
-           type == o.type;
+    return offset == o.offset && descriptorSize == o.descriptorSize && count == o.count;
   }
   bool operator<(const DescriptorRange &o) const
   {
@@ -884,8 +665,6 @@ struct DescriptorRange
       return descriptorSize < o.descriptorSize;
     if(!(count == o.count))
       return count < o.count;
-    if(!(type == o.type))
-      return type < o.type;
     return false;
   }
 };
@@ -901,63 +680,31 @@ struct NewCaptureData
   NewCaptureData(const NewCaptureData &) = default;
   NewCaptureData &operator=(const NewCaptureData &) = default;
 
-  DOCUMENT(R"(An identifier to use to refer to this capture.
-
-:type: int
-)");
+  DOCUMENT("An identifier to use to refer to this capture.");
   uint32_t captureId = 0;
-  DOCUMENT(R"(The frame number that this capture came from.
-
-:type: int
-)");
+  DOCUMENT("The frame number that this capture came from.");
   uint32_t frameNumber = 0;
-  DOCUMENT(R"(The time the capture was created, as a unix timestamp in UTC.
-
-:type: int
-)");
+  DOCUMENT("The time the capture was created, as a unix timestamp in UTC.");
   uint64_t timestamp = 0;
-  DOCUMENT(R"(The size of the capture, in bytes.
-
-:type: int
-)");
+  DOCUMENT("The size of the capture, in bytes.");
   uint64_t byteSize = 0;
-  DOCUMENT(R"(The raw bytes that contain the capture thumbnail, as RGB8 data.
-
-:type: bytes
-)");
+  DOCUMENT("The raw bytes that contain the capture thumbnail, as RGB8 data.");
   bytebuf thumbnail;
-  DOCUMENT(R"(The width of the image contained in :data:`thumbnail`.
-
-:type: int
-)");
+  DOCUMENT("The width of the image contained in :data:`thumbnail`.");
   int32_t thumbWidth = 0;
-  DOCUMENT(R"(The height of the image contained in :data:`thumbnail`.
-
-:type: int
-)");
+  DOCUMENT("The height of the image contained in :data:`thumbnail`.");
   int32_t thumbHeight = 0;
-  DOCUMENT(R"(The local path on the target system where the capture is saved.
-
-:type: str
-)");
+  DOCUMENT("The local path on the target system where the capture is saved.");
   rdcstr path;
-  DOCUMENT(R"(The custom title for this capture, if empty a default title can be used.
-
-:type: str
-)");
+  DOCUMENT("The custom title for this capture, if empty a default title can be used.");
   rdcstr title;
   DOCUMENT(R"(The API used for this capture, if available.
 
 .. note::
   May be empty if running with an older version of RenderDoc
-
-:type: str
 )");
   rdcstr api;
-  DOCUMENT(R"(``True`` if the target is running on the local system.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the target is running on the local system.");
   bool local = true;
 };
 
@@ -971,22 +718,13 @@ struct APIUseData
   APIUseData(const APIUseData &) = default;
   APIUseData &operator=(const APIUseData &) = default;
 
-  DOCUMENT(R"(The name of the API.
-
-:type: str
-)");
+  DOCUMENT("The name of the API.");
   rdcstr name;
 
-  DOCUMENT(R"(``True`` if the API is presenting to a swapchain
-  
-:type: bool
-)");
+  DOCUMENT("``True`` if the API is presenting to a swapchain");
   bool presenting = false;
 
-  DOCUMENT(R"(``True`` if the API can be captured.
-
-:type: bool
-)");
+  DOCUMENT("``True`` if the API can be captured.");
   bool supported = false;
 
   DOCUMENT(R"(A string message if the API is unsupported explaining why.
@@ -1006,10 +744,7 @@ struct BusyData
   BusyData(const BusyData &) = default;
   BusyData &operator=(const BusyData &) = default;
 
-  DOCUMENT(R"(The name of the client currently connected to the target.
-
-:type: str
-)");
+  DOCUMENT("The name of the client currently connected to the target.");
   rdcstr clientName;
 };
 
@@ -1023,15 +758,9 @@ struct NewChildData
   NewChildData(const NewChildData &) = default;
   NewChildData &operator=(const NewChildData &) = default;
 
-  DOCUMENT(R"(The PID (Process ID) of the new child.
-
-:type: int
-)");
+  DOCUMENT("The PID (Process ID) of the new child.");
   uint32_t processId = 0;
-  DOCUMENT(R"(The ident where the new child's target control is active.
-
-:type: int
-)");
+  DOCUMENT("The ident where the new child's target control is active.");
   uint32_t ident = 0;
 };
 
@@ -1045,10 +774,7 @@ struct TargetControlMessage
   TargetControlMessage(const TargetControlMessage &) = default;
   TargetControlMessage &operator=(const TargetControlMessage &) = default;
 
-  DOCUMENT(R"(The :class:`type <TargetControlMessageType>` of message received
-
-:type: TargetControlMessageType
-)");
+  DOCUMENT("The :class:`type <TargetControlMessageType>` of message received");
   TargetControlMessageType type = TargetControlMessageType::Unknown;
 
   DOCUMENT(R"(The new capture data.
@@ -1079,15 +805,10 @@ struct TargetControlMessage
 
 When valid, will be in the range of 0.0 to 1.0 (0 - 100%). If not valid when a capture isn't going
 or has finished, it will be -1.0
-
-:type: float
 )");
   float capProgress = -1.0f;
 
-  DOCUMENT(R"(The number of the capturable windows
-
-:type: int
-)");
+  DOCUMENT("The number of the capturable windows");
   uint32_t capturableWindowCount = 0;
 };
 
@@ -1121,25 +842,13 @@ struct EnvironmentModification
       return value < o.value;
     return false;
   }
-  DOCUMENT(R"(The :class:`modification <EnvMod>` to use.
-
-:type: EnvMod
-)");
+  DOCUMENT("The :class:`modification <EnvMod>` to use.");
   EnvMod mod;
-  DOCUMENT(R"(The :class:`separator <EnvSep>` to use if needed.
-
-:type: EnvSep
-)");
+  DOCUMENT("The :class:`separator <EnvSep>` to use if needed.");
   EnvSep sep;
-  DOCUMENT(R"(The name of the environment variable.
-
-:type: str
-)");
+  DOCUMENT("The name of the environment variable.");
   rdcstr name;
-  DOCUMENT(R"(The value to use with the modification specified in :data:`mod`.
-
-:type: str
-)");
+  DOCUMENT("The value to use with the modification specified in :data:`mod`.");
   rdcstr value;
 };
 
@@ -1175,43 +884,27 @@ struct CaptureFileFormat
       return convertSupported < o.convertSupported;
     return false;
   }
-  DOCUMENT(R"(The file of the format as a single minimal string, e.g. ``rdc``.
-
-:type: str
-)");
+  DOCUMENT("The file of the format as a single minimal string, e.g. ``rdc``.");
   rdcstr extension;
 
-  DOCUMENT(R"(A human readable short phrase naming the file format.
-
-:type: str
-)");
+  DOCUMENT("A human readable short phrase naming the file format.");
   rdcstr name;
 
-  DOCUMENT(R"(A human readable long-form description of the file format.
-
-:type: str
-)");
+  DOCUMENT("A human readable long-form description of the file format.");
   rdcstr description;
 
   DOCUMENT(R"(Indicates whether exporting to this format requires buffers or just structured data.
 If it doesn't require buffers then it can be exported directly from an opened capture, which by
 default has structured data but no buffers available.
-
-:type: bool
 )");
   bool requiresBuffers;
 
   DOCUMENT(R"(Indicates whether or not files in this format can be opened and processed as
 structured data.
-
-:type: bool
 )");
   bool openSupported;
 
-  DOCUMENT(R"(Indicates whether captures or structured data can be saved out in this format.
-
-:type: bool
-)");
+  DOCUMENT("Indicates whether captures or structured data can be saved out in this format.");
   bool convertSupported;
 };
 
@@ -1240,26 +933,14 @@ struct GPUDevice
       return driver < o.driver;
     return false;
   }
-  DOCUMENT(R"(The :class:`GPUVendor` of this GPU.
-
-:type: GPUVendor
-)");
+  DOCUMENT("The :class:`GPUVendor` of this GPU.");
   GPUVendor vendor = GPUVendor::Unknown;
-  DOCUMENT(R"(The PCI deviceID of this GPU.
-
-:type: int
-)");
+  DOCUMENT("The PCI deviceID of this GPU.");
   uint32_t deviceID = 0;
-  DOCUMENT(R"(The name of the driver of this GPU, if multiple drivers are available for it.
-
-:type: str
-)");
+  DOCUMENT("The name of the driver of this GPU, if multiple drivers are available for it.");
   rdcstr driver;
 
-  DOCUMENT(R"(The human-readable name of this GPU.
-
-:type: str
-)");
+  DOCUMENT("The human-readable name of this GPU.");
   rdcstr name;
 
   DOCUMENT(R"(The APIs that this device supports.
@@ -1286,8 +967,6 @@ The default is not to do any validation.
 
 .. note:: RenderDoc does not handle invalid API use in the general case so validation should still
   be performed at runtime in your program for ground truth results.
-
-:type: bool
 )");
   bool apiValidation = false;
 
@@ -1309,8 +988,6 @@ the closest matching GPU is used on replay.
 
   OpenGL does not support GPU selection so the default method (which effectively does nothing) will
   always be used.
-
-:type: GPUVendor
 )");
   GPUVendor forceGPUVendor = GPUVendor::Unknown;
 
@@ -1320,8 +997,6 @@ replay on.
 When set to 0, specifies no particular device.
 
 See :data:`forceGPUDeviceID` for a full explanation of GPU selection override.
-
-:type: int
 )");
   uint32_t forceGPUDeviceID = 0;
 
@@ -1331,16 +1006,12 @@ to replay on.
 When set to an empty string, specifies no particular driver.
 
 See :data:`forceGPUDeviceID` for a full explanation of GPU selection override.
-
-:type: str
 )");
   rdcstr forceGPUDriverName;
 
   DOCUMENT(R"(How much optimisation should be done, potentially at the cost of correctness.
 
 The default is :data:`ReplayOptimisationLevel.Balanced`.
-
-:type: ReplayOptimisationLevel
 )");
   ReplayOptimisationLevel optimisation = ReplayOptimisationLevel::Balanced;
 
@@ -1444,24 +1115,17 @@ struct GlobalEnvironment
   GlobalEnvironment(const GlobalEnvironment &) = default;
   GlobalEnvironment &operator=(const GlobalEnvironment &) = default;
 
-  DOCUMENT(R"(The handle to the X display to use internally. If left ``NULL``, one will be opened.
-
-:type: Display
-)");
+  DOCUMENT("The handle to the X display to use internally. If left ``NULL``, one will be opened.");
   Display *xlibDisplay = NULL;
 
   DOCUMENT(
-      R"(The handle to the wayland display to use internally. If left ``NULL``, wayland cannot be used.
-
-:type: wl_display
-)");
+      "The handle to the wayland display to use internally. If left ``NULL``, wayland cannot be "
+      "used.");
   wl_display *waylandDisplay = NULL;
 
   DOCUMENT(R"(Whether to enumerate available GPUs. If the replay program is only being used for
 internal operation where enumerating GPUs would be too expensive or problematic, it can be disabled
 here.
-
-:type: bool
 )");
   bool enumerateGPUs = true;
 };
@@ -1508,10 +1172,8 @@ struct ResultDetails
   bool operator==(ResultCode resultCode) const { return code == resultCode; }
   bool operator!=(ResultCode resultCode) const { return code != resultCode; }
 #endif
-  DOCUMENT(R"(The :class:`ResultCode` resulting from the operation, indicating success or failure.
-
-:type: ResultCode
-)");
+  DOCUMENT(
+      "The :class:`ResultDetails` resulting from the operation, indicating success or failure.");
   ResultCode code;
 
   DOCUMENT(R"(For error codes, this will contain the stringified error code as well as any optional
@@ -1546,8 +1208,6 @@ struct ExecuteResult
   ResultDetails result;
   DOCUMENT(R"(The ident where the new application is listening for target control, or 0 if something
 went wrong.
-
-:type: int
 )");
   uint32_t ident;
 };

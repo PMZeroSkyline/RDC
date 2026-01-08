@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -30,7 +30,6 @@
 namespace ResourceIDGen
 {
 static int64_t globalIDCounter = 1;
-static ResourceId baseReplayID;
 
 ResourceId GetNewUniqueID()
 {
@@ -39,22 +38,16 @@ ResourceId GetNewUniqueID()
   return ret;
 }
 
-bool IsReplayOnlyID(ResourceId id)
-{
-  return baseReplayID < id;
-}
-
 void SetReplayResourceIDs()
 {
-  // separate replay-only IDs from captured IDs by adding a value when replaying.
-  // 1000000000000000000 capture-time IDs before we overlap replay IDs gives
+  // separate replay IDs from live IDs by adding a value when replaying.
+  // 1000000000000000000 live IDs before we overlap replay IDs gives
   // almost 32 years generating 100000 IDs per frame at 10000 FPS.
 
   // only add this value once (since we're not |'ing on a bit)
   if(globalIDCounter < 1000000000000000000LL)
     globalIDCounter =
         RDCMAX(int64_t(globalIDCounter), int64_t(globalIDCounter + 1000000000000000000LL));
-  baseReplayID = GetNewUniqueID();
 }
 };
 
@@ -220,9 +213,10 @@ void ResourceRecord::Delete(ResourceRecordHandler *mgr)
   RDCASSERT(ref >= 0);
   if(ref <= 0)
   {
-    rdcarray<ResourceRecord *> ParentsToDelete;
-    Parents.swap(ParentsToDelete);
+    for(auto it = Parents.begin(); it != Parents.end(); ++it)
+      (*it)->Delete(mgr);
 
+    Parents.clear();
     Length = 0;
     DataPtr = NULL;
 
@@ -232,8 +226,5 @@ void ResourceRecord::Delete(ResourceRecordHandler *mgr)
       mgr->RemoveResourceRecord(ResID);
 
     mgr->DestroyResourceRecord(this);
-
-    for(auto it = ParentsToDelete.begin(); it != ParentsToDelete.end(); ++it)
-      (*it)->Delete(mgr);
   }
 }

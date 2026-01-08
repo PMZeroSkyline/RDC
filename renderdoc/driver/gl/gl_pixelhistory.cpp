@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -39,29 +39,38 @@ bool isDirectWrite(ResourceUsage usage)
           usage == ResourceUsage::GenMips);
 }
 
-enum class ModType
-{
-  PreMod,
-  PostMod,
-};
-
 struct FramebufferKey
 {
-  ModType modType;
   GLenum colorFormat;
   GLenum depthFormat;
   GLenum stencilFormat;
   uint32_t numSamples;
   bool operator<(const FramebufferKey &other) const
   {
-    if(modType != other.modType)
-      return modType < other.modType;
-    if(colorFormat != other.colorFormat)
-      return colorFormat < other.colorFormat;
-    if(depthFormat != other.depthFormat)
-      return depthFormat < other.depthFormat;
-    if(stencilFormat != other.stencilFormat)
-      return stencilFormat < other.stencilFormat;
+    if(colorFormat < other.colorFormat)
+    {
+      return true;
+    }
+    if(colorFormat > other.colorFormat)
+    {
+      return false;
+    }
+    if(depthFormat < other.depthFormat)
+    {
+      return true;
+    }
+    if(depthFormat > other.depthFormat)
+    {
+      return false;
+    }
+    if(stencilFormat < other.stencilFormat)
+    {
+      return true;
+    }
+    if(stencilFormat > other.stencilFormat)
+    {
+      return false;
+    }
     return numSamples < other.numSamples;
   }
 };
@@ -89,11 +98,6 @@ struct ShaderOutFramebuffer
 struct GLPixelHistoryResources
 {
   ResourceId target;
-  bool depthTarget;
-
-  // a framebuffer with the target resource bound, used for copying for pre/post mod on direct writes
-  // (compute dispatches or clears) where the currently bound framebuffer won't necessarily match
-  GLuint copySourceFramebuffer;
 
   // Used for offscreen rendering for draw call events.
   GLuint fullPrecisionColorImage;
@@ -101,14 +105,11 @@ struct GLPixelHistoryResources
   GLuint fullPrecisionFrameBuffer;
   GLuint primitiveIdFragmentShader;
   GLuint primitiveIdFragmentShaderSPIRV;
-  GLuint fixedColFragmentShader;
-  GLuint fixedColFragmentShaderSPIRV;
   GLuint msCopyComputeProgram;
   GLuint msCopyDepthComputeProgram;
   GLuint msCopyDstBuffer;
   GLuint msCopyUniformBlockBuffer;
-  std::unordered_map<GLuint, GLuint> primIdPrograms;
-  std::unordered_map<GLuint, GLuint> fixedColPrograms;
+  std::unordered_map<GLuint, GLuint> programs;
   std::map<FramebufferKey, CopyFramebuffer> copyFramebuffers;
   std::map<FramebufferKey, ShaderOutFramebuffer> shaderOutIntFramebuffers;
 };
@@ -117,9 +118,6 @@ enum class OpenGLTest
 {
   FaceCulling,
   ScissorTest,
-  DepthClamp,
-  DepthBounds,
-  Discard,
   StencilTest,
   DepthTest,
   SampleMask,
@@ -133,79 +131,24 @@ enum class PerFragmentQueryType
   PrimitiveId
 };
 
-GLuint RefreshUniforms(WrappedOpenGL *driver, GLRenderState &rs, GLuint dstProgram)
-{
-  ContextPair &ctx = driver->GetCtx();
-
-  GLuint srcProgram = 0;
-
-  if(rs.Program.name)
-  {
-    srcProgram = rs.Program.name;
-  }
-  else if(rs.Pipeline.name)
-  {
-    ResourceId id = driver->GetResourceManager()->GetResID(ProgramPipeRes(ctx, rs.Pipeline.name));
-    const WrappedOpenGL::PipelineData &pipeDetails = driver->GetPipeline(id);
-
-    srcProgram = driver->GetResourceManager()
-                     ->GetResource(pipeDetails.stagePrograms[(size_t)ShaderStage::Pixel])
-                     .name;
-  }
-
-  PerStageReflections stages;
-  driver->FillReflectionArray(ProgramRes(ctx, srcProgram), stages);
-
-  PerStageReflections dstStages;
-  driver->FillReflectionArray(ProgramRes(ctx, dstProgram), dstStages);
-
-  CopyProgramUniforms(stages, srcProgram, dstStages, dstProgram);
-
-  return dstProgram;
-}
-
-GLuint GetFixedColProgram(WrappedOpenGL *driver, GLReplay *replay,
-                          GLPixelHistoryResources &resources, GLuint currentProgram)
-{
-  GLRenderState rs;
-  rs.FetchState(driver);
-
-  auto programIterator = resources.fixedColPrograms.find(currentProgram);
-  if(programIterator != resources.fixedColPrograms.end())
-  {
-    return RefreshUniforms(driver, rs, programIterator->second);
-  }
-
-  GLuint ret = driver->glCreateProgram();
-  replay->CreateShaderReplacementProgram(rs.Program.name, rs.Pipeline.name, ret, ShaderStage::Pixel,
-                                         resources.fixedColFragmentShader,
-                                         resources.fixedColFragmentShaderSPIRV);
-
-  resources.fixedColPrograms[currentProgram] = ret;
-
-  return ret;
-}
-
 GLuint GetPrimitiveIdProgram(WrappedOpenGL *driver, GLReplay *replay,
                              GLPixelHistoryResources &resources, GLuint currentProgram)
 {
+  auto programIterator = resources.programs.find(currentProgram);
+  if(programIterator != resources.programs.end())
+  {
+    return programIterator->second;
+  }
+
   GLRenderState rs;
   rs.FetchState(driver);
 
-  auto programIterator = resources.primIdPrograms.find(currentProgram);
-  if(programIterator != resources.primIdPrograms.end())
-  {
-    return RefreshUniforms(driver, rs, programIterator->second);
-  }
+  GLuint primitiveIdProgram = driver->glCreateProgram();
+  replay->CreateFragmentShaderReplacementProgram(
+      rs.Program.name, primitiveIdProgram, rs.Pipeline.name, resources.primitiveIdFragmentShader,
+      resources.primitiveIdFragmentShaderSPIRV);
 
-  GLuint ret = driver->glCreateProgram();
-  replay->CreateShaderReplacementProgram(rs.Program.name, rs.Pipeline.name, ret, ShaderStage::Pixel,
-                                         resources.primitiveIdFragmentShader,
-                                         resources.primitiveIdFragmentShaderSPIRV);
-
-  resources.primIdPrograms[currentProgram] = ret;
-
-  return ret;
+  return primitiveIdProgram;
 }
 
 // Returns a Framebuffer that has the same depth and stencil formats of the currently bound
@@ -213,9 +156,8 @@ GLuint GetPrimitiveIdProgram(WrappedOpenGL *driver, GLReplay *replay,
 // so that you can blit from the current bound framebuffer into the new framebuffer
 const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver,
                                           std::map<FramebufferKey, CopyFramebuffer> &copyFramebuffers,
-                                          ModType modType, uint32_t numSamples, uint32_t numEvents,
-                                          GLenum depthFormat, GLenum stencilFormat,
-                                          GLenum colorFormat)
+                                          uint32_t numSamples, uint32_t numEvents, GLenum depthFormat,
+                                          GLenum stencilFormat, GLenum colorFormat)
 {
   bool multisampled = numSamples > 1;
 
@@ -223,9 +165,6 @@ const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver,
   GLint depthType;
   GLuint curStencil;
   GLint stencilType;
-
-  if(colorFormat == eGL_NONE)
-    colorFormat = eGL_RGBA8;
 
   driver->glGetFramebufferAttachmentParameteriv(eGL_DRAW_FRAMEBUFFER, eGL_DEPTH_ATTACHMENT,
                                                 eGL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
@@ -241,8 +180,7 @@ const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver,
   driver->glGetFramebufferAttachmentParameteriv(eGL_DRAW_FRAMEBUFFER, eGL_STENCIL_ATTACHMENT,
                                                 eGL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &stencilType);
 
-  FramebufferKey key = {modType, colorFormat, depthFormat, stencilFormat, numSamples};
-  auto it = copyFramebuffers.find(key);
+  auto it = copyFramebuffers.find({colorFormat, depthFormat, stencilFormat, numSamples});
   if(it != copyFramebuffers.end())
   {
     return it->second;
@@ -254,7 +192,7 @@ const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver,
 
   CopyFramebuffer copyFramebuffer;
   RDCEraseEl(copyFramebuffer);
-  copyFramebuffer.width = RDCMAX(100U, numEvents);
+  copyFramebuffer.width = numEvents;
   // Allocate a framebuffer that will render to the textures
   driver->glGenFramebuffers(1, &copyFramebuffer.framebufferId);
   driver->glBindFramebuffer(eGL_FRAMEBUFFER, copyFramebuffer.framebufferId);
@@ -308,6 +246,7 @@ const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver,
   driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
   driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedReadFramebuffer);
 
+  FramebufferKey key = {colorFormat, depthFormat, stencilFormat, numSamples};
   copyFramebuffer.format = key;
   copyFramebuffers[key] = copyFramebuffer;
   return copyFramebuffers[key];
@@ -361,7 +300,7 @@ GLenum getCurrentTextureFormat(WrappedOpenGL *driver, uint32_t colIdx)
 
 const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver, uint32_t colIdx,
                                           std::map<FramebufferKey, CopyFramebuffer> &copyFramebuffers,
-                                          ModType modType, uint32_t numSamples, uint32_t numEvents)
+                                          uint32_t numSamples, uint32_t numEvents)
 {
   GLuint curDepth;
   GLint depthType;
@@ -438,7 +377,7 @@ const CopyFramebuffer &getCopyFramebuffer(WrappedOpenGL *driver, uint32_t colIdx
     colorFormat = driver->m_Textures[id].internalFormat;
   }
 
-  return getCopyFramebuffer(driver, copyFramebuffers, modType, numSamples, numEvents, depthFormat,
+  return getCopyFramebuffer(driver, copyFramebuffers, numSamples, numEvents, depthFormat,
                             stencilFormat, colorFormat);
 }
 
@@ -605,42 +544,6 @@ bool PixelHistorySetupResources(WrappedOpenGL *driver, GLPixelHistoryResources &
                                 const TextureDescription &desc, const Subresource &sub,
                                 uint32_t numEvents, GLuint glslVersion, uint32_t numSamples)
 {
-  driver->glGenFramebuffers(1, &resources.copySourceFramebuffer);
-  driver->glBindFramebuffer(eGL_FRAMEBUFFER, resources.copySourceFramebuffer);
-
-  GLResource targetTex = driver->GetResourceManager()->GetResource(desc.resourceId);
-  GLenum targetAtt = eGL_COLOR_ATTACHMENT0;
-  resources.depthTarget = false;
-  if(desc.format.type == ResourceFormatType::D16S8 ||
-     desc.format.type == ResourceFormatType::D24S8 || desc.format.type == ResourceFormatType::D32S8)
-  {
-    targetAtt = eGL_DEPTH_STENCIL_ATTACHMENT;
-    resources.depthTarget = true;
-  }
-  else if(desc.format.compType == CompType::Depth)
-  {
-    targetAtt = eGL_DEPTH_ATTACHMENT;
-    resources.depthTarget = true;
-  }
-  else if(desc.format.type == ResourceFormatType::S8)
-  {
-    targetAtt = eGL_STENCIL_ATTACHMENT;
-    resources.depthTarget = true;
-  }
-
-  if(targetTex.Namespace == eResRenderbuffer)
-  {
-    driver->glFramebufferRenderbuffer(eGL_FRAMEBUFFER, targetAtt, eGL_RENDERBUFFER, targetTex.name);
-  }
-  else
-  {
-    if(desc.arraysize > 1)
-      driver->glFramebufferTextureLayer(eGL_FRAMEBUFFER, targetAtt, targetTex.name, sub.mip,
-                                        sub.slice);
-    else
-      driver->glFramebufferTexture(eGL_FRAMEBUFFER, targetAtt, targetTex.name, sub.mip);
-  }
-
   // Allocate a framebuffer that will render to the textures
   driver->glGenFramebuffers(1, &resources.fullPrecisionFrameBuffer);
   driver->glBindFramebuffer(eGL_FRAMEBUFFER, resources.fullPrecisionFrameBuffer);
@@ -681,46 +584,29 @@ bool PixelHistorySetupResources(WrappedOpenGL *driver, GLPixelHistoryResources &
 
   // If the GLSL version is greater than or equal to 330, we can use IntBitsToFloat, otherwise we
   // need to write the float value directly.
-
-  ShaderType shaderType = IsGLES ? ShaderType::GLSLES : ShaderType::GLSL;
-
-  rdcstr primIdGLSL;
-  if(glslVersion >= 330 || (IsGLES && glslVersion >= 300))
+  rdcstr glslSource;
+  if(glslVersion >= 330)
   {
-    primIdGLSL = GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_primid_frag), shaderType,
-                                    glslVersion);
+    glslSource = GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_primid_frag),
+                                    ShaderType::GLSL, glslVersion);
   }
   else
   {
-    primIdGLSL = GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_primid_frag), shaderType,
-                                    glslVersion, "#define INT_BITS_TO_FLOAT_NOT_SUPPORTED\n");
+    glslSource =
+        GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_primid_frag), ShaderType::GLSL,
+                           glslVersion, "#define INT_BITS_TO_FLOAT_NOT_SUPPORTED\n");
   }
-
   // SPIR-V shaders are always generated as desktop GL 430, for ease
-  rdcstr primIdSPIRV = GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_primid_frag),
+  rdcstr spirvSource = GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_primid_frag),
                                           ShaderType::GLSPIRV, 430);
-
-  rdcstr fixedColGLSL =
-      GenerateGLSLShader(GetEmbeddedResource(glsl_fixedcol_frag), shaderType, glslVersion);
-  rdcstr fixedColSPIRV =
-      GenerateGLSLShader(GetEmbeddedResource(glsl_fixedcol_frag), ShaderType::GLSPIRV, 430);
-
-  rdcstr msCopySource = GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_mscopy_comp),
-                                           shaderType, glslVersion);
+  rdcstr msCopySource =
+      GenerateGLSLShader(GetEmbeddedResource(glsl_pixelhistory_mscopy_comp), ShaderType::GLSL, 430);
   rdcstr msCopySourceDepth = GenerateGLSLShader(
-      GetEmbeddedResource(glsl_pixelhistory_mscopy_depth_comp), shaderType, glslVersion);
-
-  if(HasExt[ARB_gl_spirv])
-  {
-    resources.primitiveIdFragmentShaderSPIRV = CreateSPIRVShader(eGL_FRAGMENT_SHADER, primIdSPIRV);
-    resources.fixedColFragmentShaderSPIRV = CreateSPIRVShader(eGL_FRAGMENT_SHADER, fixedColSPIRV);
-  }
-
-  resources.primitiveIdFragmentShader = CreateShader(eGL_FRAGMENT_SHADER, primIdGLSL);
-  resources.fixedColFragmentShader = CreateShader(eGL_FRAGMENT_SHADER, fixedColGLSL);
+      GetEmbeddedResource(glsl_pixelhistory_mscopy_depth_comp), ShaderType::GLSL, 430);
+  resources.primitiveIdFragmentShaderSPIRV = CreateSPIRVShader(eGL_FRAGMENT_SHADER, spirvSource);
+  resources.primitiveIdFragmentShader = CreateShader(eGL_FRAGMENT_SHADER, glslSource);
   resources.msCopyComputeProgram = CreateCShaderProgram(msCopySource);
   resources.msCopyDepthComputeProgram = CreateCShaderProgram(msCopySourceDepth);
-
   return true;
 }
 
@@ -728,7 +614,6 @@ bool PixelHistoryDestroyResources(WrappedOpenGL *driver, const GLPixelHistoryRes
 {
   driver->glDeleteTextures(1, &resources.fullPrecisionColorImage);
   driver->glDeleteTextures(1, &resources.fullPrecisionDsImage);
-  driver->glDeleteFramebuffers(1, &resources.copySourceFramebuffer);
   driver->glDeleteFramebuffers(1, &resources.fullPrecisionFrameBuffer);
   driver->glDeleteShader(resources.primitiveIdFragmentShader);
   driver->glDeleteShader(resources.primitiveIdFragmentShaderSPIRV);
@@ -737,11 +622,10 @@ bool PixelHistoryDestroyResources(WrappedOpenGL *driver, const GLPixelHistoryRes
   driver->glDeleteBuffers(1, &resources.msCopyDstBuffer);
   driver->glDeleteBuffers(1, &resources.msCopyUniformBlockBuffer);
 
-  for(const std::pair<const GLuint, GLuint> &resourceProgram : resources.primIdPrograms)
+  for(const std::pair<const GLuint, GLuint> &resourceProgram : resources.programs)
+  {
     driver->glDeleteProgram(resourceProgram.second);
-
-  for(const std::pair<const GLuint, GLuint> &resourceProgram : resources.fixedColPrograms)
-    driver->glDeleteProgram(resourceProgram.second);
+  }
 
   for(const auto &pair : resources.copyFramebuffers)
   {
@@ -911,8 +795,7 @@ rdcarray<EventUsage> QueryModifyingEvents(WrappedOpenGL *driver, GLPixelHistoryR
         eGL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
     // Ignore the event if the framebuffer is attached to a different mip level than the one we're
     // interested in
-    if(objectType == eGL_TEXTURE && events[i].usage != ResourceUsage::Clear &&
-       !isDirectWrite(events[i].usage))
+    if(objectType == eGL_TEXTURE)
     {
       int attachedMipLevel;
       driver->glGetFramebufferAttachmentParameteriv(
@@ -929,20 +812,13 @@ rdcarray<EventUsage> QueryModifyingEvents(WrappedOpenGL *driver, GLPixelHistoryR
       GLRenderState state;
       state.FetchState(driver);
 
-      GLint currentProgram = 0;
-      driver->glGetIntegerv(eGL_CURRENT_PROGRAM, &currentProgram);
-
-      if(!IsGLES)
-        driver->glEnable(eGL_DEPTH_CLAMP);
-      if(HasExt[EXT_depth_bounds_test])
-        driver->glDisable(eGL_DEPTH_BOUNDS_TEST_EXT);
       driver->glDisable(eGL_DEPTH_TEST);
       driver->glDisable(eGL_STENCIL_TEST);
       driver->glDisable(eGL_CULL_FACE);
       driver->glDisable(eGL_SAMPLE_MASK);
+      driver->glDisable(eGL_DEPTH_CLAMP);
       driver->glEnable(eGL_SCISSOR_TEST);
       driver->glScissor(x, y, 1, 1);
-      driver->glUseProgram(GetFixedColProgram(driver, driver->GetReplay(), resources, currentProgram));
 
       driver->SetFetchCounters(true);
       driver->glBeginQuery(eGL_SAMPLES_PASSED, occlusionQueries[i]);
@@ -999,6 +875,29 @@ rdcarray<EventUsage> QueryModifyingEvents(WrappedOpenGL *driver, GLPixelHistoryR
   return modEvents;
 }
 
+void readPixelValuesMS(WrappedOpenGL *driver, const GLPixelHistoryResources &resources,
+                       const CopyFramebuffer &copyFramebuffer, int sampleIdx, int x, int y,
+                       rdcarray<PixelModification> &history, int historyIndex, bool readStencil)
+{
+  rdcarray<float> pixelValue;
+  pixelValue.resize(8);
+  CopyMSSample(driver, resources, copyFramebuffer, sampleIdx, x, y, pixelValue.data());
+
+  const int depthOffset = 4;
+  const int stencilOffset = 5;
+  ModificationValue &modValue = history[historyIndex].postMod;
+
+  for(int j = 0; j < 4; ++j)
+  {
+    modValue.col.floatValue[j] = pixelValue[j];
+  }
+  modValue.depth = pixelValue[depthOffset];
+  if(readStencil)
+  {
+    modValue.stencil = *(int *)&pixelValue[stencilOffset];
+  }
+}
+
 struct ScopedReadPixelsSanitiser
 {
   PixelUnpackState unpack;
@@ -1031,14 +930,12 @@ struct ScopedReadPixelsSanitiser
 
 void readPixelValues(WrappedOpenGL *driver, const GLPixelHistoryResources &resources,
                      const CopyFramebuffer &copyFramebuffer, rdcarray<PixelModification> &history,
-                     int historyIndex, ModType modType, bool readStencil, uint32_t numPixels)
+                     int historyIndex, bool readStencil, uint32_t numPixels, bool isIntegerColour)
 {
   ScopedReadPixelsSanitiser scope;
 
-  GLenum colourFormatType = getTextureFormatType(copyFramebuffer.format.colorFormat);
-
   driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, copyFramebuffer.framebufferId);
-  rdcarray<uint32_t> intColourValues;
+  rdcarray<int> intColourValues;
   intColourValues.resize(4 * numPixels);
   rdcarray<float> floatColourValues;
   floatColourValues.resize(4 * numPixels);
@@ -1046,12 +943,7 @@ void readPixelValues(WrappedOpenGL *driver, const GLPixelHistoryResources &resou
   depthValues.resize(numPixels);
   rdcarray<int> stencilValues;
   stencilValues.resize(numPixels);
-  if(colourFormatType == eGL_UNSIGNED_INT)
-  {
-    driver->glReadPixels(0, 0, GLint(numPixels), 1, eGL_RGBA_INTEGER, eGL_UNSIGNED_INT,
-                         (void *)intColourValues.data());
-  }
-  else if(colourFormatType == eGL_UNSIGNED_INT)
+  if(isIntegerColour)
   {
     driver->glReadPixels(0, 0, GLint(numPixels), 1, eGL_RGBA_INTEGER, eGL_INT,
                          (void *)intColourValues.data());
@@ -1082,9 +974,9 @@ void readPixelValues(WrappedOpenGL *driver, const GLPixelHistoryResources &resou
 
     for(int j = 0; j < 4; ++j)
     {
-      if(colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_UNSIGNED_INT)
+      if(isIntegerColour)
       {
-        modValue.col.uintValue[j] = intColourValues[i * 4 + j];
+        modValue.col.intValue[j] = intColourValues[i * 4 + j];
       }
       else
       {
@@ -1092,276 +984,137 @@ void readPixelValues(WrappedOpenGL *driver, const GLPixelHistoryResources &resou
       }
     }
 
-    const ActionDescription *action = driver->GetAction(history[historyIndex + i].eventId);
-    if(action->flags & ActionFlags::ClearColor)
+    modValue.depth = depthValues[i];
+    if(readStencil)
     {
-      modValue.depth = -1;
-      modValue.stencil = -1;
+      modValue.stencil = stencilValues[i];
     }
-    else if(history[historyIndex + i].directShaderWrite && !resources.depthTarget)
+    else
     {
-      modValue.depth = -1;
+      // if this isn't the last fragment in this event, the stencil is unavailable
       if(historyIndex + i + 1 < history.size() &&
          history[historyIndex + i].eventId == history[historyIndex + i + 1].eventId)
         modValue.stencil = -2;
       else
-        modValue.stencil = -1;
-    }
-    else
-    {
-      if(action->flags & ActionFlags::ClearDepthStencil)
-      {
-        RDCEraseEl(modValue.col);
-      }
-
-      modValue.depth = depthValues[i];
-      if(readStencil)
-      {
-        modValue.stencil = stencilValues[i];
-      }
-      else
-      {
-        // if this isn't the last fragment in this event, the postmod stencil is unavailable
-        if(modType == ModType::PostMod && historyIndex + i + 1 < history.size() &&
-           history[historyIndex + i].eventId == history[historyIndex + i + 1].eventId)
-          modValue.stencil = -2;
-        // if this isn't the first fragment in this event, the premod stencil is unavailable
-        else if(modType == ModType::PreMod && historyIndex + i > 0 &&
-                history[historyIndex + i].eventId == history[historyIndex + i - 1].eventId)
-          modValue.stencil = -2;
-        else
-          modValue.stencil = modType == ModType::PreMod ? history[historyIndex + i].preMod.stencil
-                                                        : history[historyIndex + i].postMod.stencil;
-      }
+        modValue.stencil = history[historyIndex + i].postMod.stencil;
     }
 
-    if(modType == ModType::PreMod)
-      history[historyIndex + i].preMod = modValue;
-    else
-      history[historyIndex + i].postMod = modValue;
+    history[historyIndex + i].postMod = modValue;
   }
 }
 
-void readPixelValuesMS(WrappedOpenGL *driver, const GLPixelHistoryResources &resources,
-                       const CopyFramebuffer &copyFramebuffer, int sampleIdx, int x, int y,
-                       rdcarray<PixelModification> &history, size_t historyIndex, ModType modType,
-                       bool readStencil)
+void QueryPostModPixelValues(WrappedOpenGL *driver, GLPixelHistoryResources &resources,
+                             const rdcarray<EventUsage> &modEvents, int x, int y,
+                             rdcarray<PixelModification> &history, uint32_t numSamples,
+                             uint32_t sampleIndex)
 {
-  rdcarray<float> pixelValue;
-  pixelValue.resize(8);
-  CopyMSSample(driver, resources, copyFramebuffer, sampleIdx, x, y, pixelValue.data());
-
-  const int depthOffset = 4;
-  const int stencilOffset = 5;
-  ModificationValue &modValue =
-      modType == ModType::PreMod ? history[historyIndex].preMod : history[historyIndex].postMod;
-
-  for(int j = 0; j < 4; ++j)
-  {
-    modValue.col.floatValue[j] = pixelValue[j];
-  }
-
-  const ActionDescription *action = driver->GetAction(history[historyIndex].eventId);
-  if(action->flags & ActionFlags::ClearColor)
-  {
-    modValue.depth = -1;
-    modValue.stencil = -1;
-  }
-  else if(history[historyIndex].directShaderWrite && !resources.depthTarget)
-  {
-    modValue.depth = -1;
-    if(historyIndex + 1 < history.size() &&
-       history[historyIndex].eventId == history[historyIndex + 1].eventId)
-      modValue.stencil = -2;
-    else
-      modValue.stencil = -1;
-  }
-  else
-  {
-    if(action->flags & ActionFlags::ClearDepthStencil)
-    {
-      RDCEraseEl(modValue.col);
-    }
-
-    modValue.depth = pixelValue[depthOffset];
-    if(readStencil)
-    {
-      modValue.stencil = *(int *)&pixelValue[stencilOffset];
-    }
-    else
-    {
-      // if this isn't the last fragment in this event, the postmod stencil is unavailable
-      if(modType == ModType::PostMod && historyIndex + 1 < history.size() &&
-         history[historyIndex].eventId == history[historyIndex + 1].eventId)
-        modValue.stencil = -2;
-      // if this isn't the first fragment in this event, the premod stencil is unavailable
-      else if(modType == ModType::PreMod && historyIndex > 0 &&
-              history[historyIndex].eventId == history[historyIndex - 1].eventId)
-        modValue.stencil = -2;
-    }
-  }
-}
-
-void QueryPrePostModPixelValues(WrappedOpenGL *driver, GLPixelHistoryResources &resources,
-                                const rdcarray<EventUsage> &modEvents, int x, int y,
-                                rdcarray<PixelModification> &history, uint32_t numSamples,
-                                uint32_t sampleIndex)
-{
-  GLMarkerRegion region("QueryPrePostModPixelValues");
+  GLMarkerRegion region("QueryPostModPixelValues");
   driver->ReplayLog(0, modEvents[0].eventId, eReplay_WithoutDraw);
-  CopyFramebuffer premodCopyFramebuffer = {};
-  premodCopyFramebuffer.framebufferId = ~0u;
-  CopyFramebuffer postmodCopyFramebuffer = {};
-  postmodCopyFramebuffer.framebufferId = ~0u;
-  int preModLastIdx = 0, postModLastIdx = 0;
+  CopyFramebuffer copyFramebuffer;
+  RDCEraseEl(copyFramebuffer);
+  copyFramebuffer.framebufferId = ~0u;
+  int lastHistoryIdx = 0;
+
+  // get the premod of the first event
+  {
+    GLint savedReadFramebuffer, savedDrawFramebuffer;
+    driver->glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFramebuffer);
+    driver->glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, &savedReadFramebuffer);
+
+    uint32_t colIdx = getFramebufferColIndex(driver, resources.target);
+
+    CopyFramebuffer preModFramebuffer = getCopyFramebuffer(
+        driver, colIdx, resources.copyFramebuffers, numSamples, int(modEvents.size()));
+    GLenum colourFormatType = getTextureFormatType(preModFramebuffer.format.colorFormat);
+    bool integerColour = colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT;
+
+    driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, preModFramebuffer.framebufferId);
+    driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
+
+    rdcarray<PixelModification> tmp;
+    tmp.resize(1);
+
+    GLenum savedReadBuffer;
+    driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
+
+    driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
+    SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver), eGL_NEAREST);
+    if(numSamples > 1)
+      readPixelValuesMS(driver, resources, preModFramebuffer, sampleIndex, 0, 0, tmp, 0, true);
+    else
+      readPixelValues(driver, resources, preModFramebuffer, tmp, 0, true, 1, integerColour);
+
+    driver->glReadBuffer(savedReadBuffer);
+
+    history[0].preMod = tmp[0].postMod;
+
+    // restore the capture's framebuffer
+    driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
+    driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedReadFramebuffer);
+  }
 
   for(size_t i = 0; i < modEvents.size(); i++)
   {
-    uint32_t colIdx = getFramebufferColIndex(driver, resources.target);
-
-    {
-      GLint savedReadFramebuffer, savedDrawFramebuffer;
-      driver->glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFramebuffer);
-      driver->glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, &savedReadFramebuffer);
-
-      GLuint copySourceFramebuffer = savedDrawFramebuffer;
-
-      if(isDirectWrite(modEvents[i].usage))
-      {
-        copySourceFramebuffer = resources.copySourceFramebuffer;
-
-        // bind this as the framebuffer so the below code which expects to duplicate based on bound
-        // framebuffer will work. We've already saved teh real one
-        driver->glBindFramebuffer(eGL_FRAMEBUFFER, copySourceFramebuffer);
-      }
-
-      if(numSamples > 1)
-      {
-        premodCopyFramebuffer =
-            getCopyFramebuffer(driver, colIdx, resources.copyFramebuffers, ModType::PreMod,
-                               numSamples, int(modEvents.size()));
-
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, premodCopyFramebuffer.framebufferId);
-        driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, copySourceFramebuffer);
-
-        GLenum savedReadBuffer;
-        driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-        driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
-        readPixelValuesMS(driver, resources, premodCopyFramebuffer, sampleIndex, 0, 0, history, i,
-                          ModType::PreMod, true);
-
-        driver->glReadBuffer(savedReadBuffer);
-      }
-      else
-      {
-        CopyFramebuffer newCopyFramebuffer =
-            getCopyFramebuffer(driver, colIdx, resources.copyFramebuffers, ModType::PreMod,
-                               1 /*single sampled*/, int(modEvents.size()));
-        if(newCopyFramebuffer.framebufferId != premodCopyFramebuffer.framebufferId)
-        {
-          if(premodCopyFramebuffer.framebufferId != ~0u)
-          {
-            readPixelValues(driver, resources, premodCopyFramebuffer, history, preModLastIdx,
-                            ModType::PreMod, true, (uint32_t)(i - preModLastIdx));
-          }
-          preModLastIdx = int(i);
-        }
-
-        premodCopyFramebuffer = newCopyFramebuffer;
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, premodCopyFramebuffer.framebufferId);
-        driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, copySourceFramebuffer);
-
-        GLenum savedReadBuffer;
-        driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-        driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, GLint(i) - preModLastIdx, 0,
-                            GLint(i) + 1 - preModLastIdx, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
-
-        driver->glReadBuffer(savedReadBuffer);
-      }
-
-      // restore the capture's framebuffer
-      driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
-      driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedReadFramebuffer);
-    }
-
     driver->ReplayLog(modEvents[i].eventId, modEvents[i].eventId, eReplay_OnlyDraw);
 
+    GLint savedReadFramebuffer, savedDrawFramebuffer;
+    driver->glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFramebuffer);
+    driver->glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, &savedReadFramebuffer);
+
+    uint32_t colIdx = getFramebufferColIndex(driver, resources.target);
+
+    if(numSamples > 1)
     {
-      GLint savedReadFramebuffer, savedDrawFramebuffer;
-      driver->glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFramebuffer);
-      driver->glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, &savedReadFramebuffer);
+      copyFramebuffer = getCopyFramebuffer(driver, colIdx, resources.copyFramebuffers, numSamples,
+                                           int(modEvents.size()));
 
-      GLuint copySourceFramebuffer = savedDrawFramebuffer;
+      driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
+      driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
 
-      if(isDirectWrite(modEvents[i].usage))
-      {
-        copySourceFramebuffer = resources.copySourceFramebuffer;
+      GLenum savedReadBuffer;
+      driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
 
-        // bind this as the framebuffer so the below code which expects to duplicate based on bound
-        // framebuffer will work. We've already saved teh real one
-        driver->glBindFramebuffer(eGL_FRAMEBUFFER, copySourceFramebuffer);
-      }
+      driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
+      SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
+                          eGL_NEAREST);
+      readPixelValuesMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0, history, int(i), true);
 
-      if(numSamples > 1)
-      {
-        postmodCopyFramebuffer =
-            getCopyFramebuffer(driver, colIdx, resources.copyFramebuffers, ModType::PostMod,
-                               numSamples, int(modEvents.size()));
-
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, postmodCopyFramebuffer.framebufferId);
-        driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, copySourceFramebuffer);
-
-        GLenum savedReadBuffer;
-        driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-        driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
-        readPixelValuesMS(driver, resources, postmodCopyFramebuffer, sampleIndex, 0, 0, history, i,
-                          ModType::PostMod, true);
-
-        driver->glReadBuffer(savedReadBuffer);
-      }
-      else
-      {
-        CopyFramebuffer newCopyFramebuffer =
-            getCopyFramebuffer(driver, colIdx, resources.copyFramebuffers, ModType::PostMod,
-                               1 /*single sampled*/, int(modEvents.size()));
-        if(newCopyFramebuffer.framebufferId != postmodCopyFramebuffer.framebufferId)
-        {
-          if(postmodCopyFramebuffer.framebufferId != ~0u)
-          {
-            readPixelValues(driver, resources, postmodCopyFramebuffer, history, postModLastIdx,
-                            ModType::PostMod, true, (uint32_t)(i - postModLastIdx));
-          }
-          postModLastIdx = int(i);
-        }
-
-        postmodCopyFramebuffer = newCopyFramebuffer;
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, postmodCopyFramebuffer.framebufferId);
-        driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, copySourceFramebuffer);
-
-        GLenum savedReadBuffer;
-        driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-        driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, GLint(i) - postModLastIdx, 0,
-                            GLint(i) + 1 - postModLastIdx, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
-
-        driver->glReadBuffer(savedReadBuffer);
-      }
-
-      // restore the capture's framebuffer
-      driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
-      driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedReadFramebuffer);
+      driver->glReadBuffer(savedReadBuffer);
     }
+    else
+    {
+      CopyFramebuffer newCopyFramebuffer = getCopyFramebuffer(
+          driver, colIdx, resources.copyFramebuffers, 1 /*single sampled*/, int(modEvents.size()));
+      GLenum colourFormatType = getTextureFormatType(copyFramebuffer.format.colorFormat);
+      bool integerColour = colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT;
+      if(newCopyFramebuffer.framebufferId != copyFramebuffer.framebufferId)
+      {
+        if(copyFramebuffer.framebufferId != ~0u)
+        {
+          readPixelValues(driver, resources, copyFramebuffer, history, lastHistoryIdx, true,
+                          (uint32_t)(i - lastHistoryIdx), integerColour);
+        }
+        lastHistoryIdx = int(i);
+      }
+
+      copyFramebuffer = newCopyFramebuffer;
+      driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
+      driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
+
+      GLenum savedReadBuffer;
+      driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
+
+      driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
+      SafeBlitFramebuffer(x, y, x + 1, y + 1, GLint(i) - lastHistoryIdx, 0,
+                          GLint(i) + 1 - lastHistoryIdx, 1, getFramebufferCopyMask(driver),
+                          eGL_NEAREST);
+
+      driver->glReadBuffer(savedReadBuffer);
+    }
+
+    // restore the capture's framebuffer
+    driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
+    driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedReadFramebuffer);
 
     if(i < modEvents.size() - 1)
     {
@@ -1369,20 +1122,18 @@ void QueryPrePostModPixelValues(WrappedOpenGL *driver, GLPixelHistoryResources &
     }
   }
 
-  if(numSamples == 1 && premodCopyFramebuffer.framebufferId != 0u)
+  if(numSamples == 1 && copyFramebuffer.framebufferId != 0u)
   {
-    readPixelValues(driver, resources, premodCopyFramebuffer, history, preModLastIdx,
-                    ModType::PreMod, true, int(modEvents.size()) - preModLastIdx);
-  }
-  if(numSamples == 1 && postmodCopyFramebuffer.framebufferId != 0u)
-  {
-    readPixelValues(driver, resources, postmodCopyFramebuffer, history, postModLastIdx,
-                    ModType::PostMod, true, int(modEvents.size()) - postModLastIdx);
+    GLenum colourFormatType = getTextureFormatType(copyFramebuffer.format.colorFormat);
+    bool integerColour = colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT;
+    readPixelValues(driver, resources, copyFramebuffer, history, lastHistoryIdx, true,
+                    int(modEvents.size()) - lastHistoryIdx, integerColour);
   }
 }
 
-ModificationValue readShaderOutMS(WrappedOpenGL *driver, const GLPixelHistoryResources &resources,
-                                  const CopyFramebuffer &copyFramebuffer, int sampleIdx, int x, int y)
+void readShaderOutMS(WrappedOpenGL *driver, const GLPixelHistoryResources &resources,
+                     const CopyFramebuffer &copyFramebuffer, int sampleIdx, int x, int y,
+                     rdcarray<PixelModification> &history, int historyIndex)
 {
   rdcarray<float> pixelValue;
   pixelValue.resize(8);
@@ -1398,41 +1149,58 @@ ModificationValue readShaderOutMS(WrappedOpenGL *driver, const GLPixelHistoryRes
   }
   modValue.depth = pixelValue[depthOffset];
   modValue.stencil = *(int *)&pixelValue[stencilOffset];
-  return modValue;
+  history[historyIndex].shaderOut = modValue;
 }
 
-struct EventFragmentData
+GLenum getShaderOutColourFormat(GLenum originalColourFormat)
 {
-  std::map<uint32_t, uint32_t> eventFragments;
-  std::map<uint32_t, GLbitfield> eventFBMask;
-  rdcarray<uint32_t> fragmentsClipped;
-};
+  switch(originalColourFormat)
+  {
+    case eGL_RGBA8I:
+    case eGL_RGB8I:
+    case eGL_RG8I:
+    case eGL_R8I: return eGL_RGBA8I;
+    case eGL_RGBA8UI:
+    case eGL_RGB8UI:
+    case eGL_RG8UI:
+    case eGL_R8UI: return eGL_RGBA8UI;
+    case eGL_RGBA16I:
+    case eGL_RGB16I:
+    case eGL_RG16I:
+    case eGL_R16I: return eGL_RGBA16I;
+    case eGL_RGBA16UI:
+    case eGL_RGB16UI:
+    case eGL_RG16UI:
+    case eGL_R16UI: return eGL_RGBA16UI;
+    case eGL_RGBA32I:
+    case eGL_RGB32I:
+    case eGL_RG32I:
+    case eGL_R32I: return eGL_RGBA32I;
+    case eGL_RGBA32UI:
+    case eGL_RGB32UI:
+    case eGL_RG32UI:
+    case eGL_R32UI: return eGL_RGBA32UI;
+    case eGL_RGB10_A2UI: return eGL_RGB10_A2UI;
+    default: RDCERR("Unexpected colour format: %d", originalColourFormat); return eGL_NONE;
+  }
+}
 
-// This function gets:
-//  - calculates the number of fragments per event
-//  - per-event whether some fragments were discarded
-//  - a per-event mask of which of colour/depth is bound and valid
-//  - reads the shader output values per event (per-fragment shader output is fetched later)
-EventFragmentData QueryNumFragmentsByEvent(WrappedOpenGL *driver, GLPixelHistoryResources &resources,
-                                           const rdcarray<EventUsage> &modEvents,
-                                           rdcarray<PixelModification> &history, int x, int y,
-                                           uint32_t numSamples, uint32_t sampleIndex,
-                                           uint32_t width, uint32_t height)
+// This function a) calculates the number of fagments per event
+//           and b) calculates the shader output values per event
+std::map<uint32_t, uint32_t> QueryNumFragmentsByEvent(
+    WrappedOpenGL *driver, GLPixelHistoryResources &resources,
+    const rdcarray<EventUsage> &modEvents, rdcarray<PixelModification> &history, int x, int y,
+    uint32_t numSamples, uint32_t sampleIndex, uint32_t width, uint32_t height)
 {
   GLMarkerRegion region("QueryNumFragmentsByEvent");
   driver->ReplayLog(0, modEvents[0].eventId, eReplay_WithoutDraw);
 
-  EventFragmentData ret;
-  std::map<uint32_t, uint32_t> &eventFragments = ret.eventFragments;
-  std::map<uint32_t, GLbitfield> &eventFBMask = ret.eventFBMask;
-  rdcarray<uint32_t> &fragmentsClipped = ret.fragmentsClipped;
+  std::map<uint32_t, uint32_t> eventFragments;
 
   for(size_t i = 0; i < modEvents.size(); ++i)
   {
     GLRenderState state;
     state.FetchState(driver);
-
-    eventFBMask[modEvents[i].eventId] = getFramebufferCopyMask(driver);
 
     uint32_t colIdx = getFramebufferColIndex(driver, resources.target);
 
@@ -1442,9 +1210,9 @@ EventFragmentData QueryNumFragmentsByEvent(WrappedOpenGL *driver, GLPixelHistory
 
     if(colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
     {
-      shaderOutColourFormat = colourFormatType == eGL_UNSIGNED_INT ? eGL_RGBA32UI : eGL_RGBA32I;
-      FramebufferKey key = {ModType::PostMod, shaderOutColourFormat, eGL_DEPTH32F_STENCIL8,
-                            eGL_DEPTH32F_STENCIL8, numSamples};
+      shaderOutColourFormat = getShaderOutColourFormat(colourFormat);
+      FramebufferKey key = {shaderOutColourFormat, eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8,
+                            numSamples};
       ShaderOutFramebuffer framebuffer =
           getShaderOutFramebuffer(driver, colIdx, resources, key, width, height);
       driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, framebuffer.framebufferId);
@@ -1484,8 +1252,6 @@ EventFragmentData QueryNumFragmentsByEvent(WrappedOpenGL *driver, GLPixelHistory
     driver->glEnable(eGL_STENCIL_TEST);
     // depth test enable
     driver->glEnable(eGL_DEPTH_TEST);
-    if(HasExt[EXT_depth_bounds_test])
-      driver->glDisable(eGL_DEPTH_BOUNDS_TEST_EXT);
     driver->glDepthFunc(eGL_ALWAYS);
     driver->glDepthMask(GL_TRUE);
     driver->glDisable(eGL_BLEND);
@@ -1500,125 +1266,49 @@ EventFragmentData QueryNumFragmentsByEvent(WrappedOpenGL *driver, GLPixelHistory
     driver->ReplayLog(modEvents[i].eventId, modEvents[i].eventId, eReplay_OnlyDraw);
 
     uint32_t numFragments = 0;
-    uint32_t numFragmentsWithoutDiscard = 0;
-
-    if(modEvents[i].usage != ResourceUsage::Clear && !isDirectWrite(modEvents[i].usage))
+    if(numSamples == 1)
     {
-      if(numSamples == 1)
+      ScopedReadPixelsSanitiser scope;
+
+      ModificationValue modValue;
+      if(colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
       {
-        ScopedReadPixelsSanitiser scope;
-
-        ModificationValue modValue;
-        if(colourFormatType == eGL_UNSIGNED_INT)
-        {
-          driver->glReadPixels(x, y, 1, 1, eGL_RGBA_INTEGER, eGL_UNSIGNED_INT,
-                               (void *)modValue.col.uintValue.data());
-        }
-        else if(colourFormatType == eGL_INT)
-        {
-          driver->glReadPixels(x, y, 1, 1, eGL_RGBA_INTEGER, eGL_INT,
-                               (void *)modValue.col.intValue.data());
-        }
-        else
-        {
-          driver->glReadPixels(x, y, 1, 1, eGL_RGBA, eGL_FLOAT,
-                               (void *)modValue.col.floatValue.data());
-        }
-        driver->glReadPixels(x, y, 1, 1, eGL_DEPTH_COMPONENT, eGL_FLOAT, (void *)&modValue.depth);
-        driver->glReadPixels(x, y, 1, 1, eGL_STENCIL_INDEX, eGL_UNSIGNED_INT, (void *)&numFragments);
-
-        // We're not reading the stencil value here, so use the postMod instead.
-        // Shaders don't actually output stencil values, those are determined by the stencil op.
-        modValue.stencil = history[i].postMod.stencil;
-
-        history[i].shaderOut = modValue;
-
-        if(resources.depthTarget)
-          RDCEraseEl(history[i].shaderOut.col);
+        driver->glReadPixels(x, y, 1, 1, eGL_RGBA_INTEGER, eGL_INT,
+                             (void *)modValue.col.intValue.data());
       }
       else
       {
-        GLenum copyFramebufferColourFormat =
-            (colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
-                ? shaderOutColourFormat
-                : eGL_RGBA32F;
-
-        const CopyFramebuffer &copyFramebuffer = getCopyFramebuffer(
-            driver, resources.copyFramebuffers, ModType::PostMod, numSamples, int(modEvents.size()),
-            eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, copyFramebufferColourFormat);
-
-        GLint savedDrawFramebuffer;
-        driver->glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFramebuffer);
-
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
-
-        GLenum savedReadBuffer;
-        driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-        glReadBuffer(eGL_COLOR_ATTACHMENT0);
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
-
-        driver->glReadBuffer(savedReadBuffer);
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
-
-        history[i].shaderOut = readShaderOutMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0);
-        numFragments = history[i].shaderOut.stencil;
-        history[i].shaderOut.stencil = history[i].postMod.stencil;
-
-        if(resources.depthTarget)
-          RDCEraseEl(history[i].shaderOut.col);
+        driver->glReadPixels(x, y, 1, 1, eGL_RGBA, eGL_FLOAT, (void *)modValue.col.floatValue.data());
       }
+      driver->glReadPixels(x, y, 1, 1, eGL_DEPTH_COMPONENT, eGL_FLOAT, (void *)&modValue.depth);
+      driver->glReadPixels(x, y, 1, 1, eGL_STENCIL_INDEX, eGL_UNSIGNED_INT, (void *)&numFragments);
 
-      GLint currentProgram = 0;
-      driver->glGetIntegerv(eGL_CURRENT_PROGRAM, &currentProgram);
+      // We're not reading the stencil value here, so use the postMod instead.
+      // Shaders don't actually output stencil values, those are determined by the stencil op.
+      modValue.stencil = history[i].postMod.stencil;
 
-      // re-run draw with program that outputs a fixed colour to count how many fragments we get without discards
-      driver->glUseProgram(GetFixedColProgram(driver, driver->GetReplay(), resources, currentProgram));
-      driver->glClear(eGL_STENCIL_BUFFER_BIT | eGL_COLOR_BUFFER_BIT | eGL_DEPTH_BUFFER_BIT);
-      driver->ReplayLog(modEvents[i].eventId, modEvents[i].eventId, eReplay_OnlyDraw);
-
-      if(numSamples == 1)
-      {
-        driver->glReadPixels(x, y, 1, 1, eGL_STENCIL_INDEX, eGL_UNSIGNED_INT,
-                             (void *)&numFragmentsWithoutDiscard);
-      }
-      else
-      {
-        GLenum copyFramebufferColourFormat =
-            (colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
-                ? shaderOutColourFormat
-                : eGL_RGBA32F;
-
-        const CopyFramebuffer &copyFramebuffer = getCopyFramebuffer(
-            driver, resources.copyFramebuffers, ModType::PostMod, numSamples, int(modEvents.size()),
-            eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, copyFramebufferColourFormat);
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
-        glReadBuffer(eGL_COLOR_ATTACHMENT0);
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
-        numFragmentsWithoutDiscard =
-            readShaderOutMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0).stencil;
-      }
+      history[i].shaderOut = modValue;
     }
-
-    if(modEvents[i].usage == ResourceUsage::Clear)
+    else
     {
-      history[i].shaderOut = history[i].postMod;
-      if(resources.depthTarget)
-        RDCEraseEl(history[i].shaderOut.col);
+      GLenum copyFramebufferColourFormat =
+          (colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
+              ? shaderOutColourFormat
+              : eGL_RGBA32F;
+
+      const CopyFramebuffer &copyFramebuffer = getCopyFramebuffer(
+          driver, resources.copyFramebuffers, numSamples, int(modEvents.size()),
+          eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, copyFramebufferColourFormat);
+      driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
+      glReadBuffer(eGL_COLOR_ATTACHMENT0);
+      SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
+                          eGL_NEAREST);
+      readShaderOutMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0, history, int(i));
+      numFragments = history[i].shaderOut.stencil;
+      history[i].shaderOut.stencil = history[i].postMod.stencil;
     }
 
-    if(isDirectWrite(modEvents[i].usage))
-    {
-      RDCEraseEl(history[i].shaderOut);
-      history[i].shaderOut.depth = -1;
-      history[i].shaderOut.stencil = -1;
-    }
-
-    eventFragments.emplace(modEvents[i].eventId, numFragmentsWithoutDiscard);
-    if(numFragmentsWithoutDiscard > numFragments)
-      fragmentsClipped.push_back(modEvents[i].eventId);
+    eventFragments.emplace(modEvents[i].eventId, numFragments);
 
     state.ApplyState(driver);
 
@@ -1628,7 +1318,7 @@ EventFragmentData QueryNumFragmentsByEvent(WrappedOpenGL *driver, GLPixelHistory
     }
   }
 
-  return ret;
+  return eventFragments;
 }
 
 bool QueryScissorTest(WrappedOpenGL *driver, GLPixelHistoryResources &resources,
@@ -1657,23 +1347,6 @@ bool QueryTest(WrappedOpenGL *driver, GLPixelHistoryResources &resources, const 
   if(test < OpenGLTest::DepthTest)
   {
     driver->glDisable(eGL_DEPTH_TEST);
-  }
-  if(test < OpenGLTest::DepthClamp)
-  {
-    if(!IsGLES)
-      driver->glEnable(eGL_DEPTH_CLAMP);
-  }
-  if(test < OpenGLTest::DepthBounds)
-  {
-    if(HasExt[EXT_depth_bounds_test])
-      driver->glDisable(eGL_DEPTH_BOUNDS_TEST_EXT);
-  }
-  if(test < OpenGLTest::Discard)
-  {
-    GLint currentProgram = 0;
-    driver->glGetIntegerv(eGL_CURRENT_PROGRAM, &currentProgram);
-
-    driver->glUseProgram(GetFixedColProgram(driver, driver->GetReplay(), resources, currentProgram));
   }
   if(test < OpenGLTest::StencilTest)
   {
@@ -1758,11 +1431,8 @@ void QueryFailedTests(WrappedOpenGL *driver, GLPixelHistoryResources &resources,
     // ensure that history objects are one-to-one mapped with modEvent objects
     RDCASSERT(history[i].eventId == modEvents[i].eventId);
     history[i].scissorClipped = failedTest == OpenGLTest::ScissorTest;
-    history[i].depthClipped = failedTest == OpenGLTest::DepthClamp;
-    history[i].depthBoundsFailed = failedTest == OpenGLTest::DepthBounds;
     history[i].stencilTestFailed = failedTest == OpenGLTest::StencilTest;
     history[i].depthTestFailed = failedTest == OpenGLTest::DepthTest;
-    history[i].shaderDiscarded = failedTest == OpenGLTest::Discard;
     history[i].backfaceCulled = failedTest == OpenGLTest::FaceCulling;
     history[i].sampleMasked = failedTest == OpenGLTest::SampleMask;
   }
@@ -1772,16 +1442,10 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
                                GLPixelHistoryResources &resources,
                                const rdcarray<EventUsage> &modEvents, int x, int y,
                                rdcarray<PixelModification> &history,
-                               const EventFragmentData &eventFragmentData, uint32_t numSamples,
-                               uint32_t sampleIndex, uint32_t width, uint32_t height)
+                               const std::map<uint32_t, uint32_t> &eventFragments,
+                               uint32_t numSamples, uint32_t sampleIndex, uint32_t width,
+                               uint32_t height)
 {
-  const std::map<uint32_t, uint32_t> &eventFragments = eventFragmentData.eventFragments;
-  const rdcarray<uint32_t> &fragmentsClipped = eventFragmentData.fragmentsClipped;
-
-  // this is used to track if any previous fragments in the current draw
-  // discarded. If so, the stencil count will be off-by-one
-  uint32_t discardedOffset = 0;
-
   GLMarkerRegion region("QueryShaderOutPerFragment");
   driver->ReplayLog(0, modEvents[0].eventId, eReplay_WithoutDraw);
   for(size_t i = 0; i < modEvents.size(); ++i)
@@ -1798,11 +1462,6 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
       continue;
     }
 
-    bool someFragsClipped = fragmentsClipped.contains(modEvents[i].eventId);
-
-    // reset discarded offset every event
-    discardedOffset = 0;
-
     GLRenderState state;
     state.FetchState(driver);
 
@@ -1815,8 +1474,6 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
     driver->glClearStencil(0);
 
     driver->glEnable(eGL_DEPTH_TEST);
-    if(HasExt[EXT_depth_bounds_test])
-      driver->glDisable(eGL_DEPTH_BOUNDS_TEST_EXT);
     driver->glDepthFunc(eGL_ALWAYS);
     driver->glDepthMask(GL_TRUE);
     driver->glDisable(eGL_BLEND);
@@ -1861,123 +1518,13 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
     for(size_t j = 0; j < RDCMAX(numFragments, 1u); ++j)
     {
       //  Set the stencil function so only jth fragment will pass.
-      driver->glStencilFunc(eGL_EQUAL, (int)j - discardedOffset, 0xff);
-
-      // if some fragments clipped in this draw, we need to check to see if this
-      // primitive ID was one of the ones that clipped.
-      // Currently the way we do that is by drawing only that primitive
-      // and doing an occlusion query
-      if(someFragsClipped)
-      {
-        driver->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-        driver->glDepthMask(GL_FALSE);
-        driver->glDisable(eGL_STENCIL_TEST);
-
-        GLuint samplesPassedQuery;
-        driver->glGenQueries(1, &samplesPassedQuery);
-
-        driver->SetFetchCounters(true);
-        driver->glBeginQuery(eGL_ANY_SAMPLES_PASSED, samplesPassedQuery);
-
-        const ActionDescription *action = driver->GetAction(modEvents[i].eventId);
-        const GLDrawParams &drawParams = driver->GetDrawParameters(modEvents[i].eventId);
-
-        Topology topo = drawParams.topo;
-        GLenum glTopo = MakeGLPrimitiveTopology(topo);
-        uint32_t numVerts = RENDERDOC_NumVerticesPerPrimitive(topo);
-
-        if(action->flags & ActionFlags::Indexed)
-        {
-          GLenum idxType = eGL_UNSIGNED_INT;
-          if(drawParams.indexWidth == 1)
-            idxType = eGL_UNSIGNED_BYTE;
-          else if(drawParams.indexWidth == 2)
-            idxType = eGL_UNSIGNED_SHORT;
-
-          void *indexOffset =
-              (void *)(uintptr_t)(action->indexOffset +
-                                  RENDERDOC_VertexOffset(topo, historyIndex->primitiveID));
-
-          if(action->flags & ActionFlags::Instanced)
-          {
-            if(HasExt[ARB_base_instance])
-            {
-              // TODO once pixel history distinguishes between instances, draw only the instance for
-              // this fragment
-              driver->glDrawElementsInstancedBaseVertexBaseInstance(
-                  glTopo, numVerts, idxType, indexOffset, RDCMAX(1U, action->numInstances),
-                  action->baseVertex, action->instanceOffset);
-            }
-            else
-            {
-              driver->glDrawElementsInstancedBaseVertex(glTopo, numVerts, idxType, indexOffset,
-                                                        RDCMAX(1U, action->numInstances),
-                                                        action->baseVertex);
-            }
-          }
-          else
-          {
-            driver->glDrawElementsBaseVertex(glTopo, numVerts, idxType, indexOffset,
-                                             action->baseVertex);
-          }
-        }
-        else
-        {
-          uint32_t vertexOffset =
-              action->vertexOffset + RENDERDOC_VertexOffset(topo, historyIndex->primitiveID);
-
-          if(action->flags & ActionFlags::Instanced)
-          {
-            if(HasExt[ARB_base_instance])
-            {
-              // TODO once pixel history distinguishes between instances, draw only the instance for
-              // this fragment
-              driver->glDrawArraysInstancedBaseInstance(glTopo, vertexOffset, numVerts,
-                                                        RDCMAX(1U, action->numInstances),
-                                                        action->instanceOffset);
-            }
-            else
-            {
-              driver->glDrawArraysInstanced(glTopo, vertexOffset, numVerts,
-                                            RDCMAX(1U, action->numInstances));
-            }
-          }
-          else
-          {
-            driver->glDrawArrays(glTopo, vertexOffset, numVerts);
-          }
-        }
-
-        driver->glEndQuery(eGL_ANY_SAMPLES_PASSED);
-        driver->SetFetchCounters(false);
-        int anySamplesPassed = GL_FALSE;
-        driver->glGetQueryObjectiv(samplesPassedQuery, eGL_QUERY_RESULT, &anySamplesPassed);
-        driver->glDeleteQueries(1, &samplesPassedQuery);
-
-        driver->glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        driver->glDepthMask(GL_TRUE);
-        driver->glEnable(eGL_STENCIL_TEST);
-
-        if(anySamplesPassed == GL_FALSE)
-        {
-          historyIndex->shaderDiscarded = true;
-          discardedOffset++;
-          RDCEraseEl(historyIndex->shaderOut);
-          historyIndex->shaderOut.depth = -1;
-          if(historyIndex + 1 < history.end() && (historyIndex + 1)->eventId == historyIndex->eventId)
-            historyIndex->postMod.stencil = -2;
-          else
-            historyIndex->postMod.stencil = -1;
-          historyIndex++;
-          continue;
-        }
-      }
+      driver->glStencilFunc(eGL_EQUAL, (int)j, 0xff);
 
       if(colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
       {
-        shaderOutColourFormat = colourFormatType == eGL_UNSIGNED_INT ? eGL_RGBA32UI : eGL_RGBA32I;
-        FramebufferKey key = {ModType::PostMod, shaderOutColourFormat, eGL_DEPTH32F_STENCIL8,
-                              eGL_DEPTH32F_STENCIL8, numSamples};
+        shaderOutColourFormat = getShaderOutColourFormat(colourFormat);
+        FramebufferKey key = {shaderOutColourFormat, eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8,
+                              numSamples};
         ShaderOutFramebuffer framebuffer =
             getShaderOutFramebuffer(driver, colIdx, resources, key, width, height);
         driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, framebuffer.framebufferId);
@@ -2010,12 +1557,7 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
 
         ModificationValue modValue;
 
-        if(colourFormatType == eGL_UNSIGNED_INT)
-        {
-          driver->glReadPixels(x, y, 1, 1, eGL_RGBA_INTEGER, eGL_UNSIGNED_INT,
-                               (void *)modValue.col.uintValue.data());
-        }
-        else if(colourFormatType == eGL_INT)
+        if(colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT)
         {
           driver->glReadPixels(x, y, 1, 1, eGL_RGBA_INTEGER, eGL_INT,
                                (void *)modValue.col.intValue.data());
@@ -2029,8 +1571,6 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
         modValue.stencil = historyIndex->shaderOut.stencil;
 
         historyIndex->shaderOut = modValue;
-        if(resources.depthTarget)
-          RDCEraseEl(historyIndex->shaderOut.col);
       }
       else
       {
@@ -2040,18 +1580,16 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
                 : eGL_RGBA32F;
 
         const CopyFramebuffer &copyFramebuffer = getCopyFramebuffer(
-            driver, resources.copyFramebuffers, ModType::PostMod, numSamples, int(modEvents.size()),
+            driver, resources.copyFramebuffers, numSamples, int(modEvents.size()),
             eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, copyFramebufferColourFormat);
         driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
         glReadBuffer(eGL_COLOR_ATTACHMENT0);
         SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
                             eGL_NEAREST);
         int oldStencil = historyIndex->shaderOut.stencil;
-        historyIndex->shaderOut =
-            readShaderOutMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0);
+        readShaderOutMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0, history,
+                        int(historyIndex - history.begin()));
         historyIndex->shaderOut.stencil = oldStencil;
-        if(resources.depthTarget)
-          RDCEraseEl(historyIndex->shaderOut.col);
       }
       historyIndex++;
     }
@@ -2065,21 +1603,14 @@ void QueryShaderOutPerFragment(WrappedOpenGL *driver, GLReplay *replay,
   }
 }
 
-void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
-                                GLPixelHistoryResources &resources,
-                                const rdcarray<EventUsage> &modEvents, int x, int y,
-                                rdcarray<PixelModification> &history,
-                                const EventFragmentData &eventFragmentData, uint32_t numSamples,
-                                uint32_t sampleIndex, uint32_t width, uint32_t height)
+void QueryPostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
+                             GLPixelHistoryResources &resources,
+                             const rdcarray<EventUsage> &modEvents, int x, int y,
+                             rdcarray<PixelModification> &history,
+                             const std::map<uint32_t, uint32_t> &eventFragments, uint32_t numSamples,
+                             uint32_t sampleIndex, uint32_t width, uint32_t height)
 {
-  const std::map<uint32_t, uint32_t> &eventFragments = eventFragmentData.eventFragments;
-  const rdcarray<uint32_t> &fragmentsClipped = eventFragmentData.fragmentsClipped;
-
-  // this is used to track if any previous fragments in the current draw
-  // discarded. If so, the stencil count will be off-by-one
-  uint32_t discardedOffset = 0;
-
-  GLMarkerRegion region("QueryPrePostModPerFragment");
+  GLMarkerRegion region("QueryPostModPerFragment");
   driver->ReplayLog(0, modEvents[0].eventId, eReplay_WithoutDraw);
 
   for(size_t i = 0; i < modEvents.size(); i++)
@@ -2095,11 +1626,6 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
       }
       continue;
     }
-
-    bool someFragsClipped = fragmentsClipped.contains(modEvents[i].eventId);
-
-    // reset discarded offset every event
-    discardedOffset = 0;
 
     GLRenderState state;
     state.FetchState(driver);
@@ -2130,12 +1656,14 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
 
     uint32_t colIdx = getFramebufferColIndex(driver, resources.target);
 
-    CopyFramebuffer postmodCopyFramebuffer = {};
-    postmodCopyFramebuffer.framebufferId = ~0u;
-    CopyFramebuffer premodCopyFramebuffer = {};
-    premodCopyFramebuffer.framebufferId = ~0u;
-    int preModLastJ = 0;
-    int postModLastJ = 0;
+    GLenum colourFormat = getCurrentTextureFormat(driver, colIdx);
+    GLenum colourFormatType = getTextureFormatType(colourFormat);
+    bool integerColour = colourFormatType == eGL_UNSIGNED_INT || colourFormatType == eGL_INT;
+
+    CopyFramebuffer copyFramebuffer;
+    RDCEraseEl(copyFramebuffer);
+    copyFramebuffer.framebufferId = ~0u;
+    int lastJ = 0;
 
     // save D/S attachment since we'll substitute our own depth
     GLuint curDepth;
@@ -2168,15 +1696,6 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
       driver->glGetFramebufferAttachmentParameteriv(eGL_DRAW_FRAMEBUFFER, eGL_STENCIL_ATTACHMENT,
                                                     eGL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL,
                                                     &curStencilLevel);
-    }
-
-    // if we didn't have a depth buffer, turn off depth testing so we don't have to worry about
-    // incorrect depth failures with our forced depth
-    if(!curDepth)
-    {
-      if(HasExt[EXT_depth_bounds_test])
-        driver->glDisable(eGL_DEPTH_BOUNDS_TEST_EXT);
-      driver->glDepthFunc(eGL_ALWAYS);
     }
 
     GLuint forcedDepth = 0;
@@ -2225,192 +1744,18 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
     for(size_t j = 0; j < std::max(numFragments, 1u); ++j)
     {
       // Set the stencil function so only jth fragment will pass.
-      driver->glStencilFunc(eGL_EQUAL, (int)j - discardedOffset, 0xff);
-
-      // if some fragments clipped in this draw, we need to check to see if this
-      // primitive ID was one of the ones that clipped.
-      // Currently the way we do that is by drawing only that primitive
-      // and doing an occlusion query
-      if(someFragsClipped)
-      {
-        auto curFragHistoryIndex = numSamples > 1 ? historyIndex : historyIndex + j;
-
-        driver->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-        driver->glDepthMask(GL_FALSE);
-        driver->glDisable(eGL_STENCIL_TEST);
-
-        GLuint samplesPassedQuery;
-        driver->glGenQueries(1, &samplesPassedQuery);
-
-        driver->SetFetchCounters(true);
-        driver->glBeginQuery(eGL_ANY_SAMPLES_PASSED, samplesPassedQuery);
-
-        const ActionDescription *action = driver->GetAction(modEvents[i].eventId);
-        const GLDrawParams &drawParams = driver->GetDrawParameters(modEvents[i].eventId);
-
-        Topology topo = drawParams.topo;
-        GLenum glTopo = MakeGLPrimitiveTopology(topo);
-        uint32_t numVerts = RENDERDOC_NumVerticesPerPrimitive(topo);
-
-        if(action->flags & ActionFlags::Indexed)
-        {
-          GLenum idxType = eGL_UNSIGNED_INT;
-          if(drawParams.indexWidth == 1)
-            idxType = eGL_UNSIGNED_BYTE;
-          else if(drawParams.indexWidth == 2)
-            idxType = eGL_UNSIGNED_SHORT;
-
-          void *indexOffset =
-              (void *)(uintptr_t)(action->indexOffset +
-                                  RENDERDOC_VertexOffset(topo, curFragHistoryIndex->primitiveID));
-
-          if(action->flags & ActionFlags::Instanced)
-          {
-            if(HasExt[ARB_base_instance])
-            {
-              // TODO once pixel history distinguishes between instances, draw only the instance for
-              // this fragment
-              driver->glDrawElementsInstancedBaseVertexBaseInstance(
-                  glTopo, numVerts, idxType, indexOffset, RDCMAX(1U, action->numInstances),
-                  action->baseVertex, action->instanceOffset);
-            }
-            else
-            {
-              driver->glDrawElementsInstancedBaseVertex(glTopo, numVerts, idxType, indexOffset,
-                                                        RDCMAX(1U, action->numInstances),
-                                                        action->baseVertex);
-            }
-          }
-          else
-          {
-            driver->glDrawElementsBaseVertex(glTopo, numVerts, idxType, indexOffset,
-                                             action->baseVertex);
-          }
-        }
-        else
-        {
-          uint32_t vertexOffset =
-              action->vertexOffset + RENDERDOC_VertexOffset(topo, curFragHistoryIndex->primitiveID);
-
-          if(action->flags & ActionFlags::Instanced)
-          {
-            if(HasExt[ARB_base_instance])
-            {
-              // TODO once pixel history distinguishes between instances, draw only the instance for
-              // this fragment
-              driver->glDrawArraysInstancedBaseInstance(glTopo, vertexOffset, numVerts,
-                                                        RDCMAX(1U, action->numInstances),
-                                                        action->instanceOffset);
-            }
-            else
-            {
-              driver->glDrawArraysInstanced(glTopo, vertexOffset, numVerts,
-                                            RDCMAX(1U, action->numInstances));
-            }
-          }
-          else
-          {
-            driver->glDrawArrays(glTopo, vertexOffset, numVerts);
-          }
-        }
-
-        driver->glEndQuery(eGL_ANY_SAMPLES_PASSED);
-        driver->SetFetchCounters(false);
-        int anySamplesPassed = GL_FALSE;
-        driver->glGetQueryObjectiv(samplesPassedQuery, eGL_QUERY_RESULT, &anySamplesPassed);
-        driver->glDeleteQueries(1, &samplesPassedQuery);
-
-        driver->glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        driver->glDepthMask(GL_TRUE);
-        driver->glEnable(eGL_STENCIL_TEST);
-
-        if(anySamplesPassed == GL_FALSE)
-        {
-          discardedOffset++;
-          curFragHistoryIndex->postMod = curFragHistoryIndex->preMod;
-          if(historyIndex + j + 1 < history.end() &&
-             (curFragHistoryIndex + 1)->eventId == curFragHistoryIndex->eventId)
-            curFragHistoryIndex->postMod.stencil = -2;
-          else
-            curFragHistoryIndex->postMod.stencil = -1;
-
-          if(numSamples > 1)
-            historyIndex++;
-          continue;
-        }
-      }
-
+      driver->glStencilFunc(eGL_EQUAL, (int)j, 0xff);
       driver->glClear(eGL_STENCIL_BUFFER_BIT);
-
-      if(j > 0)
-      {
-        if(numSamples > 1)
-        {
-          premodCopyFramebuffer = getCopyFramebuffer(
-              driver, resources.copyFramebuffers, ModType::PreMod, numSamples,
-              int(modEvents.size()), eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, colorFormat);
-
-          driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, premodCopyFramebuffer.framebufferId);
-          driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
-
-          GLenum savedReadBuffer;
-          driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-          driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-          SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
-                              eGL_NEAREST);
-
-          readPixelValuesMS(driver, resources, premodCopyFramebuffer, sampleIndex, 0, 0, history,
-                            (historyIndex - history.begin()), ModType::PreMod, false);
-
-          driver->glReadBuffer(savedReadBuffer);
-        }
-        else
-        {
-          // Blit the values into out framebuffer
-          CopyFramebuffer newCopyFramebuffer = getCopyFramebuffer(
-              driver, resources.copyFramebuffers, ModType::PreMod, numSamples,
-              int(modEvents.size()), eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, colorFormat);
-          if(newCopyFramebuffer.framebufferId != premodCopyFramebuffer.framebufferId ||
-             (j - preModLastJ >= premodCopyFramebuffer.width))
-          {
-            if(premodCopyFramebuffer.framebufferId != ~0u)
-            {
-              readPixelValues(driver, resources, premodCopyFramebuffer, history,
-                              preModLastJ + int(historyIndex - history.begin()), ModType::PreMod,
-                              false, (uint32_t)(j - preModLastJ));
-            }
-            preModLastJ = int(j);
-          }
-          premodCopyFramebuffer = newCopyFramebuffer;
-          driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, premodCopyFramebuffer.framebufferId);
-          driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
-
-          GLenum savedReadBuffer;
-          driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
-
-          driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-          SafeBlitFramebuffer(x, y, x + 1, y + 1, GLint(j) - preModLastJ, 0,
-                              GLint(j) + 1 - preModLastJ, 1, getFramebufferCopyMask(driver),
-                              eGL_NEAREST);
-
-          driver->glReadBuffer(savedReadBuffer);
-        }
-      }
-
-      // restore the capture's framebuffer
-      driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, savedDrawFramebuffer);
-      driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedReadFramebuffer);
 
       driver->ReplayLog(modEvents[i].eventId, modEvents[i].eventId, eReplay_OnlyDraw);
 
       if(numSamples > 1)
       {
-        postmodCopyFramebuffer = getCopyFramebuffer(
-            driver, resources.copyFramebuffers, ModType::PostMod, numSamples, int(modEvents.size()),
-            eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, colorFormat);
+        copyFramebuffer = getCopyFramebuffer(driver, resources.copyFramebuffers, numSamples,
+                                             int(modEvents.size()), eGL_DEPTH32F_STENCIL8,
+                                             eGL_DEPTH32F_STENCIL8, colorFormat);
 
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, postmodCopyFramebuffer.framebufferId);
+        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
         driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
 
         GLenum savedReadBuffer;
@@ -2420,8 +1765,8 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
         SafeBlitFramebuffer(x, y, x + 1, y + 1, 0, 0, 1, 1, getFramebufferCopyMask(driver),
                             eGL_NEAREST);
 
-        readPixelValuesMS(driver, resources, postmodCopyFramebuffer, sampleIndex, 0, 0, history,
-                          (historyIndex - history.begin()), ModType::PostMod, false);
+        readPixelValuesMS(driver, resources, copyFramebuffer, sampleIndex, 0, 0, history,
+                          int(historyIndex - history.begin()), false);
         historyIndex++;
 
         driver->glReadBuffer(savedReadBuffer);
@@ -2429,31 +1774,30 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
       else
       {
         // Blit the values into out framebuffer
-        CopyFramebuffer newCopyFramebuffer = getCopyFramebuffer(
-            driver, resources.copyFramebuffers, ModType::PostMod, numSamples, int(modEvents.size()),
-            eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, colorFormat);
-        if(newCopyFramebuffer.framebufferId != postmodCopyFramebuffer.framebufferId ||
-           (j - postModLastJ >= postmodCopyFramebuffer.width))
+        CopyFramebuffer newCopyFramebuffer =
+            getCopyFramebuffer(driver, resources.copyFramebuffers, numSamples, int(modEvents.size()),
+                               eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, colorFormat);
+        if(newCopyFramebuffer.framebufferId != copyFramebuffer.framebufferId ||
+           (j - lastJ >= copyFramebuffer.width))
         {
-          if(postmodCopyFramebuffer.framebufferId != ~0u)
+          if(copyFramebuffer.framebufferId != ~0u)
           {
-            readPixelValues(driver, resources, postmodCopyFramebuffer, history,
-                            postModLastJ + int(historyIndex - history.begin()), ModType::PostMod,
-                            false, (uint32_t)(j - postModLastJ));
+            readPixelValues(driver, resources, copyFramebuffer, history,
+                            lastJ + int(historyIndex - history.begin()), false,
+                            (uint32_t)(j - lastJ), integerColour);
           }
-          postModLastJ = int(j);
+          lastJ = int(j);
         }
-        postmodCopyFramebuffer = newCopyFramebuffer;
-        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, postmodCopyFramebuffer.framebufferId);
+        copyFramebuffer = newCopyFramebuffer;
+        driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
         driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, savedDrawFramebuffer);
 
         GLenum savedReadBuffer;
         driver->glGetIntegerv(eGL_READ_BUFFER, (GLint *)&savedReadBuffer);
 
         driver->glReadBuffer(GLenum(eGL_COLOR_ATTACHMENT0 + colIdx));
-        SafeBlitFramebuffer(x, y, x + 1, y + 1, GLint(j) - postModLastJ, 0,
-                            GLint(j) + 1 - postModLastJ, 1, getFramebufferCopyMask(driver),
-                            eGL_NEAREST);
+        SafeBlitFramebuffer(x, y, x + 1, y + 1, GLint(j) - lastJ, 0, GLint(j) + 1 - lastJ, 1,
+                            getFramebufferCopyMask(driver), eGL_NEAREST);
 
         driver->glReadBuffer(savedReadBuffer);
       }
@@ -2487,18 +1831,11 @@ void QueryPrePostModPerFragment(WrappedOpenGL *driver, GLReplay *replay,
 
     driver->glDeleteTextures(1, &forcedDepth);
 
-    if(numSamples == 1 && premodCopyFramebuffer.framebufferId != ~0u)
+    if(numSamples == 1 && copyFramebuffer.framebufferId != ~0u)
     {
-      readPixelValues(driver, resources, premodCopyFramebuffer, history,
-                      preModLastJ + int(historyIndex - history.begin()), ModType::PreMod, false,
-                      numFragments - preModLastJ);
-    }
-
-    if(numSamples == 1 && postmodCopyFramebuffer.framebufferId != ~0u)
-    {
-      readPixelValues(driver, resources, postmodCopyFramebuffer, history,
-                      postModLastJ + int(historyIndex - history.begin()), ModType::PostMod, false,
-                      numFragments - postModLastJ);
+      readPixelValues(driver, resources, copyFramebuffer, history,
+                      lastJ + int(historyIndex - history.begin()), false, numFragments - lastJ,
+                      integerColour);
     }
 
     state.ApplyState(driver);
@@ -2538,14 +1875,6 @@ void QueryPrimitiveIdPerFragment(WrappedOpenGL *driver, GLReplay *replay,
     GLRenderState state;
     state.FetchState(driver);
 
-    ResourceId ps;
-    if(state.Program.name)
-      ps = driver->GetProgram(driver->GetResourceManager()->GetResID(state.Program))
-               .stageShaders[(int)ShaderStage::Pixel];
-    else
-      ps = driver->GetPipeline(driver->GetResourceManager()->GetResID(state.Pipeline))
-               .stageShaders[(int)ShaderStage::Pixel];
-
     driver->glBindFramebuffer(eGL_FRAMEBUFFER, resources.fullPrecisionFrameBuffer);
     driver->glReadBuffer(eGL_COLOR_ATTACHMENT0);
     // rebind colour image to 0
@@ -2560,8 +1889,6 @@ void QueryPrimitiveIdPerFragment(WrappedOpenGL *driver, GLReplay *replay,
 
     driver->glClearStencil(0);
     driver->glEnable(eGL_DEPTH_TEST);
-    if(HasExt[EXT_depth_bounds_test])
-      driver->glDisable(eGL_DEPTH_BOUNDS_TEST_EXT);
     driver->glDepthFunc(eGL_ALWAYS);
     driver->glDepthMask(GL_TRUE);
     driver->glDisable(eGL_BLEND);
@@ -2623,9 +1950,9 @@ void QueryPrimitiveIdPerFragment(WrappedOpenGL *driver, GLReplay *replay,
       }
       else
       {
-        const CopyFramebuffer &copyFramebuffer = getCopyFramebuffer(
-            driver, resources.copyFramebuffers, ModType::PostMod, numSamples, int(modEvents.size()),
-            eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, eGL_RGBA32F);
+        const CopyFramebuffer &copyFramebuffer =
+            getCopyFramebuffer(driver, resources.copyFramebuffers, numSamples, int(modEvents.size()),
+                               eGL_DEPTH32F_STENCIL8, eGL_DEPTH32F_STENCIL8, eGL_RGBA32F);
         driver->glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, copyFramebuffer.framebufferId);
         driver->glBindFramebuffer(eGL_READ_FRAMEBUFFER, resources.fullPrecisionFrameBuffer);
         glReadBuffer(eGL_COLOR_ATTACHMENT0);
@@ -2652,9 +1979,6 @@ void QueryPrimitiveIdPerFragment(WrappedOpenGL *driver, GLReplay *replay,
         RDCERR("Primitive ID was not written correctly");
       }
 
-      if(ps == ResourceId())
-        historyIndex->unboundPS = true;
-
       ++historyIndex;
     }
     driver->glUseProgram(currentProgram);
@@ -2666,6 +1990,24 @@ void QueryPrimitiveIdPerFragment(WrappedOpenGL *driver, GLReplay *replay,
       driver->ReplayLog(modEvents[i].eventId + 1, modEvents[i + 1].eventId, eReplay_WithoutDraw);
     }
   }
+}
+
+bool depthTestPassed(int depthFunc, float shaderOutputDepth, float depthInBuffer)
+{
+  switch(depthFunc)
+  {
+    case eGL_NEVER: return false;
+    case eGL_LESS: return shaderOutputDepth < depthInBuffer;
+    case eGL_EQUAL: return shaderOutputDepth == depthInBuffer;
+    case eGL_LEQUAL: return shaderOutputDepth <= depthInBuffer;
+    case eGL_GREATER: return shaderOutputDepth > depthInBuffer;
+    case eGL_NOTEQUAL: return shaderOutputDepth != depthInBuffer;
+    case eGL_GEQUAL: return shaderOutputDepth >= depthInBuffer;
+    case eGL_ALWAYS: return true;
+
+    default: RDCERR("Unexpected depth function: %d", depthFunc);
+  }
+  return false;
 }
 
 void CalculateFragmentDepthTests(WrappedOpenGL *driver, GLPixelHistoryResources &resources,
@@ -2699,9 +2041,9 @@ void CalculateFragmentDepthTests(WrappedOpenGL *driver, GLPixelHistoryResources 
 
     GLboolean depthTestEnabled = driver->glIsEnabled(eGL_DEPTH_TEST);
     // default for no depth test
-    GLenum depthFunc = eGL_ALWAYS;
+    int depthFunc = eGL_ALWAYS;
     if(depthTestEnabled)
-      driver->glGetIntegerv(eGL_DEPTH_FUNC, (int *)&depthFunc);
+      driver->glGetIntegerv(eGL_DEPTH_FUNC, &depthFunc);
     for(; historyIndex < history.size() && modEvents[i].eventId == history[historyIndex].eventId;
         ++historyIndex)
     {
@@ -2710,57 +2052,8 @@ void CalculateFragmentDepthTests(WrappedOpenGL *driver, GLPixelHistoryResources 
         continue;
       }
 
-      GLuint curDepth = 0;
-      GLint depthType = 0;
-      driver->glGetFramebufferAttachmentParameteriv(eGL_DRAW_FRAMEBUFFER, eGL_DEPTH_ATTACHMENT,
-                                                    eGL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
-                                                    (GLint *)&curDepth);
-
-      driver->glGetFramebufferAttachmentParameteriv(eGL_DRAW_FRAMEBUFFER, eGL_DEPTH_ATTACHMENT,
-                                                    eGL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
-                                                    &depthType);
-
-      GLenum depthFormat = eGL_NONE;
-
-      if(curDepth != 0)
-      {
-        ResourceId id;
-        if(depthType != eGL_RENDERBUFFER)
-        {
-          id = driver->GetResourceManager()->GetResID(TextureRes(driver->GetCtx(), curDepth));
-        }
-        else
-        {
-          id = driver->GetResourceManager()->GetResID(RenderbufferRes(driver->GetCtx(), curDepth));
-        }
-        depthFormat = driver->m_Textures[id].internalFormat;
-
-        uint32_t depthBits = 32;
-        if(depthFormat == eGL_DEPTH_COMPONENT24 || depthFormat == eGL_DEPTH24_STENCIL8 ||
-           depthFormat == eGL_UNSIGNED_INT_24_8)
-        {
-          depthBits = 24;
-        }
-        else if(depthFormat == eGL_DEPTH_COMPONENT16)
-        {
-          depthBits = 16;
-        }
-
-        history[historyIndex].CheckDepthTestQuantised(depthBits, MakeCompareFunc(depthFunc));
-
-        if(HasExt[EXT_depth_bounds_test] && GL.glIsEnabled(eGL_DEPTH_BOUNDS_TEST_EXT))
-        {
-          GLdouble depthBounds[2] = {};
-          GL.glGetDoublev(eGL_DEPTH_BOUNDS_EXT, depthBounds);
-
-          if((history[historyIndex].preMod.depth < depthBounds[0] ||
-              history[historyIndex].preMod.depth > depthBounds[1]) &&
-             depthBounds[1] > depthBounds[0])
-          {
-            history[historyIndex].depthBoundsFailed = true;
-          }
-        }
-      }
+      history[historyIndex].depthTestFailed = !depthTestPassed(
+          depthFunc, history[historyIndex].shaderOut.depth, history[historyIndex].preMod.depth);
     }
 
     if(i < modEvents.size() - 1)
@@ -2835,17 +2128,14 @@ rdcarray<PixelModification> GLReplay::PixelHistory(rdcarray<EventUsage> events, 
   }
 
   QueryFailedTests(m_pDriver, resources, modEvents, x, flippedY, history, sampleIdx);
-  QueryPrePostModPixelValues(m_pDriver, resources, modEvents, x, flippedY, history,
-                             textureDesc.msSamp, sampleIdx);
+  QueryPostModPixelValues(m_pDriver, resources, modEvents, x, flippedY, history, textureDesc.msSamp,
+                          sampleIdx);
 
   uint32_t textureWidth = textureDesc.width >> sub.mip;
   uint32_t textureHeight = textureDesc.height >> sub.mip;
-
-  EventFragmentData eventFragmentData =
+  std::map<uint32_t, uint32_t> eventFragments =
       QueryNumFragmentsByEvent(m_pDriver, resources, modEvents, history, x, flippedY,
                                textureDesc.msSamp, sampleIdx, textureWidth, textureHeight);
-
-  std::map<uint32_t, uint32_t> &eventFragments = eventFragmentData.eventFragments;
 
   // copy history entries to create one history per fragment
   for(size_t h = 0; h < history.size();)
@@ -2867,38 +2157,25 @@ rdcarray<PixelModification> GLReplay::PixelHistory(rdcarray<EventUsage> events, 
     h += RDCMAX(1u, frags);
   }
 
+  QueryShaderOutPerFragment(m_pDriver, this, resources, modEvents, x, flippedY, history,
+                            eventFragments, textureDesc.msSamp, sampleIdx, textureWidth,
+                            textureHeight);
   QueryPrimitiveIdPerFragment(m_pDriver, this, resources, modEvents, x, flippedY, history,
                               eventFragments, usingFloatForPrimitiveId, textureDesc.msSamp,
                               sampleIdx);
-  QueryShaderOutPerFragment(m_pDriver, this, resources, modEvents, x, flippedY, history,
-                            eventFragmentData, textureDesc.msSamp, sampleIdx, textureWidth,
-                            textureHeight);
-  QueryPrePostModPerFragment(m_pDriver, this, resources, modEvents, x, flippedY, history,
-                             eventFragmentData, textureDesc.msSamp, sampleIdx, textureWidth,
-                             textureHeight);
-
-  // clear depth or colour information when not available
-  for(size_t h = 0; h < history.size(); h++)
+  // copy the postMod depth to next history's preMod depth
+  // (preMode depth is to prime the depth buffer in QueryPostModPerFragment)
+  for(size_t i = 1; i < history.size(); ++i)
   {
-    GLbitfield fbMask = eventFragmentData.eventFBMask[history[h].eventId];
+    history[i].preMod.depth = history[i - 1].postMod.depth;
+  }
+  QueryPostModPerFragment(m_pDriver, this, resources, modEvents, x, flippedY, history,
+                          eventFragments, textureDesc.msSamp, sampleIdx, textureWidth, textureHeight);
 
-    if((fbMask & GL_COLOR_BUFFER_BIT) == 0)
-    {
-      RDCEraseEl(history[h].preMod.col);
-      RDCEraseEl(history[h].postMod.col);
-    }
-    if((fbMask & GL_DEPTH_BUFFER_BIT) == 0)
-    {
-      history[h].preMod.depth = -1;
-      history[h].shaderOut.depth = -1;
-      history[h].postMod.depth = -1;
-    }
-    if((fbMask & GL_STENCIL_BUFFER_BIT) == 0)
-    {
-      history[h].preMod.stencil = -1;
-      history[h].shaderOut.stencil = -1;
-      history[h].postMod.stencil = -1;
-    }
+  // copy the postMod to next history's preMod
+  for(size_t i = 1; i < history.size(); ++i)
+  {
+    history[i].preMod = history[i - 1].postMod;
   }
 
   CalculateFragmentDepthTests(m_pDriver, resources, modEvents, history, eventFragments);

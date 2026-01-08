@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -165,10 +165,10 @@ void main(void)
 
     AllocatedBuffer blasVertexBuffer(
         this, vkh::BufferCreateInfo(vertexBufferSize, blasInputBufferUsageFlags),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}), 4);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
     AllocatedBuffer blasIndexBuffer(
         this, vkh::BufferCreateInfo(indexBufferSize, blasInputBufferUsageFlags),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}), 4);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
 
     blasVertexBuffer.upload(vertices, vertexBufferSize);
     blasIndexBuffer.upload(indices, indexBufferSize);
@@ -200,8 +200,7 @@ void main(void)
     VkAccelerationStructureBuildGeometryInfoKHR blasBuildGeometryInfo = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
     blasBuildGeometryInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    blasBuildGeometryInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                                  VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    blasBuildGeometryInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
     blasBuildGeometryInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     blasBuildGeometryInfo.geometryCount = (uint32_t)blasGeometries.size();
     blasBuildGeometryInfo.pGeometries = blasGeometries.data();
@@ -238,7 +237,7 @@ void main(void)
         vkh::BufferCreateInfo(
             blasBuildSizesInfo.buildScratchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}), 256);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}));
 
     blasBuildGeometryInfo.scratchData.deviceAddress = blasScratchBuffer.address;
     blasBuildGeometryInfo.dstAccelerationStructure = blas;
@@ -268,7 +267,7 @@ void main(void)
         vkh::BufferCreateInfo(asInstanceSize,
                               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}), 16);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
     instancesBuffer.upload(&asInstance, asInstanceSize);
 
     VkAccelerationStructureGeometryKHR tlasGeometry = {
@@ -317,7 +316,7 @@ void main(void)
         vkh::BufferCreateInfo(
             tlasBuildSizesInfo.buildScratchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}), 256);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_ONLY}));
 
     tlasBuildGeometryInfo.scratchData.deviceAddress = tlasScratchBuffer.address;
     tlasBuildGeometryInfo.dstAccelerationStructure = tlas;
@@ -358,12 +357,12 @@ void main(void)
         this,
         vkh::BufferCreateInfo(vertexBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}), 4);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
     AllocatedBuffer trisIndexBuffer(
         this,
         vkh::BufferCreateInfo(
             indexBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT),
-        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}), 4);
+        VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_CPU_TO_GPU}));
 
     trisVertexBuffer.upload(vertices);
     trisIndexBuffer.upload(indices);
@@ -423,20 +422,6 @@ void main(void)
 
     vkh::updateDescriptorSets(device, {asWriteDescriptorSet}, {});
 
-    AllocatedBuffer queryBuffer(this, vkh::BufferCreateInfo(1024, VK_BUFFER_USAGE_TRANSFER_DST_BIT),
-                                VmaAllocationCreateInfo({0, VMA_MEMORY_USAGE_GPU_TO_CPU}));
-
-    VkQueryPool compactedPool;
-    VkQueryPool serialisedPool;
-
-    VkQueryPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-    poolInfo.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
-    poolInfo.queryCount = 8;
-    vkCreateQueryPool(device, &poolInfo, NULL, &compactedPool);
-    poolInfo.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR;
-    poolInfo.queryCount = 8;
-    vkCreateQueryPool(device, &poolInfo, NULL, &serialisedPool);
-
     while(Running())
     {
       {
@@ -451,26 +436,6 @@ void main(void)
         vkCmdCopyAccelerationStructureKHR(cmd, &copyInfo);
 
         popMarker(cmd);
-
-        pushMarker(cmd, "Query AS");
-
-        vkCmdResetQueryPool(cmd, compactedPool, 0, 8);
-        vkCmdResetQueryPool(cmd, serialisedPool, 0, 8);
-
-        vkCmdWriteAccelerationStructuresPropertiesKHR(
-            cmd, 1, &newBlas, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
-            compactedPool, 5);
-        vkCmdCopyQueryPoolResults(cmd, compactedPool, 5, 1, queryBuffer.buffer, 0, 8,
-                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-
-        vkCmdWriteAccelerationStructuresPropertiesKHR(
-            cmd, 1, &newBlas, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR,
-            serialisedPool, 3);
-        vkCmdCopyQueryPoolResults(cmd, serialisedPool, 3, 1, queryBuffer.buffer, 16, 8,
-                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-
-        popMarker(cmd);
-
         CHECK_VKR(vkEndCommandBuffer(cmd));
 
         Submit(0, 2, {cmd});
@@ -512,9 +477,6 @@ void main(void)
     }
 
     vkDeviceWaitIdle(device);
-
-    vkDestroyQueryPool(device, compactedPool, NULL);
-    vkDestroyQueryPool(device, serialisedPool, NULL);
 
     vkDestroyAccelerationStructureKHR(device, newBlas, NULL);
     vkDestroyAccelerationStructureKHR(device, tlas, NULL);

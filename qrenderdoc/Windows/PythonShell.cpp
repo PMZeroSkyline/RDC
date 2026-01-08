@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -629,7 +629,6 @@ struct CaptureContextInvoker : ObjectForwarder<ICaptureContext>
   {
     InvokeVoidFunction(&ICaptureContext::AddMessages, msgs);
   }
-  virtual void ClearMessages() override { InvokeVoidFunction(&ICaptureContext::ClearMessages); }
   virtual void SetResourceCustomName(ResourceId id, const rdcstr &name) override
   {
     InvokeVoidFunction(&ICaptureContext::SetResourceCustomName, id, name);
@@ -646,18 +645,6 @@ struct CaptureContextInvoker : ObjectForwarder<ICaptureContext>
   virtual void RemoveBookmark(uint32_t EID) override
   {
     InvokeVoidFunction(&ICaptureContext::RemoveBookmark, EID);
-  }
-  virtual void EmbedDependentFiles() override
-  {
-    InvokeVoidFunction(&ICaptureContext::EmbedDependentFiles);
-  }
-  virtual void RemoveDependentFiles() override
-  {
-    InvokeVoidFunction(&ICaptureContext::RemoveDependentFiles);
-  }
-  virtual void DelayedCallback(uint32_t milliseconds, std::function<void()> callback) override
-  {
-    InvokeVoidFunction(&ICaptureContext::DelayedCallback, milliseconds, callback);
   }
   virtual IMainWindow *GetMainWindow() override
   {

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -111,14 +111,6 @@ void UpdateDialog::on_releaseNotes_clicked()
 
 void UpdateDialog::on_close_clicked()
 {
-  // if there's a pending request, we're cancelling so abort the request. The finished() handler will close the dialog
-  if(m_Request)
-  {
-    m_Cancelled = true;
-    m_Request->abort();
-    return;
-  }
-
   reject();
 }
 
@@ -183,7 +175,7 @@ void UpdateDialog::on_update_clicked()
     ui->progressBar->setValue(0);
     ui->progressText->setText(tr("Preparing Download"));
 
-    ui->close->setText(tr("Cancel"));
+    ui->close->setEnabled(false);
     ui->update->setEnabled(false);
 
     delete m_DownloadTimer;
@@ -191,41 +183,26 @@ void UpdateDialog::on_update_clicked()
 
     m_DownloadTimer->start();
 
-    m_Request = m_NetManager->get(QNetworkRequest(QUrl(m_URL)));
+    QNetworkReply *req = m_NetManager->get(QNetworkRequest(QUrl(m_URL)));
 
-    QObject::connect(m_Request, &QNetworkReply::downloadProgress, [this](qint64 recvd, qint64 total) {
+    QObject::connect(req, &QNetworkReply::downloadProgress, [this](qint64 recvd, qint64 total) {
       UpdateTransferProgress(recvd, total, m_DownloadTimer, ui->progressBar, ui->progressText,
                              tr("Downloading update..."));
     });
 
-    QObject::connect(
-        m_Request, OverloadedSlot<QNetworkReply::NetworkError>::of(&QNetworkReply::error),
-        [this](QNetworkReply::NetworkError err) {
-          ui->progressBar->setValue(0);
-          ui->progressText->setText(tr("Network error:\n%1").arg(m_Request->errorString()));
-          ui->update->setEnabled(true);
-          ui->close->setEnabled(true);
-          ui->close->setText(tr("Close"));
-          ui->update->setText(tr("Retry Update"));
-        });
+    QObject::connect(req, OverloadedSlot<QNetworkReply::NetworkError>::of(&QNetworkReply::error),
+                     [this, req](QNetworkReply::NetworkError err) {
+                       ui->progressBar->setValue(0);
+                       ui->progressText->setText(tr("Network error:\n%1").arg(req->errorString()));
+                       ui->update->setEnabled(true);
+                       ui->close->setEnabled(true);
+                       ui->update->setText(tr("Retry Update"));
+                     });
 
-    QObject::connect(m_Request, &QNetworkReply::finished, [this]() {
-      // if we cancelled, close the dialog now
-      if(m_Cancelled)
-      {
-        m_Request->deleteLater();
-        m_Request = NULL;
-        reject();
-        return;
-      }
-
+    QObject::connect(req, &QNetworkReply::finished, [this, req]() {
       // don't do anything if we're finished after an error
       if(ui->update->isEnabled())
-      {
-        m_Request->deleteLater();
-        m_Request = NULL;
         return;
-      }
 
       QDir dir(QDir::tempPath());
 
@@ -238,7 +215,7 @@ void UpdateDialog::on_update_clicked()
         QFile file(path);
         if(file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         {
-          file.write(m_Request->readAll());
+          file.write(req->readAll());
         }
         else
         {
@@ -247,9 +224,6 @@ void UpdateDialog::on_update_clicked()
           reject();
         }
       }
-
-      m_Request->deleteLater();
-      m_Request = NULL;
 
       QDir appDir = QFileInfo(QCoreApplication::applicationFilePath()).absoluteDir();
 

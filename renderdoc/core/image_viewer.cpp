@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -294,6 +294,7 @@ public:
   rdcarray<uint32_t> GetPassEvents(uint32_t eventId) { return rdcarray<uint32_t>(); }
   rdcarray<EventUsage> GetUsage(ResourceId id) { return rdcarray<EventUsage>(); }
   bool IsRenderOutput(ResourceId id) { return false; }
+  ResourceId GetLiveID(ResourceId id) { return id; }
   rdcarray<GPUCounter> EnumerateCounters() { return {}; }
   CounterDescription DescribeCounter(GPUCounter counterID)
   {
@@ -1054,7 +1055,7 @@ void ImageViewer::CreateProxyTexture(TextureDescription &texDetails, read_tex_da
           const uint32_t slice = i / texDetails.mips;
 
           // size of each subresource is 1/Nth for an N-sized array
-          size_t size = oldSubs[mip].second / RDCMAX(1U, texDetails.arraysize >> mip);
+          size_t size = oldSubs[mip].second / texDetails.arraysize;
 
           // and the offset is slice steps further on
           size_t offset = oldSubs[mip].first + size * slice;

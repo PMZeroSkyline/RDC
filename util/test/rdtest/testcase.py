@@ -8,7 +8,6 @@ from . import util
 from . import analyse
 from . import capture
 from .logging import log, TestFailureException
-from typing import List
 
 
 class ShaderVariableCheck:
@@ -236,18 +235,11 @@ class TestCase:
         """
 
         if self.demos_test_name != '':
-            logfile = os.path.join(util.get_tmp_dir(), util.get_current_test(), 'demos.log')
-            remote_logfile = logfile
-            exe = util.get_demos_binary()
-            if util.get_remote_server() is not None:
-                remote_logfile = util.get_remote_server().get_temp_path('demos.log')
-                exe = util.get_remote_server().get_demos_exe()
-
+            logfile = os.path.join(util.get_tmp_dir(), 'demos.log')
             timeout = self.demos_timeout
             if timeout is None:
                 timeout = util.get_demos_timeout()
-            return capture.run_and_capture(exe,
-                                           self.demos_test_name + " --log " + remote_logfile,
+            return capture.run_and_capture(util.get_demos_binary(), self.demos_test_name + " --log " + logfile,
                                            self.demos_frame_cap, frame_count=self.demos_frame_count,
                                            captures_expected=self.demos_captures_expected, logfile=logfile,
                                            opts=self.get_capture_options(), timeout=timeout)
@@ -392,34 +384,6 @@ class TestCase:
 
         return analyse.decode_mesh_data(self.controller, indices, in_indices, attrs, 0, mesh.baseVertex)
 
-    def parse_shader_var_type(self, varType):
-        scalarType = varType
-        countElems = 1
-        if str(varType[-1]).isdigit():
-            if str(varType[-2]).isdigit():
-                scalarType = varType[:-2]
-                countElems = int(varType[-2:])
-            else:
-                scalarType = varType[:-1]
-                countElems = int(varType[-1:])
-        return (scalarType, countElems)
-        
-    def get_source_shader_var_value(self, sourceVars: List[rd.SourceVariableMapping], name, varType, debuggerVars):
-        sourceVar = [v for v in sourceVars if v.name == name]
-        if len(sourceVar) != 1:
-            raise TestFailureException(f"Couldn't find source variable {name} type:{varType}")
-
-        scalarType, countElems = self.parse_shader_var_type(varType)
-
-        debugged = self.evaluate_source_var(sourceVar[0], debuggerVars)
-        if scalarType == 'float':
-            return list(debugged.value.f32v[0:countElems])
-        elif scalarType == 'int':
-            return list(debugged.value.s32v[0:countElems])
-        else:
-            raise TestFailureException(f"Unhandled scalarType {scalarType} type:{varType}")
-        return None
-
     def check_task_data(self, task_ref, task_data):
         for idx in task_ref:
             ref = task_ref[idx]
@@ -540,7 +504,7 @@ class TestCase:
     def run(self):
         self.capture_filename = self.get_capture()
 
-        self.check(util.target_path_exists(self.capture_filename), "Didn't generate capture in make_capture")
+        self.check(os.path.exists(self.capture_filename), "Didn't generate capture in make_capture")
 
         log.print("Loading capture")
 
@@ -552,16 +516,13 @@ class TestCase:
         self.check_capture()
 
         if self.controller is not None:
-            if not util.get_remote_server() is None:
-                util.get_remote_server().CloseCapture(self.controller)
-            else:
-                self.controller.Shutdown()
+            self.controller.Shutdown()
 
     def invoketest(self, debugMode):
         start_time = self.get_time()
         self.run()
         duration = self.get_time() - start_time
-        log.print("Test {} ran in {}".format(self.demos_test_name, duration))
+        log.print("Test ran in {}".format(duration))
         self.debugMode = debugMode
 
     def get_first_action(self):
@@ -629,147 +590,19 @@ class TestCase:
 
         log.success("Backbuffer is identical to reference")
 
-    def log_shader_variable(self, var: rd.ShaderVariable) -> None:
-        log.print(f"Shader Variable: {var.name} Type:{var.type} Rows:{var.rows} Columns:{var.columns} Flags:{var.flags} CountMembers:{len(var.members)}")
-
-        for i in range(var.rows * var.columns):
-            type = var.type
-            if type == rd.VarType.UByte or type == rd.VarType.SByte:
-                log.print(f"Byte   {i}: {var.value.u8v[i]}")
-            elif type == rd.VarType.Half or type == rd.VarType.UShort or type == rd.VarType.SShort:
-                log.print(f"Half   {i}: {var.value.u16v[i]}")
-            elif type == rd.VarType.Float:
-                log.print(f"Float  {i}: {var.value.f32v[i]}")
-            elif type == rd.VarType.UInt or type == rd.VarType.SInt or type == rd.VarType.Bool or type == rd.VarType.Enum:
-                log.print(f"Int    {i}: {var.value.u32v[i]}")
-            elif type == rd.VarType.Double:
-                log.print(f"Double {i}: {var.value.f64v[i]}")
-            elif type == rd.VarType.ULong or type == rd.VarType.SLong or type == rd.VarType.GPUPointer:
-                log.print(f"Long   {i}: {var.value.u64v[i]}")
-            else:
-                log.print(f"???    {i}: {var.value.u64v[i]}")
-
-        for m in range(len(var.members)):
-            self.log_shader_variable(var.members[m])
-
-    def compare_shader_variable_change(self, expectedChange: rd.ShaderVariableChange, change: rd.ShaderVariableChange, showDiffs = True) -> bool:
-        ret = True
-        difference = ""
-        (res, difference) = analyse.shadervariable_equal(expectedChange.before, change.before)
-        if not res:
-            if not showDiffs:
-                return False
-            log.error(f"ShaderVariableChange different before {expectedChange.before.name} {change.before.name} {difference}")
-            ret = False
-        (res, difference) = analyse.shadervariable_equal(expectedChange.after, change.after)
-        if not res:
-            if not showDiffs:
-                return False
-            log.error(f"ShaderVariableChange different after {expectedChange.after.name} {change.after.name} {difference}")
-            ret = False
-        return ret
-
-    def compare_shader_variable_changes(self, expectedChanges: List[rd.ShaderVariableChange], changes: List[rd.ShaderVariableChange], showDiffs = True) -> bool:
-        ret = True
-        if (len(expectedChanges) != len(changes)):
-            if not showDiffs:
-                return False
-            log.error(f"Different number of changes:{len(expectedChanges)} != {len(changes)}")
-            return False
-        for i in range(len(expectedChanges)):
-            expected = expectedChanges[i]
-            change = changes[i]
-            if not self.compare_shader_variable_change(expected, change, showDiffs):
-                if not showDiffs:
-                    return False
-                log.error(f"ShaderVariableChange[{i}] does not match")
-                ret = False
-        return ret
-
-    def compare_single_step(self, expectedState: rd.ShaderDebugState, state: rd.ShaderDebugState, showDiffs = True) -> bool:
-        ret = True
-        if expectedState.stepIndex != state.stepIndex:
-            if not showDiffs:
-                return False
-            log.error(f"Different stepIndex: {expectedState.stepIndex} != {state.stepIndex}")
-            ret = False
-        if expectedState.flags != state.flags:
-            if not showDiffs:
-                return False
-            log.error(f"Different flags: {expectedState.flags} != {state.flags}")
-            ret = False
-        if expectedState.nextInstruction != state.nextInstruction:
-            if not showDiffs:
-                return False
-            log.error(f"Different nextInstruction: {expectedState.nextInstruction} != {state.nextInstruction}")
-            ret = False
-        if not self.compare_shader_variable_changes(expectedState.changes, state.changes, showDiffs):
-            if not showDiffs:
-                return False
-            log.error(f"Different changes at nextInstruction:{expectedState.nextInstruction} stepIndex:{expectedState.stepIndex}")
-            ret = False
-        if len(expectedState.callstack) != len(state.callstack):
-            if not showDiffs:
-                return False
-            log.error(f"Different callstack length: {len(expectedState.callstack)} != {len(state.callstack)}")
-            return False
-        for i in range(len(expectedState.callstack)):
-            if expectedState.callstack[i] != state.callstack[i]:
-                if not showDiffs:
-                    return False
-                log.error(f"Different callstack entry[{i}]: {expectedState.callstack[i]} != {state.callstack[i]}")
-                ret = False
-
-        return ret
-
-    def compare_full_traces(self, expectedStates: List[rd.ShaderDebugState], states: List[rd.ShaderDebugState], showDiffs = True) -> bool:
-        ret = True
-        if len(expectedStates) != len(states):
-            if not showDiffs:
-                return False
-            log.error(f"Traces have different number of states: {len(expectedStates)} != {len(states)}")
-            return False
-        for i in range(len(expectedStates)):
-            if not self.compare_single_step(expectedStates[i], states[i], showDiffs):
-                if not showDiffs:
-                    return False
-                log.error(f"Trace state[{i}] does not match")
-                ret = False
-        return ret
-
-    def generate_full_trace(self, trace: rd.ShaderDebugTrace) -> List[rd.ShaderDebugState]:
-        allStates = []
-        allChanges = []
-        while True:
-            states = self.controller.ContinueDebug(trace.debugger)
-            if len(states) == 0:
-                break
-            for state in states:
-                allStates.append(state)
-                allChanges.append(state.changes)
-        self.validate_trace(allChanges)
-        return allStates
-
-    def process_trace(self, trace: rd.ShaderDebugTrace, validate: bool = True):
+    def process_trace(self, trace: rd.ShaderDebugTrace):
         variables = {}
         cycles = 0
-        allChanges = []
-                
         while True:
             states = self.controller.ContinueDebug(trace.debugger)
             if len(states) == 0:
                 break
 
             for state in states:
-                if validate:
-                    allChanges.append(state.changes)
                 for change in state.changes:
                     variables[change.after.name] = change.after
 
             cycles = states[-1].stepIndex
-
-        if validate:
-            self.validate_trace(allChanges)
 
         return cycles, variables
 
@@ -844,7 +677,7 @@ class TestCase:
 
             raise KeyError("Couldn't find {} in debug vars".format(path))
 
-        raise KeyError(f"Couldn't find '{path}' in debug vars or parse it")
+        raise KeyError("Couldn't parse path {}".format(path))
 
 
     def evaluate_source_var(self, sourceVar: rd.SourceVariableMapping, debugVars) -> rd.ShaderVariable:
@@ -929,18 +762,7 @@ class TestCase:
 
         return processed
 
-    def retrieve_capture(self):
-        if util.get_remote_server() is None:
-            return self.capture_filename
-
-        dest = util.get_tmp_path(self.capture_filename.split('/')[-1])
-        log.print("Copying remote capture from '{}' to '{}'".format(self.capture_filename, dest))
-        util.get_remote_server().CopyCaptureFromRemote(self.capture_filename, dest, None)
-        return dest
-
     def check_export(self, capture_filename):
-        capture_filename = self.retrieve_capture()
-
         recomp_path = util.get_tmp_path('recompressed.rdc')
         conv_zipxml_path = util.get_tmp_path('conv.zip.xml')
         conv_path = util.get_tmp_path('conv.rdc')
@@ -971,173 +793,3 @@ class TestCase:
             raise TestFailureException("Recompressed capture file doesn't match re-imported capture file", conv_path, recomp_path, conv_zipxml_path)
 
         log.success("Recompressed and re-imported capture files are identical")
-
-    def check_debug_pixel(self, x: int, y: int):
-        pipe: rd.PipeState = self.controller.GetPipelineState()
-        if not pipe.GetShaderReflection(rd.ShaderStage.Pixel).debugInfo.debuggable:
-            log.print("Skipping undebuggable shader.")
-            return 
-
-        # Debug the shader
-        trace = self.controller.DebugPixel(x, y, rd.DebugPixelInputs())
-        if trace.debugger is None:
-            self.controller.FreeTrace(trace)
-            raise TestFailureException(f"Pixel shader could not be debugged at {x},{y}.")
-
-        _, variables = self.process_trace(trace)
-        output = self.find_output_source_var(trace, rd.ShaderBuiltin.ColorOutput, 0)
-        debugged = self.evaluate_source_var(output, variables)
-        self.controller.FreeTrace(trace)
-
-        try:
-            self.check_pixel_value(pipe.GetOutputTargets()[0].resource, x, y, debugged.value.f32v[0:4])
-        except TestFailureException as ex:
-            raise TestFailureException(f"Pixel shader did not debug correctly at {x},{y}. {ex}")
-
-        log.success(f"Pixel shader debugging at {x},{y} was successful")
-
-    def decode_task_data(self, controller: rd.ReplayController, mesh: rd.MeshFormat, payload: rd.ConstantBlock, task: int = 0):
-
-        begin = mesh.vertexByteOffset + mesh.vertexByteStride * task
-        end = min(begin + mesh.vertexByteSize, 0xffffffffffffffff)
-        buffer_data = controller.GetBufferData(mesh.vertexResourceId, begin, end -begin)
-
-        ret = []
-        offset = 0
-        for var in payload.variables:
-            var_data = {}
-            var_data[var.name] = []
-            # This is not complete to decode all possible payload layouts
-            for i in range(var.type.elements):
-                format = rd.ResourceFormat()
-                format.compByteWidth = rd.VarTypeByteSize(var.type.baseType)
-                format.compCount = var.type.columns
-                format.compType = rd.VarTypeCompType(var.type.baseType)
-                format.type = rd.ResourceFormatType.Regular
-
-                data =  analyse.unpack_data(format, buffer_data, offset)
-                var_data[var.name] += data
-                offset += format.compByteWidth * format.compCount
-            ret.append(var_data)
-
-        return ret
-
-    def get_task_data(self, action: rd.ActionDescription):
-        mesh: rd.MeshFormat = self.controller.GetPostVSData(0, 0, rd.MeshDataStage.TaskOut)
-        if mesh.numIndices == 0:
-            raise TestFailureException("Task data is empty")
-
-        if len(mesh.taskSizes) == 0:
-            raise TestFailureException("Task data is empty")
-
-        pipe: rd.PipeState = self.controller.GetPipelineState()
-        shader = pipe.GetShaderReflection(rd.ShaderStage.Task)
-        taskIdx = 0
-        task = action.dispatchDimension
-        data = []
-        for x in range(task[0]):
-            for y in range(task[1]):
-                for z in range(task[2]):
-                    data += self.decode_task_data(self.controller, mesh, shader.taskPayload, taskIdx)
-                    taskIdx += 1
-        return data
-
-    def check_renderdoc_log_asserts(self):
-        countAsserts = 0
-        rdlog = rd.GetLogFile()
-        with open(rdlog, 'r') as f:
-            for line in f:
-                if 'Assertion' in line:
-                    log.error(line)
-                    countAsserts += 1
-        if countAsserts > 0:
-            raise TestFailureException(f'Renderdoc log file contains {countAsserts} Asserts')
-
-    def validate_shadervariable(self, var: rd.ShaderVariable):
-        if len(var.members) != 0:
-            if var.type != rd.VarType.Struct and var.type != rd.VarType.Unknown and var.type != rd.VarType.ConstantBlock:
-                log.error(f"ShaderVariable {var.name} has members with invalid type {var.type}")
-                return False
-            if var.rows != 0:
-                log.error(f"ShaderVariable {var.name} has members with invalid rows {var.rows}")
-                return False
-            if var.columns != 0:
-                log.error(f"ShaderVariable {var.name} has members with invalid columns {var.columns}")
-                return False
-
-            for m in var.members:
-                if not self.validate_shadervariable(m):
-                    return False
-            return True
-
-        if var.type == rd.VarType.Struct:
-            log.error(f"ShaderVariable {var.name} has invalid type {var.type}")
-            return False
-
-        if var.rows * var.columns == 0:
-            log.error(f"ShaderVariable {var.name} has invalid rows * columns {var.rows} * {var.columns}")
-            return False
-
-        if var.rows * var.columns > 16:
-            log.error(f"ShaderVariable {var.name} has invalid rows * columns {var.rows} * {var.columns}")
-            return False
-
-        return True
-
-    def validate_trace(self, allChanges):
-        # Step Forwards
-        variables = {}
-        for i in range(len(allChanges)):
-            for c in allChanges[i]:
-                if len(c.after.name) == 0:
-                    if variables.get(c.before.name) is None:
-                        raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.before.name}' not found in existing variables")
-                    else:
-                        del variables[c.before.name]
-                    # Validate c.before
-                    if not self.validate_shadervariable(c.before):
-                        raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.before.name}' before is not well formed")
-
-                else:
-                    if c.after.name in variables:
-                        # Step Forwards: not-first appearance of a variable "before" must equal currently known value
-                        (res, difference) = analyse.shadervariable_equal(c.before, variables[c.after.name])
-                        if not res:
-                            raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.after.name}' before does not match existing entry {difference}")
-                    else:
-                        # Step Forwards: first appearance of a variable must have "before" = {}
-                        if c.before != rd.ShaderVariable():
-                            raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.after.name}' does not have NULL before")
-                    variables[c.after.name] = c.after
-                    # Validate c.after
-                    if not self.validate_shadervariable(c.after):
-                        raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.after.name}' after is not well formed")
-
-        # Step Backwards
-        for i in reversed(range(len(allChanges))):
-            for c in allChanges[i]:
-                if len(c.before.name) == 0:
-                    if variables.get(c.after.name) is None:
-                        raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.after.name}' not found in existing variables")
-                    else:
-                        del variables[c.after.name]
-                    # Validate c.after
-                    if not self.validate_shadervariable(c.after):
-                        raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.after.name}' after is not well formed")
-
-                else:
-                    if c.before.name in variables:
-                        # Step Backwards: not-first appearance of a variable "after" must equal currently known value
-                        (res, difference) = analyse.shadervariable_equal(c.after, variables[c.before.name])
-                        if not res:
-                            raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.before.name}' after does not match existing entry {difference}")
-                    else:
-                        # Step Backwards: first appearance of a variable must have "after" = {}
-                        if c.after != rd.ShaderVariable():
-                            raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.before.name}' does not have NULL after")
-                    variables[c.before.name] = c.before
-                    # Validate c.before
-                    if not self.validate_shadervariable(c.before):
-                        raise TestFailureException(f"Step {i} ShaderVariableChange for '{c.after.name}' before is not well formed")
-
-        return True

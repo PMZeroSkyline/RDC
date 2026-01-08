@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -580,7 +580,47 @@ void Reflector::RegisterOp(Iter it)
   {
     OpSource source(it);
 
-    ProcessFakeModuleProcessed(source.source);
+    // glslang based tools output fake OpModuleProcessed comments at the start of pre-1.3
+    // shaders source before OpModuleProcessed existed (in SPIR-V 1.1)
+    if(m_MajorVersion == 1 && m_MinorVersion < 1 && HasCommandLineInModuleProcessed(m_Generator))
+    {
+      rdcstr &src = source.source;
+
+      const char compileFlagPrefix[] = "// OpModuleProcessed ";
+      const char endMarker[] = "#line 1\n";
+      if(src.find(compileFlagPrefix) == 0)
+      {
+        // process compile flags
+        int32_t nextLine = src.indexOf('\n');
+        while(nextLine > 0)
+        {
+          bool finished = false;
+          if(src.find(compileFlagPrefix) == 0)
+          {
+            size_t offs = sizeof(compileFlagPrefix) - 1;
+            cmdline += " --" + src.substr(offs, nextLine - offs);
+          }
+          else if(src.find(endMarker) == 0)
+          {
+            finished = true;
+          }
+          else
+          {
+            RDCERR("Unexpected preamble line with OpModuleProcessed: %s",
+                   src.substr(0, nextLine).c_str());
+            break;
+          }
+
+          // erase this line
+          src.erase(0, nextLine + 1);
+
+          nextLine = src.indexOf('\n');
+
+          if(finished)
+            break;
+        }
+      }
+    }
 
     sourceLanguage = source.sourceLanguage;
 
@@ -623,8 +663,6 @@ void Reflector::RegisterOp(Iter it)
       {
         rdcstr name = strings[dbg.arg<Id>(0)];
         rdcstr source = dbg.params.size() > 1 ? strings[dbg.arg<Id>(1)] : rdcstr();
-
-        ProcessFakeModuleProcessed(source);
 
         // don't add empty source statements as actual files
         if(!name.empty() || !source.empty())
@@ -689,49 +727,6 @@ void Reflector::RegisterOp(Iter it)
 void Reflector::UnregisterOp(Iter it)
 {
   RDCFATAL("Reflector should not be used for editing! UnregisterOp() call invalid");
-}
-
-void Reflector::ProcessFakeModuleProcessed(rdcstr &src)
-{
-  // glslang based tools output fake OpModuleProcessed comments at the start of pre-1.3
-  // shaders source before OpModuleProcessed existed (in SPIR-V 1.1)
-  if(m_MajorVersion == 1 && m_MinorVersion < 1 && HasCommandLineInModuleProcessed(m_Generator))
-  {
-    const char compileFlagPrefix[] = "// OpModuleProcessed ";
-    const char endMarker[] = "#line 1\n";
-    if(src.find(compileFlagPrefix) == 0)
-    {
-      // process compile flags
-      int32_t nextLine = src.indexOf('\n');
-      while(nextLine > 0)
-      {
-        bool finished = false;
-        if(src.find(compileFlagPrefix) == 0)
-        {
-          size_t offs = sizeof(compileFlagPrefix) - 1;
-          cmdline += " --" + src.substr(offs, nextLine - offs);
-        }
-        else if(src.find(endMarker) == 0)
-        {
-          finished = true;
-        }
-        else
-        {
-          RDCERR("Unexpected preamble line with OpModuleProcessed: %s",
-                 src.substr(0, nextLine).c_str());
-          break;
-        }
-
-        // erase this line
-        src.erase(0, nextLine + 1);
-
-        nextLine = src.indexOf('\n');
-
-        if(finished)
-          break;
-      }
-    }
-  }
 }
 
 void Reflector::CalculateArrayTypeName(DataType &type)
@@ -836,7 +831,10 @@ void Reflector::PostParse()
           case Dim::Max: name = "Invalid"; break;
         }
 
-        name = ToStr(img.retType.Type()) + ", " + name;
+        name = ToStr(img.retType.Type()) + name;
+
+        if(img.sampled == 2 && img.dim != Dim::SubpassData)
+          name = "Storage" + name;
 
         if(img.ms)
           name += "MS";
@@ -844,8 +842,6 @@ void Reflector::PostParse()
           name += "Array";
 
         type.name = StringFormat::Fmt("Image<%s>", name.c_str());
-        if(img.sampled == 2 && img.dim != Dim::SubpassData)
-          type.name = "Storage" + type.name;
       }
       else if(type.type == DataType::SamplerType)
       {
@@ -917,8 +913,6 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
 
   CheckDebuggable(reflection.debugInfo.debuggable, reflection.debugInfo.debugStatus);
 
-  patchData.derivativeMode = ComputeDerivativeMode::None;
-
   const EntryPoint *entry = NULL;
   for(const EntryPoint &e : entries)
   {
@@ -968,12 +962,6 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       if(idx >= 0)
         patchData.maxPrimitives = e.executionModes.others[idx].outputPrimitivesEXT;
     }
-
-    if(e.executionModes.others.contains(rdcspv::ExecutionMode::DerivativeGroupQuadsKHR))
-      patchData.derivativeMode = ComputeDerivativeMode::Quad;
-
-    if(e.executionModes.others.contains(rdcspv::ExecutionMode::DerivativeGroupLinearKHR))
-      patchData.derivativeMode = ComputeDerivativeMode::Linear;
 
     // vulkan spec says "If an object is decorated with the WorkgroupSize decoration, this must take
     // precedence over any execution mode set for LocalSize."
@@ -1233,26 +1221,12 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       if(name.empty())
       {
         if(decorations[global.id].flags & Decorations::HasBuiltIn)
-        {
           name = StringFormat::Fmt("_%s", ToStr(decorations[global.id].builtIn).c_str());
-        }
         else if(decorations[global.id].flags & Decorations::HasLocation)
-        {
           name = StringFormat::Fmt("_%s%u", isInput ? "input" : "output",
                                    decorations[global.id].location);
-        }
         else
-        {
           name = StringFormat::Fmt("_sig%u", global.id.value());
-
-          // on GL, detect and name gl_PerVertex as the builtin struct
-          if(sourceAPI == GraphicsAPI::OpenGL)
-          {
-            if(!baseType.children.empty() &&
-               baseType.children[0].decorations.flags & Decorations::HasBuiltIn)
-              name = "gl_PerVertex";
-          }
-        }
 
         for(const DecorationAndParamData &d : decorations[global.id].others)
         {
@@ -1381,7 +1355,6 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
 
       // if the outer type is an array, get the length and peel it off.
       uint32_t arraySize = 1;
-      bool singleArray = false;
       if(varType->type == DataType::ArrayType)
       {
         // runtime arrays have no length
@@ -1389,13 +1362,11 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
           arraySize = EvaluateConstant(varType->length, specInfo).value.u32v[0];
         else
           arraySize = ~0U;
-        singleArray = (arraySize == 1);
         varType = &dataTypes[varType->InnerType()];
       }
 
       // new SSBOs are in the storage buffer class, previously they were in uniform with BufferBlock
       // decoration
-      const bool block = (decorations[varType->id].flags & Decorations::Block);
       const bool ssbo = (global.storage == StorageClass::StorageBuffer) ||
                         (decorations[varType->id].flags & Decorations::BufferBlock);
       const bool pushConst = (global.storage == StorageClass::PushConstant);
@@ -1563,8 +1534,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       }
       else
       {
-        if(varType->type != DataType::StructType ||
-           (sourceAPI == GraphicsAPI::OpenGL && !block && !ssbo))
+        if(varType->type != DataType::StructType)
         {
           if(taskPayload)
           {
@@ -1581,23 +1551,19 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
           else
           {
             // global loose variable - add to $Globals block
-            RDCASSERT(varType->type == DataType::ScalarType ||
-                      varType->type == DataType::VectorType || varType->type == DataType::MatrixType ||
-                      varType->type == DataType::ArrayType || varType->type == DataType::StructType);
+            RDCASSERT(varType->type == DataType::ScalarType || varType->type == DataType::VectorType ||
+                      varType->type == DataType::MatrixType || varType->type == DataType::ArrayType);
             RDCASSERT(sourceAPI == GraphicsAPI::OpenGL);
 
             ShaderConstant constant;
 
             MakeConstantBlockVariable(constant, pointerTypes, effectiveStorage, *varType,
-                                      strings[global.id], decorations[global.id], true, specInfo);
+                                      strings[global.id], decorations[global.id], specInfo);
 
             if(arraySize > 1)
               constant.type.elements = arraySize;
             else
-              constant.type.elements = 1;
-
-            if(singleArray)
-              constant.type.flags |= ShaderVariableFlags::SingleElementArray;
+              constant.type.elements = 0;
 
             constant.byteOffset = decorations[global.id].location;
 
@@ -1612,7 +1578,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
           taskPayloadBlock.bufferBacked = false;
 
           MakeConstantBlockVariables(effectiveStorage, *varType, 0, 0, taskPayloadBlock.variables,
-                                     pointerTypes, false, specInfo);
+                                     pointerTypes, specInfo);
 
           CalculateScalarLayout(0, taskPayloadBlock.variables);
         }
@@ -1646,16 +1612,12 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             res.variableType.name = varType->name;
 
             MakeConstantBlockVariables(effectiveStorage, *varType, 0, 0, res.variableType.members,
-                                       pointerTypes, false, specInfo);
+                                       pointerTypes, specInfo);
 
             rwresources.push_back(sortedres(global.id, res));
           }
           else
           {
-            // except on OpenGL, a struct type should be either Storage/BufferBlock or Block
-            // decorated. The GL case is handled above
-            RDCASSERTMSG("Should be block-decorated", block);
-
             ConstantBlock cblock;
 
             cblock.name = strings[global.id];
@@ -1669,7 +1631,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             cblock.bindArraySize = arraySize;
 
             MakeConstantBlockVariables(effectiveStorage, *varType, 0, 0, cblock.variables,
-                                       pointerTypes, false, specInfo);
+                                       pointerTypes, specInfo);
 
             if(!varType->children.empty())
               cblock.byteSize = CalculateMinimumByteSize(cblock.variables);
@@ -1704,7 +1666,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
 
       ShaderConstant spec;
       MakeConstantBlockVariable(spec, pointerTypes, rdcspv::StorageClass::PushConstant,
-                                dataTypes[c.type], name, decorations[c.id], false, specInfo);
+                                dataTypes[c.type], name, decorations[c.id], specInfo);
       spec.byteOffset = uint32_t(specblock.variables.size() * sizeof(uint64_t));
       spec.defaultValue = c.value.value.u64v[0];
       specblock.variables.push_back(spec);
@@ -1925,7 +1887,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
     {
       ShaderConstant dummy;
       MakeConstantBlockVariable(dummy, pointerTypes, dataTypes[id].pointerType.storage,
-                                dataTypes[id], rdcstr(), Decorations(), false, specInfo);
+                                dataTypes[id], rdcstr(), Decorations(), specInfo);
     }
 
     // continue if we generated some more
@@ -1938,7 +1900,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
     ShaderConstant dummy;
 
     MakeConstantBlockVariable(dummy, pointerTypes, dataTypes[it->first].pointerType.storage,
-                              dataTypes[it->first], rdcstr(), Decorations(), false, specInfo);
+                              dataTypes[it->first], rdcstr(), Decorations(), specInfo);
 
     if(it->second >= reflection.pointerTypes.size())
       reflection.pointerTypes.resize(it->second + 1);
@@ -1953,7 +1915,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
 void Reflector::MakeConstantBlockVariables(rdcspv::StorageClass storage, const DataType &structType,
                                            uint32_t arraySize, uint32_t arrayByteStride,
                                            rdcarray<ShaderConstant> &cblock,
-                                           SparseIdMap<uint16_t> &pointerTypes, bool bareUniforms,
+                                           SparseIdMap<uint16_t> &pointerTypes,
                                            const rdcarray<SpecConstant> &specInfo) const
 {
   // we get here for multi-dimensional arrays
@@ -1968,8 +1930,7 @@ void Reflector::MakeConstantBlockVariables(rdcspv::StorageClass storage, const D
     for(uint32_t i = 0; i < arraySize; i++)
     {
       MakeConstantBlockVariable(cblock[i], pointerTypes, storage, structType,
-                                StringFormat::Fmt("[%u]", i), decorations[structType.id],
-                                bareUniforms, specInfo);
+                                StringFormat::Fmt("[%u]", i), decorations[structType.id], specInfo);
 
       cblock[i].byteOffset = relativeOffset;
 
@@ -1990,7 +1951,7 @@ void Reflector::MakeConstantBlockVariables(rdcspv::StorageClass storage, const D
       name = StringFormat::Fmt("_child%zu", i);
     MakeConstantBlockVariable(cblock[i], pointerTypes, storage,
                               dataTypes[structType.children[i].type], name,
-                              structType.children[i].decorations, bareUniforms, specInfo);
+                              structType.children[i].decorations, specInfo);
   }
 
   uint32_t emptyStructSize = 4;
@@ -2024,10 +1985,6 @@ void Reflector::MakeConstantBlockVariables(rdcspv::StorageClass storage, const D
   {
     return;
   }
-
-  // don't enforce sizes on GL opaque uniforms
-  if(bareUniforms)
-    return;
 
   for(size_t i = 0; i < cblock.size(); i++)
   {
@@ -2105,7 +2062,6 @@ void Reflector::MakeConstantBlockVariable(ShaderConstant &outConst,
                                           SparseIdMap<uint16_t> &pointerTypes,
                                           rdcspv::StorageClass storage, const DataType &type,
                                           const rdcstr &name, const Decorations &varDecorations,
-                                          bool bareUniforms,
                                           const rdcarray<SpecConstant> &specInfo) const
 {
   outConst.name = name;
@@ -2196,7 +2152,7 @@ void Reflector::MakeConstantBlockVariable(ShaderConstant &outConst,
 
     MakeConstantBlockVariables(storage, *curType, outConst.type.elements,
                                outConst.type.arrayByteStride, outConst.type.members, pointerTypes,
-                               bareUniforms, specInfo);
+                               specInfo);
 
     if(curType->type == DataType::ArrayType)
     {

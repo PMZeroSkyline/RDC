@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -78,9 +78,7 @@ enum class ShaderStage
   tesseval,
   geom,
   frag,
-  comp,
-  mesh,
-  task,
+  comp
 };
 
 bool InternalSpvCompiler();
@@ -337,7 +335,6 @@ std::string trim(const std::string &str);
 
 void SetDebugLogEnabled(bool enabled);
 void DebugPrint(const char *fmt, ...);
-void OutputPrint(const char *fmt, ...);
 
 #define TEST_ASSERT(cond, fmt, ...)                                                                 \
   do                                                                                                \
@@ -380,44 +377,6 @@ void OutputPrint(const char *fmt, ...);
     exit(0);                                                                         \
   } while(0)
 
-namespace PixelHistory
-{
-void init();
-
-struct draw
-{
-  uint32_t first;
-  uint32_t count;
-};
-
-extern std::vector<DefaultA2V> vb;
-
-extern draw DepthWrite;
-extern draw UnboundPS;
-extern draw StencilWrite;
-extern draw Background;
-extern draw CullFront;
-extern draw DepthBoundsPrep;
-extern draw DepthBoundsClip;
-extern draw Draws300;
-extern draw Instances300;
-extern draw MainTest;
-extern draw ScissorFail;
-extern draw ScissorPass;
-extern draw StencilRef;
-extern draw StencilMask;
-extern draw DepthTest;
-extern draw SampleColour;
-extern draw DepthEqualSetup;
-extern draw DepthEqualFail;
-extern draw DepthEqualPass16;
-extern draw DepthEqualPass24;
-extern draw DepthEqualPass32;
-extern draw ColourMask;
-extern draw OverflowingDraw;
-extern draw PerFragDiscard;
-};
-
 namespace TextureZoo
 {
 enum class DataType
@@ -449,7 +408,6 @@ enum class TextureType
   BC5,
   BC6,
   BC7,
-  A8,
 };
 
 static const uint32_t texWidth = 8;

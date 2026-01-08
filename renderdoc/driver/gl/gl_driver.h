@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -587,7 +587,7 @@ private:
   void RenderText(float x, float y, const rdcstr &text);
   void RenderTextInternal(float x, float y, const rdcstr &text);
 
-  void CreateReplayBackbuffer(const GLInitParams &params, ResourceId fboId, GLuint &fbo,
+  void CreateReplayBackbuffer(const GLInitParams &params, ResourceId fboOrigId, GLuint &fbo,
                               rdcstr bbname);
 
   RenderDoc::FramePixels *SaveBackbufferImage();
@@ -722,8 +722,8 @@ public:
     rdcspv::Reflector spirv;
     rdcstr disassembly;
     std::map<size_t, uint32_t> spirvInstructionLines;
+    ShaderReflection *reflection;
     int version;
-    const ShaderReflection *GetReflection() const { return reflection; }
 
     // used only when we're capturing and don't have driver-side reflection so we need to emulate
     glslang::TShader *glslangShader = NULL;
@@ -731,13 +731,6 @@ public:
     // used for if the application actually uploaded SPIR-V
     rdcarray<uint32_t> spirvWords;
     SPIRVPatchData patchData;
-
-    // used if the application uploaded GLSL but we were able to compile to SPIR-V
-    bool convertedSPIRV = false;
-    bool convertedAutomapped = false;
-    rdcarray<uint32_t> convertedSpirvWords;
-    SPIRVPatchData convertedPatchData;
-    ShaderReflection convertedRefl;
 
     // the parameters passed to glSpecializeShader
     rdcstr entryPoint;
@@ -748,27 +741,6 @@ public:
     void ProcessSPIRVCompilation(WrappedOpenGL &drv, ResourceId id, GLuint realShader,
                                  const GLchar *pEntryPoint, GLuint numSpecializationConstants,
                                  const GLuint *pConstantIndex, const GLuint *pConstantValue);
-
-    void ClearReflection()
-    {
-      *reflection = ShaderReflection();
-      spirv = rdcspv::Reflector();
-    }
-    const ShaderReflection *StealReflection()
-    {
-      ShaderReflection *ret = reflection;
-      reflection = NULL;
-      return ret;
-    }
-
-    void Disassemble(const rdcstr &disasmEntryPoint)
-    {
-      if(disassembly.empty())
-        disassembly = spirv.Disassemble(disasmEntryPoint, spirvInstructionLines);
-    }
-
-  private:
-    ShaderReflection *reflection;
   };
 
   struct ProgramData
@@ -815,22 +787,15 @@ public:
   std::map<ResourceId, ProgramData> m_Programs;
   std::map<ResourceId, PipelineData> m_Pipelines;
 
-  bool HasShader(ResourceId id) { return m_Shaders.find(id) != m_Shaders.end(); }
-  const ShaderData &GetShader(ResourceId id) { return m_Shaders[id]; }
-  ShaderData &GetWriteableShader(ResourceId id) { return m_Shaders[id]; }
-  const ProgramData &GetProgram(ResourceId id) { return m_Programs[id]; }
-  ProgramData &GetWriteableProgram(ResourceId id) { return m_Programs[id]; }
-  const PipelineData &GetPipeline(ResourceId id) { return m_Pipelines[id]; }
-
   void FillReflectionArray(ResourceId program, PerStageReflections &stages)
   {
-    const ProgramData &progdata = GetProgram(program);
+    ProgramData &progdata = m_Programs[program];
     for(size_t i = 0; i < ARRAY_COUNT(progdata.stageShaders); i++)
     {
       ResourceId shadId = progdata.stageShaders[i];
       if(shadId != ResourceId())
       {
-        stages.refls[i] = GetShader(shadId).GetReflection();
+        stages.refls[i] = m_Shaders[shadId].reflection;
       }
     }
   }

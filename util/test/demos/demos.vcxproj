@@ -100,13 +100,7 @@
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
   </ItemDefinitionGroup>
-  <PropertyGroup Condition="$(Platform)=='x64' and exists('3rdparty/shaderc/x64/lib/shaderc_combined.lib') and $(PlatformToolset)=='v143'">
-    <HaveShaderc>1</HaveShaderc>
-  </PropertyGroup>
-  <PropertyGroup Condition="$(Platform)=='x86' and exists('3rdparty/shaderc/x86/lib/shaderc_combined.lib') and $(PlatformToolset)=='v143'">
-    <HaveShaderc>1</HaveShaderc>
-  </PropertyGroup>
-  <ItemDefinitionGroup Condition="$(Platform)=='x64' and $(HaveShaderc)=='1'">
+  <ItemDefinitionGroup Condition="$(Platform)=='x64' and exists('3rdparty/shaderc/x64/lib/shaderc_combined.lib')">
     <ClCompile>
       <AdditionalIncludeDirectories>3rdparty/shaderc/x64/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>HAVE_SHADERC=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -115,7 +109,7 @@
       <AdditionalDependencies>3rdparty/shaderc/x64/lib/shaderc_combined.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="$(Platform)=='x86' and $(HaveShaderc)=='1'">
+  <ItemDefinitionGroup Condition="$(Platform)=='x86' and exists('3rdparty/shaderc/x86/lib/shaderc_combined.lib')">
     <ClCompile>
       <AdditionalIncludeDirectories>3rdparty/shaderc/x86/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>HAVE_SHADERC=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -164,7 +158,7 @@
     <ClCompile Include="d3d11\d3d11_mip_rtv.cpp" />
     <ClCompile Include="d3d11\d3d11_overdraw_stress.cpp" />
     <ClCompile Include="d3d11\d3d11_parameter_zoo.cpp" />
-    <ClCompile Include="d3d11\d3d11_pixel_history.cpp" />
+    <ClCompile Include="d3d11\d3d11_pixel_history_zoo.cpp" />
     <ClCompile Include="d3d11\d3d11_primitiveid.cpp" />
     <ClCompile Include="d3d11\d3d11_shader_debug_zoo.cpp" />
     <ClCompile Include="d3d11\d3d11_overlay_test.cpp" />
@@ -190,9 +184,7 @@
     <ClCompile Include="d3d11\d3d11_untyped_backbuffer_descriptor.cpp" />
     <ClCompile Include="d3d11\d3d11_vertex_attr_zoo.cpp" />
     <ClCompile Include="d3d11\d3d11_video_textures.cpp" />
-    <ClCompile Include="d3d11\d3d11_workgroup_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_amd_shader_extensions.cpp" />
-    <ClCompile Include="d3d12\d3d12_blend.cpp" />
     <ClCompile Include="d3d12\d3d12_buffer_truncation.cpp" />
     <ClCompile Include="d3d12\d3d12_cbuffer_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_compute_only.cpp" />
@@ -204,7 +196,6 @@
     <ClCompile Include="d3d12\d3d12_existing_heap.cpp" />
     <ClCompile Include="d3d12\d3d12_groupshared.cpp" />
     <ClCompile Include="d3d12\d3d12_helpers.cpp" />
-    <ClCompile Include="d3d12\d3d12_memory_overlap.cpp" />
     <ClCompile Include="d3d12\d3d12_mesh_shader.cpp" />
     <ClCompile Include="d3d12\d3d12_multi_wait_before_signal.cpp" />
     <ClCompile Include="d3d12\d3d12_large_buffer.cpp" />
@@ -223,7 +214,6 @@
     <ClCompile Include="d3d12\d3d12_resource_lifetimes.cpp" />
     <ClCompile Include="d3d12\d3d12_resource_mapping_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_rtas_zoo.cpp" />
-    <ClCompile Include="d3d12\d3d12_shader_debugdata_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_shader_debug_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_shader_editing.cpp" />
     <ClCompile Include="d3d12\d3d12_shader_isa.cpp" />
@@ -231,7 +221,6 @@
     <ClCompile Include="d3d12\d3d12_sharing.cpp" />
     <ClCompile Include="d3d12\d3d12_simple_dispatch.cpp" />
     <ClCompile Include="d3d12\d3d12_simple_triangle.cpp" />
-    <ClCompile Include="d3d12\d3d12_subgroup_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_swapchain_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_template.cpp" />
     <ClCompile Include="d3d12\d3d12_test.cpp" />
@@ -241,7 +230,6 @@
     <ClCompile Include="d3d12\d3d12_vertex_uav.cpp" />
     <ClCompile Include="d3d12\d3d12_video_textures.cpp" />
     <ClCompile Include="d3d12\d3d12_vrs.cpp" />
-    <ClCompile Include="d3d12\d3d12_workgroup_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_write_subresource.cpp" />
     <ClCompile Include="dx\d3d_helpers.cpp" />
     <ClCompile Include="3rdparty\glad\glad.c" />
@@ -283,7 +271,6 @@
     <ClCompile Include="gl\gl_resource_lifetimes.cpp" />
     <ClCompile Include="gl\gl_runtime_bind_prog_to_pipe.cpp" />
     <ClCompile Include="gl\gl_separable_geometry_shader.cpp" />
-    <ClCompile Include="gl\gl_shader_debug_zoo.cpp" />
     <ClCompile Include="gl\gl_shader_editing.cpp" />
     <ClCompile Include="gl\gl_shader_isa.cpp" />
     <ClCompile Include="gl\gl_simple_triangle.cpp" />
@@ -316,12 +303,10 @@
     <ClCompile Include="test_common.cpp" />
     <ClCompile Include="texture_zoo.cpp" />
     <ClCompile Include="vk\vk_blend.cpp" />
-    <ClCompile Include="vk\vk_descriptor_buffer.cpp" />
     <ClCompile Include="vk\vk_compute_only.cpp" />
     <ClCompile Include="vk\vk_counters.cpp" />
     <ClCompile Include="vk\vk_custom_border_color.cpp" />
     <ClCompile Include="vk\vk_dedicated_allocation.cpp" />
-    <ClCompile Include="vk\vk_descriptor_buffer_analyse.cpp" />
     <ClCompile Include="vk\vk_descriptor_reuse.cpp" />
     <ClCompile Include="vk\vk_descriptor_variable_count.cpp" />
     <ClCompile Include="vk\vk_discard_zoo.cpp" />
@@ -336,7 +321,6 @@
     <ClCompile Include="vk\vk_leak_check.cpp" />
     <ClCompile Include="vk\vk_load_store_none.cpp" />
     <ClCompile Include="vk\vk_mem_bench.cpp" />
-    <ClCompile Include="vk\vk_mesh_shader.cpp" />
     <ClCompile Include="vk\vk_mesh_zoo.cpp" />
     <ClCompile Include="vk\vk_multi_entry.cpp" />
     <ClCompile Include="vk\vk_multi_present.cpp" />
@@ -387,7 +371,6 @@
     <ClCompile Include="vk\vk_simple_triangle.cpp" />
     <ClCompile Include="vk\vk_test.cpp" />
     <ClCompile Include="3rdparty\volk\volk.c" />
-    <ClCompile Include="vk\vk_workgroup_zoo.cpp" />
     <ClCompile Include="win32\win32_platform.cpp" />
     <ClCompile Include="win32\win32_window.cpp" />
   </ItemGroup>
@@ -541,8 +524,6 @@ namespace DXCEnumerateAndCheck {
       <Output TaskParameter="DebugOut" PropertyName="DebugOutDXC" />
     </GetDXCDLL>
     <Message Condition="$(DXCDLLFolder.Length) &gt; 0" Importance="high" Text="Using DXC/D3DCompiler dlls from $(DXCDLLFolder)." />
-    <Message Condition="$(HaveShaderc)=='1'" Importance="high" Text="Built with linked shaderc." />
-    <Message Condition="$(HaveShaderc)!='1'" Importance="high" Text="Not built with linked shaderc." />
     <PropertyGroup Condition="$(DXCDLLFolder.Length) &gt; 0">
       <DXCDLLSourceLocation>$(DXCDLLFolder)</DXCDLLSourceLocation>
     </PropertyGroup>

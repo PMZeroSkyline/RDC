@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -36,7 +36,7 @@ VulkanDynamicStateIndex ConvertDynamicState(VkDynamicState state);
 
 struct DescSetLayout
 {
-  void Init(VulkanResourceManager *resourceMan, VulkanCreationInfo &info, ResourceId id,
+  void Init(VulkanResourceManager *resourceMan, VulkanCreationInfo &info,
             const VkDescriptorSetLayoutCreateInfo *pCreateInfo);
 
   void CreateBindingsArray(BindingStorage &bindingStorage, uint32_t variableAllocSize) const;
@@ -121,8 +121,6 @@ struct DescSetLayout
   };
   rdcarray<Binding> bindings;
 
-  ResourceId resourceId;
-
   // parallel array to bindings, with a bitmask of mutable types
   rdcarray<uint64_t> mutableBitmasks;
 
@@ -142,9 +140,6 @@ struct DescSetLayout
   bool isCompatible(const DescSetLayout &other) const;
 };
 
-uint32_t GetDescriptorSizeOfBind(VulkanResourceManager *resourceMan,
-                                 const rdcarray<DescSetLayout::Binding> &bindings,
-                                 const rdcarray<uint64_t> &mutableBitmasks, uint32_t fixedBindNumber);
 bool IsValid(bool allowNULLDescriptors, const VkWriteDescriptorSet &write, uint32_t arrayElement);
 bool CreateDescriptorWritesForSlotData(WrappedVulkan *vk, rdcarray<VkWriteDescriptorSet> &writes,
                                        VkDescriptorBufferInfo *&writeScratch,
@@ -242,8 +237,8 @@ struct VulkanCreationInfo
     ResourceId module;
     ShaderStage stage = ShaderStage::Count;
     rdcstr entryPoint;
-    const ShaderReflection *refl = NULL;
-    const SPIRVPatchData *patchData = NULL;
+    ShaderReflection *refl = NULL;
+    SPIRVPatchData *patchData = NULL;
 
     VkPipelineShaderStageCreateFlags flags;
 
@@ -252,17 +247,9 @@ struct VulkanCreationInfo
     // VkPipelineShaderStageRequiredSubgroupSizeCreateInfo
     uint32_t requiredSubgroupSize = 0;
 
-    // VkPipelineRobustnessCreateInfo
-    VkPipelineRobustnessBufferBehavior storageBufferRobustness;
-    VkPipelineRobustnessBufferBehavior uniformBufferRobustness;
-    VkPipelineRobustnessImageBehavior imageRobustness;
-
-    bool HasRobustness() const
-    {
-      return storageBufferRobustness != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT ||
-             uniformBufferRobustness != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT ||
-             imageRobustness != VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT;
-    }
+    void ProcessStaticDescriptorAccess(ResourceId pushStorage, ResourceId specStorage,
+                                       rdcarray<DescriptorAccess> &staticDescriptorAccess,
+                                       rdcarray<const DescSetLayout *> setLayoutInfos) const;
   };
 
   struct Pipeline
@@ -281,10 +268,6 @@ struct VulkanCreationInfo
     rdcarray<ResourceId> parentLibraries;
 
     ResourceId compLayout;
-
-    // the pipeline's own specified layout, independent of vertLayout/fragLayout below when linking
-    // graphics pipeline libraries
-    ResourceId ownLayout;
 
     // these will be the same in some cases, but can be different if the application is using
     // INDEPENDENT_SETS_BIT_KHR
@@ -317,10 +300,7 @@ struct VulkanCreationInfo
     VkPipeline subpass0pipe;
 
     // VkGraphicsPipelineCreateInfo
-    uint64_t flags;
-
-    // VkPipelineCreateFlags2CreateInfo
-    bool useCreateFlags2;
+    VkPipelineCreateFlags flags;
 
     // VkPipelineShaderStageCreateInfo
     ShaderEntry shaders[NumShaderStages];
@@ -364,7 +344,6 @@ struct VulkanCreationInfo
 
     // VkPipelineViewportStateCreateInfo
     uint32_t viewportCount;
-    uint32_t scissorCount;
     rdcarray<VkViewport> viewports;
     rdcarray<VkRect2D> scissors;
 
@@ -459,12 +438,6 @@ struct VulkanCreationInfo
 
     // VkPipelineRasterizationProvokingVertexStateCreateInfoEXT
     VkProvokingVertexModeEXT provokingVertex;
-
-    // VkPipelineRobustnessCreateInfo
-    VkPipelineRobustnessBufferBehavior vertexInputRobustness;
-
-    // VkPipelineFragmentDensityMapLayeredCreateInfoVALVE
-    uint32_t maxFragmentDensityMapLayers;
   };
   std::unordered_map<ResourceId, Pipeline> m_Pipeline;
 
@@ -599,8 +572,6 @@ struct VulkanCreationInfo
 
     VkBuffer wholeMemBuf;
 
-    VkDeviceAddress opaqueAddr;
-
     enum MemoryBinding
     {
       None = 0x0,
@@ -626,16 +597,15 @@ struct VulkanCreationInfo
     void Init(VulkanResourceManager *resourceMan, VulkanCreationInfo &info,
               const VkBufferCreateInfo *pCreateInfo, VkMemoryRequirements origMrq);
 
-    uint64_t usage;
+    VkBufferUsageFlags usage;
     uint64_t size;
     uint64_t gpuAddress;
     bool external;
 
     VkMemoryRequirements mrq;
-
-    ResourceId inlineDescriptorId;
   };
   std::unordered_map<ResourceId, Buffer> m_Buffer;
+  rdcsortedflatmap<uint64_t, ResourceId> m_BufferAddresses;
 
   struct BufferView
   {
@@ -665,22 +635,7 @@ struct VulkanCreationInfo
     bool cube;
     TextureCategory creationFlags;
 
-    VkDeviceAddress address;
     VkMemoryRequirements mrq;
-
-    rdcarray<rdcpair<bytebuf, ResourceId>> viewDescriptors;
-
-    ResourceId getViewFromDescriptor(const byte *descriptorBytes, size_t descriptorSize)
-    {
-      for(auto it = viewDescriptors.begin(); it != viewDescriptors.end(); ++it)
-      {
-        if(it->first.size() == descriptorSize &&
-           memcmp(it->first.data(), descriptorBytes, descriptorSize) == 0)
-          return it->second;
-      }
-
-      return ResourceId();
-    }
   };
   std::unordered_map<ResourceId, Image> m_Image;
 
@@ -747,8 +702,6 @@ struct VulkanCreationInfo
     VkFormat format;
     VkImageSubresourceRange range;
     VkComponentMapping componentMapping;
-
-    bool isDepthImage;
 
     // VkImageViewMinLodCreateInfoEXT
     float minLOD;
@@ -836,11 +789,7 @@ struct VulkanCreationInfo
   std::unordered_map<ResourceId, uint32_t> m_Queue;
 
   // the fake ID of the 'command buffer' descriptor store for push constants
-  static ResourceId pushConstantDescriptorStorage;
-  // fake IDs for each set/buffer
-  static rdcarray<ResourceId> descriptorSetStorage;
-  static rdcarray<ResourceId> descriptorBufferStorage;
-  static rdcarray<ResourceId> inlineBufferStorage;
+  ResourceId pushConstantDescriptorStorage;
 
   void erase(ResourceId id)
   {
@@ -866,11 +815,4 @@ struct VulkanCreationInfo
     m_DescUpdateTemplate.erase(id);
     m_Queue.erase(id);
   }
-  const PipelineLayout &GetPipelineLayoutInfo(ResourceId rp) const;
-  const DescSetLayout &GetDescSetLayout(ResourceId dsl) const;
-  const Buffer &GetBufferInfo(ResourceId buf) const;
-  const BufferView &GetBufferViewInfo(ResourceId bufView) const;
-  const Image &GetImageInfo(ResourceId img) const;
-  const ImageView &GetImageViewInfo(ResourceId imgView) const;
-  const Sampler &GetSamplerInfo(ResourceId samp) const;
 };

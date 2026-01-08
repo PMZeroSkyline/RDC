@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -173,7 +173,7 @@ bool WrappedID3D12Device::Serialise_CreateStateObject(SerialiserType &ser,
     }
 
     WrappedID3D12StateObject *wrapped = new WrappedID3D12StateObject(
-        pStateObject, GetResourceManager()->CreateDeferredHandle<ID3D12StateObject>(), true, this);
+        GetResourceManager()->CreateDeferredHandle<ID3D12StateObject>(), true, this);
 
     wrapped->exports =
         new D3D12ShaderExportDatabase(pStateObject, GetResourceManager()->GetRTManager());
@@ -239,6 +239,7 @@ bool WrappedID3D12Device::Serialise_CreateStateObject(SerialiserType &ser,
           .initialisationChunks.push_back((uint32_t)m_StructuredFile->chunks.size() - 2);
       m_GlobalEXTUAV = ~0U;
     }
+    GetResourceManager()->AddLiveResource(pStateObject, wrapped);
   }
 
   return true;
@@ -265,7 +266,7 @@ WrappedID3D12Device::CreateStateObject(const D3D12_STATE_OBJECT_DESC *pDesc, REF
 
   if(SUCCEEDED(ret))
   {
-    WrappedID3D12StateObject *wrapped = new WrappedID3D12StateObject(ResourceId(), real, false, this);
+    WrappedID3D12StateObject *wrapped = new WrappedID3D12StateObject(real, false, this);
 
     if(IsCaptureMode(m_State))
     {
@@ -318,6 +319,10 @@ WrappedID3D12Device::CreateStateObject(const D3D12_STATE_OBJECT_DESC *pDesc, REF
       if(vendorChunk)
         record->AddChunk(vendorChunk);
       record->AddChunk(scope.Get());
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
     }
 
     *ppStateObject = (ID3D12StateObject *)wrapped;

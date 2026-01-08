@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -292,13 +292,6 @@ GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, const rdcarra
                                   EShMsgOnlyPreprocessor, &outstr, incl);
           src.assign(outstr.c_str(), outstr.size());
         }
-
-        int idx = src.find("\nout float gl_CullDistance");
-        if(idx > 0)
-          src.insert(idx + 1, "//");
-        idx = src.find("\nout float gl_ClipDistance");
-        if(idx > 0)
-          src.insert(idx + 1, "//");
 
         if(!success)
         {
@@ -1252,10 +1245,6 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
   refl.encoding = ShaderEncoding::GLSL;
   refl.debugInfo.compiler = KnownShaderTool::Unknown;
   refl.debugInfo.encoding = ShaderEncoding::GLSL;
-  refl.debugInfo.debuggable = false;
-  refl.debugInfo.debugStatus =
-      "Shader debugging not supported for legacy GLSL shaders.\n"
-      "Only modern GLSL compatible with SPIR-V compilation can be debugged.";
 
   if(shadType == eGL_COMPUTE_SHADER)
   {
@@ -2477,7 +2466,7 @@ void EvaluateVertexAttributeBinds(GLuint curProg, const ShaderReflection *refl, 
   }
 }
 
-void GetCurrentBinding(GLuint curProg, const ShaderReflection *refl, const ShaderResource &resource,
+void GetCurrentBinding(GLuint curProg, ShaderReflection *refl, const ShaderResource &resource,
                        uint32_t &slot, bool &used)
 {
   // in case of bugs, we readback into this array instead of a single int
@@ -2700,7 +2689,7 @@ void GetCurrentBinding(GLuint curProg, const ShaderReflection *refl, const Shade
 #endif
 }
 
-void GetCurrentBinding(GLuint curProg, const ShaderReflection *refl, const ConstantBlock &cblock,
+void GetCurrentBinding(GLuint curProg, ShaderReflection *refl, const ConstantBlock &cblock,
                        uint32_t &slot, bool &used)
 {
   if(refl->encoding == ShaderEncoding::OpenGLSPIRV)

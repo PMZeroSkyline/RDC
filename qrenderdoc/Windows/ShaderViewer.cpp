@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -45,98 +45,6 @@
 #include "toolwindowmanager/ToolWindowManagerArea.h"
 #include "ui_ShaderViewer.h"
 
-#if defined(RELEASE)
-#define SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS 0
-#else
-#define SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS 1
-
-bool ValidationShaderVariable(const ShaderVariable &var)
-{
-  // A Stuct or array
-  if(var.members.size() != 0)
-  {
-    if(var.type != VarType::Struct && var.type != VarType::Unknown &&
-       var.type != VarType::ConstantBlock)
-      return false;
-    // base variable rows = 0 and columns = 0
-    if(var.rows != 0)
-      return false;
-    if(var.columns != 0)
-      return false;
-
-    for(size_t m = 0; m < var.members.size(); ++m)
-      if(!ValidationShaderVariable(var.members[m]))
-        return false;
-    return true;
-  }
-  if(var.type == VarType::Struct)
-    return false;
-
-  if(var.rows * var.columns == 0)
-    return false;
-
-  if(var.rows * var.columns > 16)
-    return false;
-
-  return true;
-}
-
-bool ShaderVariableEqual(const ShaderVariable &a, const ShaderVariable &b)
-{
-  if(a.rows != b.rows)
-    return false;
-  if(a.columns != b.columns)
-    return false;
-  if(a.name != b.name)
-    return false;
-  if(a.type != b.type)
-    return false;
-  if(a.flags != b.flags)
-    return false;
-  if(a.members.size() != b.members.size())
-    return false;
-
-  for(int i = 0; i < a.rows * a.columns; ++i)
-  {
-    switch(a.type)
-    {
-      case VarType::UByte:
-      case VarType::SByte:
-        if(a.value.u8v[i] != b.value.u8v[i])
-          return false;
-        break;
-      case VarType::Half:
-      case VarType::UShort:
-      case VarType::SShort:
-        if(a.value.u16v[i] != b.value.u16v[i])
-          return false;
-        break;
-      case VarType::Float:
-      case VarType::UInt:
-      case VarType::SInt:
-      case VarType::Bool:
-      case VarType::Enum:
-        if(a.value.u32v[i] != b.value.u32v[i])
-          return false;
-        break;
-      case VarType::Double:
-      case VarType::ULong:
-      case VarType::SLong:
-      case VarType::GPUPointer:
-      default:
-        if(a.value.u64v[i] != b.value.u64v[i])
-          return false;
-        break;
-    }
-  }
-  for(size_t m = 0; m < a.members.size(); ++m)
-    if(!ShaderVariableEqual(a.members[m], b.members[m]))
-      return false;
-
-  return true;
-}
-#endif    // #if defined(RELEASE)
-
 static bool ResourceReferencesMatch(const ShaderVariable &a, const ShaderVariable &b)
 {
   if(a.IsDirectAccess() == b.IsDirectAccess())
@@ -155,22 +63,6 @@ static bool ResourceReferencesMatch(const ShaderVariable &a, const ShaderVariabl
   return false;
 }
 
-void SortRDWidgetItems(QVector<RDTreeWidgetItem *> &members)
-{
-  // Sort the children by offset, then global source var index, then by text.
-  // Using the global source var index allows resource arrays to be presented in index order
-  // rather than by name, so for example arr[2] comes before arr[10]
-  std::sort(members.begin(), members.end(), [](const RDTreeWidgetItem *a, const RDTreeWidgetItem *b) {
-    VariableTag at = a->tag().value<VariableTag>();
-    VariableTag bt = b->tag().value<VariableTag>();
-    if(at.offset != bt.offset)
-      return at.offset < bt.offset;
-    if(at.globalSourceVar && bt.globalSourceVar)
-      return at.sourceVarIdx < bt.sourceVarIdx;
-    return a->text(0) < b->text(0);
-  });
-}
-
 struct AccessedResourceTag
 {
   AccessedResourceTag() : type(VarType::Unknown), step(0)
@@ -186,7 +78,7 @@ struct AccessedResourceTag
   {
   }
   AccessedResourceTag(ShaderDirectAccess acc, VarType t)
-      : resRef(acc), type(t), step(0), category(CategoryForDescriptorType(acc.type))
+      : resRef(acc), type(t), step(0), category(acc.category)
   {
   }
   AccessedResourceTag(ShaderVariable var) : step(0), type(var.type)
@@ -197,7 +89,7 @@ struct AccessedResourceTag
       {
         resRef.directAccess = true;
         resRef.access = var.GetDirectAccess();
-        category = CategoryForDescriptorType(resRef.access.type);
+        category = resRef.access.category;
       }
       else
       {
@@ -1308,43 +1200,33 @@ void ShaderViewer::debugShader(const ShaderReflection *shader, ResourceId pipeli
 
   for(ScintillaEdit *edit : m_Scintillas)
   {
-    long current, finished;
-
-    if(IsDarkTheme())
-    {
-      current = SCINTILLA_COLOUR(100, 50, 50);
-      finished = SCINTILLA_COLOUR(50, 52, 64);
-    }
-    else
-    {
-      current = SCINTILLA_COLOUR(240, 128, 128);
-      finished = SCINTILLA_COLOUR(119, 136, 153);
-    }
-
-    edit->markerSetBack(CURRENT_MARKER, current);
-    edit->markerSetBack(CURRENT_MARKER + 1, current);
+    // C# LightCoral
+    edit->markerSetBack(CURRENT_MARKER, SCINTILLA_COLOUR(240, 128, 128));
+    edit->markerSetBack(CURRENT_MARKER + 1, SCINTILLA_COLOUR(240, 128, 128));
     edit->markerDefine(CURRENT_MARKER, SC_MARK_SHORTARROW);
     edit->markerDefine(CURRENT_MARKER + 1, SC_MARK_BACKGROUND);
-    edit->indicSetFore(CURRENT_INDICATOR, current);
+    edit->indicSetFore(CURRENT_INDICATOR, SCINTILLA_COLOUR(240, 128, 128));
     edit->indicSetAlpha(CURRENT_INDICATOR, 220);
     edit->indicSetOutlineAlpha(CURRENT_INDICATOR, 255);
     edit->indicSetUnder(CURRENT_INDICATOR, true);
     edit->indicSetStyle(CURRENT_INDICATOR, INDIC_STRAIGHTBOX);
-    edit->indicSetHoverFore(CURRENT_INDICATOR, current);
+    edit->indicSetHoverFore(CURRENT_INDICATOR, SCINTILLA_COLOUR(240, 128, 128));
     edit->indicSetHoverStyle(CURRENT_INDICATOR, INDIC_STRAIGHTBOX);
 
-    edit->markerSetBack(FINISHED_MARKER, finished);
-    edit->markerSetBack(FINISHED_MARKER + 1, finished);
+    // C# LightSlateGray
+    edit->markerSetBack(FINISHED_MARKER, SCINTILLA_COLOUR(119, 136, 153));
+    edit->markerSetBack(FINISHED_MARKER + 1, SCINTILLA_COLOUR(119, 136, 153));
     edit->markerDefine(FINISHED_MARKER, SC_MARK_ROUNDRECT);
     edit->markerDefine(FINISHED_MARKER + 1, SC_MARK_BACKGROUND);
-    edit->indicSetFore(FINISHED_INDICATOR, finished);
+    edit->indicSetFore(FINISHED_INDICATOR, SCINTILLA_COLOUR(119, 136, 153));
     edit->indicSetAlpha(FINISHED_INDICATOR, 220);
     edit->indicSetOutlineAlpha(FINISHED_INDICATOR, 255);
     edit->indicSetUnder(FINISHED_INDICATOR, true);
     edit->indicSetStyle(FINISHED_INDICATOR, INDIC_STRAIGHTBOX);
-    edit->indicSetHoverFore(FINISHED_INDICATOR, finished);
+    edit->indicSetHoverFore(FINISHED_INDICATOR, SCINTILLA_COLOUR(119, 136, 153));
     edit->indicSetHoverStyle(FINISHED_INDICATOR, INDIC_STRAIGHTBOX);
 
+    // C# Red
     edit->markerSetBack(BREAKPOINT_MARKER, SCINTILLA_COLOUR(255, 0, 0));
     edit->markerSetBack(BREAKPOINT_MARKER + 1, SCINTILLA_COLOUR(255, 0, 0));
     edit->markerDefine(BREAKPOINT_MARKER, SC_MARK_CIRCLE);
@@ -2633,8 +2515,6 @@ void ShaderViewer::runTo(const rdcarray<uint32_t> &runToInstructions, bool forwa
   if(!m_Trace || m_States.empty())
     return;
 
-  condition |= ShaderEvents::DebugBreak;
-
   m_VariablesChanged.clear();
 
   bool firstStep = true;
@@ -2750,18 +2630,8 @@ void ShaderViewer::applyBackwardsChange()
   if(IsFirstState())
     return;
 
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-  QSet<rdcstr> changedVariables;
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-  const ShaderVariable nullChange;
   for(const ShaderVariableChange &c : GetCurrentState().changes)
   {
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-    rdcstr varName = c.before.name.empty() ? c.after.name : c.before.name;
-    if(changedVariables.contains(varName))
-      qCritical("Multiple ShaderVariableChange's for '%s'", varName.c_str());
-    changedVariables.insert(varName);
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
     // if the before name is empty, this is a variable that came into scope/was created
     if(c.before.name.empty())
     {
@@ -2769,23 +2639,14 @@ void ShaderViewer::applyBackwardsChange()
       m_VariableLastUpdate[c.after.name] = m_UpdateID;
 
       // delete the matching variable (should only be one)
-      bool found = false;
       for(int i = 0; i < m_Variables.count(); i++)
       {
         if(c.after.name == m_Variables[i].name)
         {
           m_Variables.removeAt(i);
-          found = true;
           break;
         }
       }
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-      if(!found)
-        qCritical("ShaderVariableChange for '%s' not found in existing variables",
-                  c.after.name.c_str());
-      if(!ValidationShaderVariable(c.after))
-        qCritical("ShaderVariableChange for '%s' after is not well formed", c.after.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
     }
     else
     {
@@ -2803,26 +2664,9 @@ void ShaderViewer::applyBackwardsChange()
       }
 
       if(v)
-      {
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-        if(!ShaderVariableEqual(c.after, *v))
-          qCritical("ShaderVariableChange for '%s' after does not match existing entry",
-                    c.before.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
         *v = c.before;
-      }
       else
-      {
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-        if(!(c.after == nullChange))
-          qCritical("ShaderVariableChange for '%s' does not have NULL after", c.before.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
         m_Variables.insert(0, c.before);
-      }
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-      if(!ValidationShaderVariable(c.before))
-        qCritical("ShaderVariableChange for '%s' before is not well formed", c.before.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
     }
   }
 
@@ -2840,18 +2684,8 @@ void ShaderViewer::applyForwardsChange()
 
   rdcarray<AccessedResourceData> newAccessedResources;
 
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-  QSet<rdcstr> changedVariables;
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-  const ShaderVariable nullChange;
   for(const ShaderVariableChange &c : GetCurrentState().changes)
   {
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-    rdcstr varName = c.after.name.empty() ? c.before.name : c.after.name;
-    if(changedVariables.contains(varName))
-      qCritical("Multiple ShaderVariableChange's for '%s'", varName.c_str());
-    changedVariables.insert(varName);
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
     // if the after name is empty, this is a variable going out of scope/being deleted
     if(c.after.name.empty())
     {
@@ -2859,23 +2693,14 @@ void ShaderViewer::applyForwardsChange()
       m_VariableLastUpdate[c.before.name] = m_UpdateID;
 
       // delete the matching variable (should only be one)
-      bool found = false;
       for(int i = 0; i < m_Variables.count(); i++)
       {
         if(c.before.name == m_Variables[i].name)
         {
           m_Variables.removeAt(i);
-          found = true;
           break;
         }
       }
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-      if(!found)
-        qCritical("ShaderVariableChange for '%s' not found in existing variables",
-                  c.before.name.c_str());
-      if(!ValidationShaderVariable(c.before))
-        qCritical("ShaderVariableChange for '%s' before is not well formed", c.before.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
     }
     else
     {
@@ -2893,26 +2718,9 @@ void ShaderViewer::applyForwardsChange()
       }
 
       if(v)
-      {
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-        if(!ShaderVariableEqual(c.before, *v))
-          qCritical("ShaderVariableChange for '%s' before does not match existing entry",
-                    c.after.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
         *v = c.after;
-      }
       else
-      {
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-        if(!(c.before == nullChange))
-          qCritical("ShaderVariableChange for '%s' does not have NULL before", c.after.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
         m_Variables.insert(0, c.after);
-      }
-#if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
-      if(!ValidationShaderVariable(c.after))
-        qCritical("ShaderVariableChange for '%s' after is not well formed", c.after.name.c_str());
-#endif    // #if SHADER_VARIABLE_CHANGE_CONSISTENCY_CHECKS
 
       if(c.after.type == VarType::ReadOnlyResource || c.after.type == VarType::ReadWriteResource)
       {
@@ -2972,7 +2780,7 @@ QString ShaderViewer::stringRep(const ShaderVariable &var, uint32_t row)
     }
 
     if(bindIdx < 0)
-      return ToQStr(ResourceId());
+      return QString();
 
     const UsedDescriptor &res = resList[bindIdx];
 
@@ -2997,7 +2805,6 @@ QString ShaderViewer::stringRep(const ShaderVariable &var, uint32_t row)
               ranges[0].count = 1;
               ranges[0].descriptorSize = access.byteSize;
               ranges[0].offset = access.byteOffset;
-              ranges[0].type = access.type;
 
               rdcarray<DescriptorLogicalLocation> locations =
                   r->GetDescriptorLocations(access.descriptorStore, ranges);
@@ -3146,7 +2953,17 @@ void ShaderViewer::combineStructures(RDTreeWidgetItem *root, int skipPrefixLengt
       c--;
     }
 
-    SortRDWidgetItems(matches);
+    // Sort the children by offset, then global source var index, then by text.
+    // Using the global source var index allows resource arrays to be presented in index order
+    // rather than by name, so for example arr[2] comes before arr[10]
+    std::sort(matches.begin(), matches.end(),
+              [](const RDTreeWidgetItem *a, const RDTreeWidgetItem *b) {
+                VariableTag at = a->tag().value<VariableTag>();
+                VariableTag bt = b->tag().value<VariableTag>();
+                if(at.offset != bt.offset)
+                  return at.offset < bt.offset;
+                return a->text(0) < b->text(0);
+              });
 
     // create a new parent with just the prefix
     prefix.chop(1);
@@ -4566,7 +4383,6 @@ bool ShaderViewer::updateWatchVariable(RDTreeWidgetItem *watchItem, const RDTree
         });
         VariableTag tag = VariableTag(DebugVariableType::Variable, path);
         tag.state = WatchVarState::Valid;
-        tag.offset = i;
         item->setTag(QVariant::fromValue(tag));
         watchItem->addChild(item);
         valid.push_back(false);
@@ -4593,7 +4409,14 @@ bool ShaderViewer::updateWatchVariable(RDTreeWidgetItem *watchItem, const RDTree
     while(watchItem->childCount())
       members.push_back(watchItem->takeChild(0));
 
-    SortRDWidgetItems(members);
+    std::sort(members.begin(), members.end(),
+              [](const RDTreeWidgetItem *a, const RDTreeWidgetItem *b) {
+                VariableTag at = a->tag().value<VariableTag>();
+                VariableTag bt = b->tag().value<VariableTag>();
+                if(at.offset != bt.offset)
+                  return at.offset < bt.offset;
+                return a->text(0) < b->text(0);
+              });
 
     for(int i = 0; i < members.count(); i++)
       watchItem->addChild(members[i]);
@@ -4604,7 +4427,6 @@ bool ShaderViewer::updateWatchVariable(RDTreeWidgetItem *watchItem, const RDTree
 
     VariableTag tag = VariableTag(DebugVariableType::Variable, path);
     tag.state = WatchVarState::Valid;
-    tag.offset = watchItem->tag().value<VariableTag>().offset;
     watchItem->setTag(QVariant::fromValue(tag));
 
     return true;
@@ -4747,15 +4569,15 @@ bool ShaderViewer::updateWatchVariable(RDTreeWidgetItem *watchItem, const RDTree
         if(i == 0)
         {
           swatchColor = QColor(0, 0, 0, 255);
-          swatchColor.setRedF(ConvertLinearToSRGB(f));
+          swatchColor.setRedF(f);
         }
         else if(i == 1)
         {
-          swatchColor.setGreenF(ConvertLinearToSRGB(f));
+          swatchColor.setGreenF(f);
         }
         else
         {
-          swatchColor.setBlueF(ConvertLinearToSRGB(f));
+          swatchColor.setBlueF(f);
         }
       }
     }
@@ -4796,7 +4618,23 @@ bool ShaderViewer::updateWatchVariable(RDTreeWidgetItem *watchItem, const RDTree
   }
   else
   {
-    watchItem->setIcon(3, MakeSwatchIcon(ui->watch, swatchColor));
+    int h = ui->watch->fontMetrics().height();
+    QPixmap pm(1, 1);
+    pm.fill(swatchColor);
+    pm = pm.scaled(QSize(h, h));
+
+    {
+      QPainter painter(&pm);
+
+      QPen pen(ui->watch->palette().foreground(), 1.0);
+      painter.setPen(pen);
+      painter.drawLine(QPoint(0, 0), QPoint(h - 1, 0));
+      painter.drawLine(QPoint(h - 1, 0), QPoint(h - 1, h - 1));
+      painter.drawLine(QPoint(h - 1, h - 1), QPoint(0, h - 1));
+      painter.drawLine(QPoint(0, h - 1), QPoint(0, 0));
+    }
+
+    watchItem->setIcon(3, QIcon(pm));
   }
 
   watchItem->setText(3, val);
@@ -4804,9 +4642,6 @@ bool ShaderViewer::updateWatchVariable(RDTreeWidgetItem *watchItem, const RDTree
 
   VariableTag tag = VariableTag(DebugVariableType::Variable, path);
   tag.state = WatchVarState::Valid;
-  // Grab the offset that is already set
-  uint32_t offset = watchItem->tag().value<VariableTag>().offset;
-  tag.offset = offset;
   watchItem->setTag(QVariant::fromValue(tag));
 
   return true;
@@ -5013,38 +4848,34 @@ RDTreeWidgetItem *ShaderViewer::makeSourceVariableNode(const SourceVariableMappi
         int32_t bindIdx = samplers.indexOf(bind);
 
         if(bindIdx < 0)
+          continue;
+
+        Descriptor desc = samplers[bindIdx].descriptor;
+        const ShaderSampler &samp = m_ShaderDetails->samplers[bind.index];
+
+        if(samp.bindArraySize == 1)
         {
-          value = ToQStr(ResourceId());
+          value = samplerRep(samp, ~0U, desc.resource);
+        }
+        else if(samp.bindArraySize == ~0U)
+        {
+          typeName = lit("[unbounded]");
+          value = QString();
         }
         else
         {
-          Descriptor desc = samplers[bindIdx].descriptor;
-          const ShaderSampler &samp = m_ShaderDetails->samplers[bind.index];
+          for(uint32_t a = 0; a < samp.bindArraySize; a++)
+            children.push_back(new RDTreeWidgetItem({
+                QFormatStr("%1[%2]").arg(localName).arg(a),
+                QString(),
+                typeName,
+                samplerRep(samp, a, desc.resource),
+            }));
 
-          if(samp.bindArraySize == 1)
-          {
-            value = samplerRep(samp, ~0U, desc.resource);
-          }
-          else if(samp.bindArraySize == ~0U)
-          {
-            typeName = lit("[unbounded]");
-            value = QString();
-          }
-          else
-          {
-            for(uint32_t a = 0; a < samp.bindArraySize; a++)
-              children.push_back(new RDTreeWidgetItem({
-                  QFormatStr("%1[%2]").arg(localName).arg(a),
-                  QString(),
-                  typeName,
-                  samplerRep(samp, a, desc.resource),
-              }));
+          childCount += samp.bindArraySize;
 
-            childCount += samp.bindArraySize;
-
-            typeName = QFormatStr("[%1]").arg(samp.bindArraySize);
-            value = QString();
-          }
+          typeName = QFormatStr("[%1]").arg(samp.bindArraySize);
+          value = QString();
         }
       }
       else if(r.type == DebugVariableType::ReadOnlyResource ||
@@ -5075,40 +4906,36 @@ RDTreeWidgetItem *ShaderViewer::makeSourceVariableNode(const SourceVariableMappi
             descriptors.push_back(a);
 
         if(descriptors.empty())
+          continue;
+
+        const ShaderResource &res = isReadOnlyResource
+                                        ? m_ShaderDetails->readOnlyResources[bind.index]
+                                        : m_ShaderDetails->readWriteResources[bind.index];
+
+        if(res.bindArraySize == 1)
         {
-          value = ToQStr(ResourceId());
+          value = ToQStr(descriptors[0].descriptor.resource);
+        }
+        else if(res.bindArraySize == ~0U)
+        {
+          typeName = lit("[unbounded]");
+          value = QString();
         }
         else
         {
-          const ShaderResource &res = isReadOnlyResource
-                                          ? m_ShaderDetails->readOnlyResources[bind.index]
-                                          : m_ShaderDetails->readWriteResources[bind.index];
+          uint32_t count = qMin(res.bindArraySize, (uint32_t)descriptors.size());
+          for(uint32_t a = 0; a < count; a++)
+            children.push_back(new RDTreeWidgetItem({
+                QFormatStr("%1[%2]").arg(localName).arg(a),
+                QString(),
+                typeName,
+                ToQStr(descriptors[a].descriptor.resource),
+            }));
 
-          if(res.bindArraySize == 1)
-          {
-            value = ToQStr(descriptors[0].descriptor.resource);
-          }
-          else if(res.bindArraySize == ~0U)
-          {
-            typeName = lit("[unbounded]");
-            value = QString();
-          }
-          else
-          {
-            uint32_t count = qMin(res.bindArraySize, (uint32_t)descriptors.size());
-            for(uint32_t a = 0; a < count; a++)
-              children.push_back(new RDTreeWidgetItem({
-                  QFormatStr("%1[%2]").arg(localName).arg(a),
-                  QString(),
-                  typeName,
-                  ToQStr(descriptors[a].descriptor.resource),
-              }));
+          childCount += res.bindArraySize;
 
-            childCount += res.bindArraySize;
-
-            typeName = QFormatStr("[%1]").arg(res.bindArraySize);
-            value = QString();
-          }
+          typeName = QFormatStr("[%1]").arg(res.bindArraySize);
+          value = QString();
         }
       }
       else
@@ -5264,10 +5091,10 @@ RDTreeWidgetItem *ShaderViewer::makeAccessedResourceNode(const ShaderVariable &v
     }
     else
     {
-      category = CategoryForDescriptorType(acc.type);
+      category = acc.category;
       bindIdx = m_ReadOnlyResources.indexOf(acc);
     }
-    if(category != DescriptorCategory::ReadOnlyResource && category != DescriptorCategory::Unknown)
+    if(category != DescriptorCategory::ReadOnlyResource)
       qCritical() << "Mismatch between variable type and descriptor category";
     if(bindIdx >= 0)
       resId = m_ReadOnlyResources[bindIdx].descriptor.resource;
@@ -5284,10 +5111,10 @@ RDTreeWidgetItem *ShaderViewer::makeAccessedResourceNode(const ShaderVariable &v
     }
     else
     {
-      category = CategoryForDescriptorType(acc.type);
+      category = acc.category;
       bindIdx = m_ReadWriteResources.indexOf(acc);
     }
-    if(category != DescriptorCategory::ReadWriteResource && category != DescriptorCategory::Unknown)
+    if(category != DescriptorCategory::ReadWriteResource)
       qCritical() << "Mismatch between variable type and descriptor category";
     if(bindIdx >= 0)
       resId = m_ReadWriteResources[bindIdx].descriptor.resource;
@@ -6288,8 +6115,7 @@ void ShaderViewer::PopulateCompileToolParameters()
   }
 }
 
-bool ShaderViewer::ProcessIncludeDirectives(QString &source, const rdcstrpairs &files,
-                                            const rdcarray<rdcstr> &exclude)
+bool ShaderViewer::ProcessIncludeDirectives(QString &source, const rdcstrpairs &files)
 {
   // try and match up #includes against the files that we have. This isn't always
   // possible as fxc only seems to include the source for files if something in
@@ -6350,25 +6176,11 @@ bool ShaderViewer::ProcessIncludeDirectives(QString &source, const rdcstrpairs &
     QString fileText;
 
     // look for exact match first
-    for(const rdcstrpair &kv : files)
+    for(int i = 0; i < files.count(); i++)
     {
-      if(QString(kv.first) == fname)
+      if(QString(files[i].first) == fname)
       {
-        if(exclude.contains(kv.first))
-        {
-          fileText = QFormatStr("// not recursively including %1\n").arg(fname);
-        }
-        else
-        {
-          fileText = kv.second;
-
-          // recurse and do not allow this to be re-included. This assumes #pragma once / header
-          // guard behaviour to prevent recursion but allows the same file to be included multiple
-          // times in the same parent (if that's done intentionally)
-          rdcarray<rdcstr> childExclude = exclude;
-          childExclude.push_back(kv.first);
-          ProcessIncludeDirectives(fileText, files, childExclude);
-        }
+        fileText = files[i].second;
         break;
       }
     }
@@ -6382,21 +6194,7 @@ bool ShaderViewer::ProcessIncludeDirectives(QString &source, const rdcstrpairs &
       {
         if(QFileInfo(kv.first).fileName().compare(search, Qt::CaseInsensitive) == 0)
         {
-          if(exclude.contains(kv.first))
-          {
-            fileText = QFormatStr("// not recursively including %1\n").arg(fname);
-          }
-          else
-          {
-            fileText = kv.second;
-
-            // recurse and do not allow this to be re-included. This assumes #pragma once / header
-            // guard behaviour to prevent recursion but allows the same file to be included multiple
-            // times in the same parent (if that's done intentionally)
-            rdcarray<rdcstr> childExclude = exclude;
-            childExclude.push_back(kv.first);
-            ProcessIncludeDirectives(fileText, files, childExclude);
-          }
+          fileText = kv.second;
           break;
         }
       }
@@ -6973,7 +6771,7 @@ void ShaderViewer::performReplaceAll()
   if(context == FindReplace::File)
     scintillas = {cur};
 
-  int numReplacements = 0;
+  int numReplacements = 1;
 
   for(ScintillaEdit *s : scintillas)
   {

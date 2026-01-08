@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2022-2026 Baldur Karlsson
+ * Copyright (c) 2022-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -66,7 +66,7 @@ WrappedMTLDevice::WrappedMTLDevice(MTL::Device *realMTLDevice, ResourceId objId)
   }
 
   RDCASSERT(m_Device == this);
-  GetResourceManager()->AddResource(objId, this);
+  GetResourceManager()->AddCurrentResource(objId, this);
 
   if(IsCaptureMode(m_State))
   {
@@ -184,7 +184,8 @@ bool WrappedMTLDevice::Serialise_newCommandQueue(SerialiserType &ser, WrappedMTL
   {
     MTL::CommandQueue *realMTLCommandQueue = Unwrap(this)->newCommandQueue();
     WrappedMTLCommandQueue *wrappedMTLCommandQueue;
-    GetResourceManager()->WrapResource(CommandQueue, realMTLCommandQueue, wrappedMTLCommandQueue);
+    GetResourceManager()->WrapResource(realMTLCommandQueue, wrappedMTLCommandQueue);
+    GetResourceManager()->AddLiveResource(CommandQueue, wrappedMTLCommandQueue);
 
     AddResource(CommandQueue, ResourceType::Queue, "Queue");
     DerivedResource(this, CommandQueue);
@@ -197,8 +198,7 @@ WrappedMTLCommandQueue *WrappedMTLDevice::newCommandQueue()
   MTL::CommandQueue *realMTLCommandQueue;
   SERIALISE_TIME_CALL(realMTLCommandQueue = Unwrap(this)->newCommandQueue());
   WrappedMTLCommandQueue *wrappedMTLCommandQueue;
-  ResourceId id =
-      GetResourceManager()->WrapResource(ResourceId(), realMTLCommandQueue, wrappedMTLCommandQueue);
+  ResourceId id = GetResourceManager()->WrapResource(realMTLCommandQueue, wrappedMTLCommandQueue);
   if(IsCaptureMode(m_State))
   {
     Chunk *chunk = NULL;
@@ -256,7 +256,8 @@ bool WrappedMTLDevice::Serialise_newDefaultLibrary(SerialiserType &ser, WrappedM
     dispatch_release(dispatchData);
 
     WrappedMTLLibrary *wrappedMTLLibrary;
-    GetResourceManager()->WrapResource(Library, realMTLLibrary, wrappedMTLLibrary);
+    GetResourceManager()->WrapResource(realMTLLibrary, wrappedMTLLibrary);
+    GetResourceManager()->AddLiveResource(Library, wrappedMTLLibrary);
     AddResource(Library, ResourceType::Pool, "Library");
     DerivedResource(this, Library);
   }
@@ -269,7 +270,7 @@ WrappedMTLLibrary *WrappedMTLDevice::newDefaultLibrary()
 
   SERIALISE_TIME_CALL(realMTLLibrary = Unwrap(this)->newDefaultLibrary());
   WrappedMTLLibrary *wrappedMTLLibrary;
-  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), realMTLLibrary, wrappedMTLLibrary);
+  ResourceId id = GetResourceManager()->WrapResource(realMTLLibrary, wrappedMTLLibrary);
   if(IsCaptureMode(m_State))
   {
     Chunk *chunk = NULL;
@@ -308,7 +309,8 @@ bool WrappedMTLDevice::Serialise_newLibraryWithSource(SerialiserType &ser,
     NS::Error *compileErrors = NULL;
     MTL::Library *realMTLLibrary = Unwrap(this)->newLibrary(source, options, &compileErrors);
     WrappedMTLLibrary *wrappedMTLLibrary;
-    GetResourceManager()->WrapResource(Library, realMTLLibrary, wrappedMTLLibrary);
+    GetResourceManager()->WrapResource(realMTLLibrary, wrappedMTLLibrary);
+    GetResourceManager()->AddLiveResource(Library, wrappedMTLLibrary);
     AddResource(Library, ResourceType::Pool, "Library");
     DerivedResource(this, Library);
   }
@@ -322,7 +324,7 @@ WrappedMTLLibrary *WrappedMTLDevice::newLibraryWithSource(NS::String *source,
   MTL::Library *realMTLLibrary;
   SERIALISE_TIME_CALL(realMTLLibrary = Unwrap(this)->newLibrary(source, options, error));
   WrappedMTLLibrary *wrappedMTLLibrary;
-  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), realMTLLibrary, wrappedMTLLibrary);
+  ResourceId id = GetResourceManager()->WrapResource(realMTLLibrary, wrappedMTLLibrary);
   if(IsCaptureMode(m_State))
   {
     Chunk *chunk = NULL;
@@ -375,7 +377,8 @@ bool WrappedMTLDevice::Serialise_newBufferWithBytes(SerialiserType &ser, Wrapped
       realMTLBuffer = Unwrap(this)->newBuffer(initialData.data(), initialData.size(), options);
     }
     WrappedMTLBuffer *wrappedMTLBuffer;
-    GetResourceManager()->WrapResource(Buffer, realMTLBuffer, wrappedMTLBuffer);
+    GetResourceManager()->WrapResource(realMTLBuffer, wrappedMTLBuffer);
+    GetResourceManager()->AddLiveResource(Buffer, wrappedMTLBuffer);
 
     AddResource(Buffer, ResourceType::Buffer, "Buffer");
     DerivedResource(this, Buffer);
@@ -416,8 +419,9 @@ bool WrappedMTLDevice::Serialise_newRenderPipelineStateWithDescriptor(
         Unwrap(this)->newRenderPipelineState(mtlDescriptor, error);
     mtlDescriptor->release();
     WrappedMTLRenderPipelineState *wrappedMTLRenderPipelineState;
-    liveID = GetResourceManager()->WrapResource(RenderPipelineState, realMTLRenderPipelineState,
+    liveID = GetResourceManager()->WrapResource(realMTLRenderPipelineState,
                                                 wrappedMTLRenderPipelineState);
+    GetResourceManager()->AddLiveResource(RenderPipelineState, wrappedMTLRenderPipelineState);
     AddResource(RenderPipelineState, ResourceType::PipelineState, "Pipeline State");
     DerivedResource(this, RenderPipelineState);
   }
@@ -434,8 +438,8 @@ WrappedMTLRenderPipelineState *WrappedMTLDevice::newRenderPipelineStateWithDescr
   realDescriptor->release();
 
   WrappedMTLRenderPipelineState *wrappedMTLRenderPipelineState;
-  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), realMTLRenderPipelineState,
-                                                     wrappedMTLRenderPipelineState);
+  ResourceId id =
+      GetResourceManager()->WrapResource(realMTLRenderPipelineState, wrappedMTLRenderPipelineState);
   if(IsCaptureMode(m_State))
   {
     Chunk *chunk = NULL;
@@ -488,8 +492,8 @@ bool WrappedMTLDevice::Serialise_newTextureWithDescriptor(SerialiserType &ser,
     MTL::Texture *realMTLTexture = Unwrap(this)->newTexture(mtlDescriptor);
     mtlDescriptor->release();
     WrappedMTLTexture *wrappedMTLTexture;
-    ResourceId liveID =
-        GetResourceManager()->WrapResource(Texture, realMTLTexture, wrappedMTLTexture);
+    ResourceId liveID = GetResourceManager()->WrapResource(realMTLTexture, wrappedMTLTexture);
+    GetResourceManager()->AddLiveResource(Texture, wrappedMTLTexture);
 
     AddResource(Texture, ResourceType::Texture, "Texture");
     DerivedResource(this, Texture);
@@ -672,7 +676,7 @@ WrappedMTLTexture *WrappedMTLDevice::Common_NewTexture(RDMTL::TextureDescriptor 
                                                                realDescriptor, iosurface, plane));
   realDescriptor->release();
   WrappedMTLTexture *wrappedMTLTexture;
-  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), realMTLTexture, wrappedMTLTexture);
+  ResourceId id = GetResourceManager()->WrapResource(realMTLTexture, wrappedMTLTexture);
   if(IsCaptureMode(m_State))
   {
     RDMTL::TextureDescriptor rdDescriptor(descriptor);
@@ -708,7 +712,7 @@ WrappedMTLBuffer *WrappedMTLDevice::Common_NewBuffer(bool withBytes, const void 
                                                 : Unwrap(this)->newBuffer(length, options));
 
   WrappedMTLBuffer *wrappedMTLBuffer;
-  ResourceId id = GetResourceManager()->WrapResource(ResourceId(), realMTLBuffer, wrappedMTLBuffer);
+  ResourceId id = GetResourceManager()->WrapResource(realMTLBuffer, wrappedMTLBuffer);
   if(IsCaptureMode(m_State))
   {
     Chunk *chunk = NULL;

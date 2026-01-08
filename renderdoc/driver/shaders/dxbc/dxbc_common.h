@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -434,7 +434,6 @@ struct CBufferVariableType
   rdcarray<CBufferVariable> members;
 };
 
-void RecalculateScalarOffsetsSizes(CBufferVariableType &type);
 rdcstr TypeName(CBufferVariableType desc);
 
 struct CBufferVariable
@@ -495,7 +494,6 @@ struct Reflection
   rdcarray<SigParameter> PatchConstantSig;
 
   uint32_t DispatchThreadsDimension[3];
-  uint32_t WaveSize = 0;
 };
 
 class DXBCContainer;
@@ -516,10 +514,9 @@ public:
   virtual void GetCallstack(size_t instruction, uintptr_t offset,
                             rdcarray<rdcstr> &callstack) const = 0;
 
+  virtual bool HasSourceMapping() const = 0;
   virtual void GetLocals(const DXBC::DXBCContainer *dxbc, size_t instruction, uintptr_t offset,
                          rdcarray<SourceVariableMapping> &locals) const = 0;
-
-  virtual void FillReflection(DXBC::Reflection &refl) {}
 };
 
 rdcstr BasicDemangle(const rdcstr &possiblyMangledName);

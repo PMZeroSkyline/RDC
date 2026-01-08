@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -174,8 +174,9 @@ rdcstr DoStringise(const PointerVal &el)
   }
 }
 
-void TruncateStringFromEnd(QString &name)
+QString GetTruncatedResourceName(const ICaptureContext &ctx, ResourceId id)
 {
+  QString name = ctx.GetResourceName(id);
   if(name.length() > 64)
   {
     QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, name.data(), name.length());
@@ -186,12 +187,6 @@ void TruncateStringFromEnd(QString &name)
     name.resize(pos);
     name += lit("...");
   }
-}
-
-QString GetTruncatedResourceName(const ICaptureContext &ctx, ResourceId id)
-{
-  QString name = ctx.GetResourceName(id);
-  TruncateStringFromEnd(name);
 
   return name;
 }
@@ -760,7 +755,7 @@ void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, 
 
     static const int margin = RichResourceTextMargin;
 
-    rect.adjust(margin, 0, -margin, 0);
+    rect.adjust(margin, 0, -margin * 2, 0);
 
     QString name;
 
@@ -971,8 +966,7 @@ int RichResourceTextWidthHint(const QWidget *owner, const QFont &font, const QVa
         name = lit("NULL");
     }
 
-    // this calculation is in device independent sizes so use a ratio of 1 for the pixmap
-    const QPixmap &px = Pixmaps::link(1);
+    const QPixmap &px = Pixmaps::link(owner->devicePixelRatio());
 
     int ret = margin + metrics.boundingRect(name).width() + margin + px.width() + margin;
     return ret;
@@ -989,21 +983,18 @@ int RichResourceTextHeightHint(const QWidget *owner, const QFont &font, const QV
 {
   QFontMetrics metrics(font);
 
-  static const int margin = RichResourceTextMargin;
-
   if(var.userType() == qMetaTypeId<RichResourceTextPtr>())
   {
     RichResourceTextPtr linkedText = var.value<RichResourceTextPtr>();
+
+    static const int margin = RichResourceTextMargin;
 
     linkedText->cacheDocument(owner);
 
     return linkedText->numLines * (metrics.lineSpacing() + margin * 2);
   }
 
-  // this calculation is in device independent sizes so use a ratio of 1 for the pixmap
-  const QPixmap &px = Pixmaps::link(1);
-
-  return qMax(metrics.height(), px.height() + margin * 2);
+  return metrics.height();
 }
 
 bool RichResourceTextMouseEvent(const QWidget *owner, const QVariant &var, QRect rect,
@@ -1119,10 +1110,6 @@ bool RichResourceTextMouseEvent(const QWidget *owner, const QVariant &var, QRect
 
             formatter = BufferFormatter::DeclareStruct(pack, ResourceId(), ptrType.name,
                                                        ptrType.members, ptrType.arrayByteStride);
-          }
-          else if(!ptrType.name.empty() && ptrType.name[0] != '<')
-          {
-            formatter = ptrType.name;
           }
 
           IBufferViewer *view = ctx.ViewBuffer(ptr->offset, ~0ULL, ptr->base, formatter);
@@ -1848,133 +1835,19 @@ QString GetComponentString(byte mask)
   return ret;
 }
 
-QIcon MakeSwatchIcon(QWidget *parentWidget, QColor swatchColor)
-{
-  int h = parentWidget->fontMetrics().height();
-  QPixmap pm(1, 1);
-  pm.fill(swatchColor);
-  pm = pm.scaled(QSize(h, h));
-
-  {
-    QPainter painter(&pm);
-
-    QPen pen(parentWidget->palette().foreground(), 1.0);
-    painter.setPen(pen);
-    painter.drawLine(QPoint(0, 0), QPoint(h - 1, 0));
-    painter.drawLine(QPoint(h - 1, 0), QPoint(h - 1, h - 1));
-    painter.drawLine(QPoint(h - 1, h - 1), QPoint(0, h - 1));
-    painter.drawLine(QPoint(0, h - 1), QPoint(0, 0));
-  }
-
-  return QIcon(pm);
-}
-
-float ConvertLinearToSRGB(float linear)
-{
-  if(linear <= 0.0031308f)
-    return 12.92f * linear;
-
-  if(linear < 0.0f)
-    linear = 0.0f;
-  else if(linear > 1.0f)
-    linear = 1.0f;
-
-  return 1.055f * powf(linear, 1.0f / 2.4f) - 0.055f;
-}
-
-static const ActionDescription *GetParentMarker(ICaptureContext &ctx, uint32_t eventId)
-{
-  const ActionDescription *parent = ctx.GetAction(eventId);
-  if(!parent)
-  {
-    rdcarray<const ActionDescription *> actions;
-    // Search the actions to find which action contains this eventId
-    for(const ActionDescription &action : ctx.CurRootActions())
-      actions.push_back(&action);
-
-    while(!parent && !actions.empty())
-    {
-      const ActionDescription *action = actions.back();
-      for(const APIEvent &event : action->events)
-      {
-        if(event.eventId == eventId)
-        {
-          parent = action;
-          break;
-        }
-      }
-      actions.pop_back();
-      bool addChildren = (action->eventId < eventId);
-      if(!addChildren)
-      {
-        if(!action->children.empty())
-          addChildren = action->children[0].eventId < eventId;
-      }
-
-      if(addChildren)
-      {
-        for(const ActionDescription &child : action->children)
-          actions.push_back(&child);
-      }
-    }
-  }
-  while(parent != NULL && (parent->flags != ActionFlags::PushMarker))
-    parent = parent->parent;
-
-  return parent;
-}
-
-QString GetParentMarkerName(ICaptureContext &ctx, uint32_t eventId)
-{
-  const ActionDescription *parent = GetParentMarker(ctx, eventId);
-  return parent ? QString(parent->customName) : QString();
-}
-
-QString GetParentMarkerPath(ICaptureContext &ctx, uint32_t eventId, bool &hasParent)
-{
-  const ActionDescription *parent = GetParentMarker(ctx, eventId);
-
-  QString markerPath;
-  while(parent)
-  {
-    if(parent->flags & ActionFlags::PushMarker)
-    {
-      QString prevPath = markerPath;
-      markerPath = parent->customName;
-      if(!prevPath.isEmpty())
-      {
-        markerPath += lit(" -> ");
-        markerPath += prevPath;
-        hasParent = true;
-      }
-    }
-    parent = parent->parent;
-  }
-  return markerPath;
-}
-
-uint32_t GetParentMarkerEventId(ICaptureContext &ctx, uint32_t eventId)
-{
-  const ActionDescription *parent = GetParentMarker(ctx, eventId);
-  return parent ? parent->eventId : 0;
-}
-
-void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage, bool splitByMarker,
+void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
                         std::function<void(uint32_t startEID, uint32_t endEID, ResourceUsage use)> callback)
 {
   uint32_t start = 0;
   uint32_t end = 0;
   ResourceUsage us = ResourceUsage::IndexBuffer;
 
-  uint32_t parentEID = 0;
   for(const EventUsage &u : usage)
   {
     if(start == 0)
     {
       start = end = u.eventId;
       us = u.usage;
-
-      parentEID = GetParentMarkerEventId(ctx, u.eventId);
     }
 
     if(u.usage == us && u.eventId == end)
@@ -1984,12 +1857,9 @@ void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
 
     bool distinct = false;
 
-    const uint32_t newParentEID = GetParentMarkerEventId(ctx, u.eventId);
-
     // if the usage is different from the last, add a new entry,
     // or if the previous action link is broken.
-    if(u.usage != us || action == NULL || action->previous == 0 ||
-       (splitByMarker && (parentEID != newParentEID)))
+    if(u.usage != us || action == NULL || action->previous == 0)
     {
       distinct = true;
     }
@@ -2003,16 +1873,6 @@ void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
 
       while(prev != NULL && prev->eventId > end)
       {
-        if(splitByMarker)
-        {
-          const uint32_t prevParentEID = GetParentMarkerEventId(ctx, prev->eventId);
-          if(parentEID != prevParentEID)
-          {
-            distinct = true;
-            break;
-          }
-        }
-
         if(!(prev->flags & (ActionFlags::Dispatch | ActionFlags::MeshDispatch |
                             ActionFlags::Drawcall | ActionFlags::CmdList)))
         {
@@ -2040,7 +1900,6 @@ void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
       {
         start = end = u.eventId;
         us = u.usage;
-        parentEID = newParentEID;
       }
     }
 
@@ -2063,13 +1922,6 @@ QVariant SDObject2Variant(const SDObject *obj, bool inlineImportant)
   if(obj->type.basetype == SDBasic::Resource)
   {
     param = QVariant::fromValue(obj->data.basic.id);
-  }
-  else if(obj->type.basetype == SDBasic::GPUAddress)
-  {
-    PointerVal p;
-    p.pointerTypeID = ~0U;
-    p.pointer = obj->data.basic.u;
-    param = ToQStr(p);
   }
   else if(obj->type.flags & SDTypeFlags::NullString)
   {
@@ -2195,10 +2047,7 @@ QVariant SDObject2Variant(const SDObject *obj, bool inlineImportant)
         param = trimmedStr.trimmed();
         break;
       }
-      // won't be hit, these are handled above
       case SDBasic::Resource:
-      case SDBasic::GPUAddress:
-        // normal cases
       case SDBasic::Enum:
       case SDBasic::UnsignedInteger:
         param = Formatter::HumanFormat(obj->data.basic.u, flags);
@@ -2228,7 +2077,6 @@ void addStructuredChildren(RDTreeWidgetItem *parent, const SDObject &parentObj)
       name = obj->name;
 
     RDTreeWidgetItem *item = new RDTreeWidgetItem({name, QString()});
-    item->setTag(QVariant::fromValue((void *)obj));
 
     item->setText(1, SDObject2Variant(obj, false));
 

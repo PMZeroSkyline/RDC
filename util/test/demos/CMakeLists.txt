@@ -108,11 +108,9 @@ set(VULKAN_SRC
         vk/vk_counters.cpp
         vk/vk_custom_border_color.cpp
         vk/vk_dedicated_allocation.cpp
-        vk/vk_descriptor_buffer.cpp
         vk/vk_descriptor_index.cpp
         vk/vk_descriptor_reuse.cpp
         vk/vk_descriptor_variable_count.cpp
-        vk/vk_descriptor_buffer_analyse.cpp
         vk/vk_discard_rects.cpp
         vk/vk_discard_zoo.cpp
         vk/vk_draw_zoo.cpp
@@ -134,7 +132,6 @@ set(VULKAN_SRC
         vk/vk_load_store_none.cpp
         vk/vk_mem_bench.cpp
         vk/vk_mesh_zoo.cpp
-        vk/vk_mesh_shader.cpp
         vk/vk_misaligned_dirty.cpp
         vk/vk_multi_entry.cpp
         vk/vk_multi_present.cpp
@@ -167,8 +164,7 @@ set(VULKAN_SRC
         vk/vk_validation_use.cpp
         vk/vk_vertex_attr_zoo.cpp
         vk/vk_video_textures.cpp
-        vk/vk_vs_max_desc_set.cpp
-        vk/vk_workgroup_zoo.cpp)
+        vk/vk_vs_max_desc_set.cpp)
 
 set(OPENGL_SRC
         3rdparty/glad/glad.c

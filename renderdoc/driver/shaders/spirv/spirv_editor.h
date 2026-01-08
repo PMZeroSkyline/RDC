@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -272,7 +272,6 @@ private:
   using Processor::Parse;
   inline void addWords(size_t offs, size_t num) { addWords(offs, (int32_t)num); }
   void addWords(size_t offs, int32_t num);
-  void InsertOperation(const Operation &op, size_t offset);
 
   Operation MakeDeclaration(const Scalar &s);
   Operation MakeDeclaration(const Vector &v);

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -200,14 +200,14 @@ bool WrappedOpenGL::Check_SafeDraw(bool indexed)
   if(prog)
   {
     ResourceId id = GetResourceManager()->GetResID(ProgramRes(GetCtx(), prog));
-    const ProgramData &progDetails = GetProgram(id);
+    const ProgramData &progDetails = m_Programs[id];
 
     vs = progDetails.stageShaders[0];
   }
   else if(pipe)
   {
     ResourceId id = GetResourceManager()->GetResID(ProgramPipeRes(GetCtx(), pipe));
-    const PipelineData &pipeDetails = GetPipeline(id);
+    const PipelineData &pipeDetails = m_Pipelines[id];
 
     GL.glGetProgramPipelineiv(pipe, eGL_VERTEX_SHADER, (GLint *)&prog);
 
@@ -223,17 +223,17 @@ bool WrappedOpenGL::Check_SafeDraw(bool indexed)
   }
   else
   {
-    const ShaderData &shaderDetails = GetShader(vs);
+    const ShaderData &shaderDetails = m_Shaders[vs];
 
     rdcarray<int32_t> vertexAttrBindings;
-    EvaluateVertexAttributeBinds(prog, shaderDetails.GetReflection(),
-                                 !shaderDetails.spirvWords.empty(), vertexAttrBindings);
+    EvaluateVertexAttributeBinds(prog, shaderDetails.reflection, !shaderDetails.spirvWords.empty(),
+                                 vertexAttrBindings);
 
     for(int attrib = 0; attrib < vertexAttrBindings.count(); attrib++)
     {
       // skip attributes that don't map to the shader, they're unused
       int reflIndex = vertexAttrBindings[attrib];
-      if(reflIndex >= 0 && reflIndex < shaderDetails.GetReflection()->inputSignature.count())
+      if(reflIndex >= 0 && reflIndex < shaderDetails.reflection->inputSignature.count())
       {
         // check that this attribute is in-bounds, and enabled. If so then the driver will read from
         // it so we make sure there's a buffer bound
@@ -258,7 +258,7 @@ bool WrappedOpenGL::Check_SafeDraw(bool indexed)
                   "No vertex buffer bound to attribute %d: %s (buffer slot %d) at draw!\n"
                   "This can be caused by deleting a buffer early, before all draws using it "
                   "have been made",
-                  attrib, shaderDetails.GetReflection()->inputSignature[reflIndex].varName.c_str(),
+                  attrib, shaderDetails.reflection->inputSignature[reflIndex].varName.c_str(),
                   bufIdx));
 
           ret = false;
@@ -277,8 +277,8 @@ bool WrappedOpenGL::Check_SafeDraw(bool indexed)
                     "Vertex buffer %s bound to attribute %d: %s (buffer slot %d) at "
                     "draw is 0-sized!\n"
                     "Has this buffer been initialised?",
-                    ToStr(id).c_str(), attrib,
-                    shaderDetails.GetReflection()->inputSignature[reflIndex].varName.c_str(), bufIdx));
+                    ToStr(GetResourceManager()->GetOriginalID(id)).c_str(), attrib,
+                    shaderDetails.reflection->inputSignature[reflIndex].varName.c_str(), bufIdx));
 
             ret = false;
           }
@@ -3665,7 +3665,7 @@ bool WrappedOpenGL::Serialise_glClearNamedFramebufferfv(SerialiserType &ser,
           id = GetResourceManager()->GetResID(RenderbufferRes(GetCtx(), attachment));
 
         m_ResourceUses[id].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
-        action.copyDestination = id;
+        action.copyDestination = GetResourceManager()->GetOriginalID(id);
 
         if(type == eGL_TEXTURE)
         {
@@ -3805,7 +3805,7 @@ bool WrappedOpenGL::Serialise_glClearNamedFramebufferiv(SerialiserType &ser,
           id = GetResourceManager()->GetResID(RenderbufferRes(GetCtx(), attachment));
 
         m_ResourceUses[id].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
-        action.copyDestination = id;
+        action.copyDestination = GetResourceManager()->GetOriginalID(id);
 
         if(type == eGL_TEXTURE)
         {
@@ -3925,7 +3925,7 @@ bool WrappedOpenGL::Serialise_glClearNamedFramebufferuiv(SerialiserType &ser,
           id = GetResourceManager()->GetResID(RenderbufferRes(GetCtx(), attachment));
 
         m_ResourceUses[id].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
-        action.copyDestination = id;
+        action.copyDestination = GetResourceManager()->GetOriginalID(id);
 
         if(type == eGL_TEXTURE)
         {
@@ -4047,12 +4047,12 @@ bool WrappedOpenGL::Serialise_glClearNamedFramebufferfi(SerialiserType &ser, GLu
           id = GetResourceManager()->GetResID(RenderbufferRes(GetCtx(), attachment));
 
         m_ResourceUses[id].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
-        action.copyDestination = id;
+        action.copyDestination = GetResourceManager()->GetOriginalID(id);
 
         if(type == eGL_TEXTURE)
         {
           GLint mip = 0, slice = 0;
-          GetFramebufferMipAndLayer(framebuffer.name, eGL_DEPTH_ATTACHMENT, &mip, &slice);
+          GetFramebufferMipAndLayer(framebuffer.name, eGL_COLOR_ATTACHMENT0, &mip, &slice);
           action.copyDestinationSubresource.mip = mip;
           action.copyDestinationSubresource.slice = slice;
         }
@@ -4554,7 +4554,7 @@ bool WrappedOpenGL::Serialise_glClear(SerialiserType &ser, GLbitfield mask)
         }
       }
 
-      action.copyDestination = dstId;
+      action.copyDestination = GetResourceManager()->GetOriginalID(dstId);
 
       if(dstId != ResourceId() && m_Textures[dstId].curType != eGL_RENDERBUFFER)
       {
@@ -4686,7 +4686,8 @@ bool WrappedOpenGL::Serialise_glClearTexImage(SerialiserType &ser, GLuint textur
     {
       AddEvent();
 
-      ResourceId id = GetResourceManager()->GetResID(texture);
+      ResourceId liveId = GetResourceManager()->GetResID(texture);
+      ResourceId id = GetResourceManager()->GetOriginalID(liveId);
 
       ActionDescription action;
       action.flags |= ActionFlags::Clear;
@@ -4700,7 +4701,7 @@ bool WrappedOpenGL::Serialise_glClearTexImage(SerialiserType &ser, GLuint textur
 
       AddAction(action);
 
-      m_ResourceUses[id].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
+      m_ResourceUses[liveId].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
     }
   }
 
@@ -4834,7 +4835,8 @@ bool WrappedOpenGL::Serialise_glClearTexSubImage(SerialiserType &ser, GLuint tex
     {
       AddEvent();
 
-      ResourceId id = GetResourceManager()->GetResID(texture);
+      ResourceId liveId = GetResourceManager()->GetResID(texture);
+      ResourceId id = GetResourceManager()->GetOriginalID(liveId);
 
       ActionDescription action;
       action.flags |= ActionFlags::Clear;
@@ -4848,7 +4850,7 @@ bool WrappedOpenGL::Serialise_glClearTexSubImage(SerialiserType &ser, GLuint tex
 
       AddAction(action);
 
-      m_ResourceUses[id].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
+      m_ResourceUses[liveId].push_back(EventUsage(m_CurEventID, ResourceUsage::Clear));
     }
   }
 

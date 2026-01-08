@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -206,8 +206,7 @@ public:
   const bytebuf &GetShaderBlob() const { return m_ShaderBlob; }
   const IDebugInfo *GetDebugInfo() const { return m_DebugInfo; }
   const Reflection *GetReflection() const { return m_Reflection; }
-  void CacheOutputTopology();
-  D3D_PRIMITIVE_TOPOLOGY GetOutputTopology() const { return m_OutputTopology; }
+  D3D_PRIMITIVE_TOPOLOGY GetOutputTopology();
   ThreadScope GetThreadScope() const { return m_Threadscope; }
 
   CBufferVariableType GetRayPayload(const ShaderEntryPoint &entry)
@@ -245,8 +244,7 @@ public:
   DXBCBytecode::Program *GetDXBCByteCode() { return m_DXBCByteCode; }
   const DXIL::Program *GetDXILByteCode() const { return m_DXILByteCode; }
   DXIL::Program *GetDXILByteCode() { return m_DXILByteCode; }
-  static void GetHash(rdcfixedarray<uint32_t, 4> &hash, bool debugHashOnly, const void *ByteCode,
-                      size_t BytecodeLength);
+  static void GetHash(uint32_t hash[4], const void *ByteCode, size_t BytecodeLength);
   GlobalShaderFlags GetGlobalShaderFlags() const { return m_GlobalFlags; }
 
   const byte *GetNonDebugDXILByteCode() const

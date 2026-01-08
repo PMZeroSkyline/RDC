@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,46 +28,24 @@
 
 class QToolButton;
 
-enum class OrderedItemExtras
+enum class ItemButton
 {
-  None = 0x0,
-  BrowseFolder = 0x1,
-  BrowseFile = 0x2,
-  Delete = 0x4,
-  CustomProp = 0x8,
+  None,
+  BrowseFolder,
+  BrowseFile,
+  Delete,
 };
-
-constexpr inline OrderedItemExtras operator|(OrderedItemExtras a, OrderedItemExtras b)
-{
-  return OrderedItemExtras(int(a) | int(b));
-}
-
-constexpr inline bool operator&(OrderedItemExtras a, OrderedItemExtras b)
-{
-  return int(a) & int(b);
-}
 
 class OrderedListEditor : public RDTableWidget
 {
   Q_OBJECT
 
 public:
-  struct CustomProp
-  {
-    QString name, tooltip;
-    bool defaultValue;
-
-    bool valid() const { return !name.isEmpty(); }
-  };
-
-  explicit OrderedListEditor(const QString &itemName, OrderedItemExtras extras,
-                             const CustomProp &prop = {}, QWidget *parent = 0);
+  explicit OrderedListEditor(const QString &itemName, ItemButton button, QWidget *parent = 0);
   ~OrderedListEditor();
 
-  void setItemsAndProp(const QStringList &strings, const QList<bool> &props);
-  void setItems(const QStringList &strings) { setItemsAndProp(strings, {}); }
+  void setItems(const QStringList &strings);
   QStringList getItems();
-  QList<bool> getItemProps();
 
   bool allowAddition() { return m_allowAddition; }
   void setAllowAddition(bool allow) { m_allowAddition = allow; }
@@ -75,18 +53,15 @@ public:
 private slots:
   // manual slots
   void cellChanged(int row, int column);
-  void extraClicked(int row, OrderedItemExtras extra);
+  void buttonActivate();
 
 private:
   void keyPressEvent(QKeyEvent *e) override;
 
-  int firstExtraColumn() { return m_Prop.valid() ? 2 : 1; }
-
-  QList<OrderedItemExtras> m_Extras;
-  CustomProp m_Prop;
+  ItemButton m_ButtonMode;
 
   bool m_allowAddition = true;
 
   void addNewItemRow();
-  QWidget *makeCellWidget(int col, OrderedItemExtras extra);
+  QToolButton *makeButton();
 };

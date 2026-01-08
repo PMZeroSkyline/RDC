@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2024-2026 Baldur Karlsson
+ * Copyright (c) 2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,28 +28,18 @@
 
 namespace DXIL
 {
-typedef rdcarray<uint32_t> BlockArray;
 typedef rdcpair<uint32_t, uint32_t> BlockLink;
-typedef rdcpair<uint32_t, uint32_t> ConvergentBlockData;
-typedef rdcpair<uint32_t, BlockArray> PartialConvergentBlockData;
 
 struct ControlFlow
 {
 public:
   ControlFlow() = default;
   ControlFlow(const rdcarray<rdcpair<uint32_t, uint32_t>> &links) { Construct(links); }
-  void Construct(const rdcarray<BlockLink> &links);
-  const std::unordered_set<uint32_t> &GetBlocks() const { return m_Blocks; }
+  void Construct(const rdcarray<rdcpair<uint32_t, uint32_t>> &links);
   rdcarray<uint32_t> GetUniformBlocks() const { return m_UniformBlocks; }
   rdcarray<uint32_t> GetLoopBlocks() const { return m_LoopBlocks; }
-  rdcarray<uint32_t> GetDivergentBlocks() const { return m_DivergentBlocks; }
-  rdcarray<ConvergentBlockData> GetConvergentBlocks() const { return m_ConvergentBlocks; }
-  rdcarray<PartialConvergentBlockData> GetPartialConvergentBlocks() const
-  {
-    return m_PartialConvergentBlocks;
-  }
   uint32_t GetNextUniformBlock(uint32_t from) const;
-  bool IsConnected(uint32_t from, uint32_t to) const;
+  bool IsForwardConnection(uint32_t from, uint32_t to) const;
 
 private:
   typedef rdcarray<uint32_t> BlockPath;
@@ -61,41 +51,23 @@ private:
     Connected,
   };
 
-  struct Node
-  {
-    uint32_t blockId;
-    uint32_t idx;
-    rdcarray<Node *> parents;
-    rdcarray<Node *> children;
-  };
+  bool TraceBlockFlow(const uint32_t from, BlockPath &path);
+  bool BlockInAllPaths(uint32_t block, uint32_t pathIdx, int32_t startIdx) const;
+  int32_t BlockInAnyPath(uint32_t block, uint32_t pathIdx, int32_t startIdx, int32_t steps) const;
+  bool ControlFlow::IsBlockConnected(uint32_t from, uint32_t to) const;
 
-  const Node *GetNode(const uint32_t blockId) const
-  {
-    return m_Nodes.data() + m_BlockIDsToIDx[blockId];
-  }
-
-  bool BlockInAllPaths(uint32_t from, uint32_t to) const;
-  bool BlockInMultiplePaths(uint32_t from, uint32_t to) const;
-  int32_t BlockInAnyPath(uint32_t from, uint32_t to) const;
-
-  bool AnyPath(uint32_t from, uint32_t to) const;
-  bool AllPathsContainBlock(uint32_t from, uint32_t to, uint32_t mustInclude) const;
-
-  uint32_t PATH_END = ~0U;
-
-  rdcarray<Node> m_Nodes;
-  rdcarray<uint32_t> m_BlockIDsToIDx;
-  mutable rdcarray<uint8_t> m_TracedNodes;
+  const uint32_t PATH_END = ~0U;
 
   std::unordered_set<uint32_t> m_Blocks;
+  rdcarray<BlockPath> m_BlockLinks;
+
+  rdcarray<rdcarray<uint32_t>> m_BlockPathLinks;
+  mutable rdcarray<bool> m_TracedBlocks;
+  mutable rdcarray<bool> m_CheckedPaths;
+  rdcarray<BlockPath> m_Paths;
 
   rdcarray<uint32_t> m_UniformBlocks;
   rdcarray<uint32_t> m_LoopBlocks;
-  rdcarray<uint32_t> m_DivergentBlocks;
-  rdcarray<ConvergentBlockData> m_ConvergentBlocks;
-  rdcarray<PartialConvergentBlockData> m_PartialConvergentBlocks;
   mutable rdcarray<rdcarray<ConnectionState>> m_Connections;
-
-  friend rdcstr GenerateGraph(const char *const name, const ControlFlow *graph);
 };
 };    // namespace DXIL

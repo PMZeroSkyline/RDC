@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -2392,7 +2392,7 @@ void TextureViewer::OpenResourceContextMenu(ResourceId id, bool input,
       m_Ctx.GetResourceInspector()->Inspect(id);
     });
 
-    CombineUsageEvents(m_Ctx, usage, false,
+    CombineUsageEvents(m_Ctx, usage,
                        [this, &contextMenu](uint32_t start, uint32_t end, ResourceUsage use) {
                          AddResourceUsageEntry(contextMenu, start, end, use);
                        });
@@ -2754,27 +2754,26 @@ void TextureViewer::render_keyPress(QKeyEvent *e)
 
   bool nudged = false;
 
-  uint32_t mipx = MipCoordFromBase(m_PickedPoint.x(), texptr->width);
-  uint32_t mipy = MipCoordFromBase(m_PickedPoint.y(), texptr->height);
+  int increment = 1 << (int)m_TexDisplay.subresource.mip;
 
   if(e->key() == Qt::Key_Up && m_PickedPoint.y() > 0)
   {
-    m_PickedPoint.setY(BaseCoordFromMip(mipy - 1, texptr->height));
+    m_PickedPoint -= QPoint(0, increment);
     nudged = true;
   }
   else if(e->key() == Qt::Key_Down && m_PickedPoint.y() < (int)texptr->height - 1)
   {
-    m_PickedPoint.setY(BaseCoordFromMip(mipy + 1, texptr->height));
+    m_PickedPoint += QPoint(0, increment);
     nudged = true;
   }
   else if(e->key() == Qt::Key_Left && m_PickedPoint.x() > 0)
   {
-    m_PickedPoint.setX(BaseCoordFromMip(mipx - 1, texptr->width));
+    m_PickedPoint -= QPoint(increment, 0);
     nudged = true;
   }
   else if(e->key() == Qt::Key_Right && m_PickedPoint.x() < (int)texptr->width - 1)
   {
-    m_PickedPoint.setX(BaseCoordFromMip(mipx + 1, texptr->width));
+    m_PickedPoint += QPoint(increment, 0);
     nudged = true;
   }
 
@@ -3295,14 +3294,15 @@ void TextureViewer::OnEventChanged(uint32_t eventId)
 
         // if the last range is contiguous with this access, append this access as a new range to query
         if(!ranges.empty() && ranges.back().descriptorSize == update.access.byteSize &&
-           ranges.back().offset + ranges.back().descriptorSize == update.access.byteOffset &&
-           ranges.back().type == update.access.type)
+           ranges.back().offset + ranges.back().descriptorSize == update.access.byteOffset)
         {
           ranges.back().count++;
           continue;
         }
 
-        DescriptorRange range = update.access;
+        DescriptorRange range;
+        range.offset = update.access.byteOffset;
+        range.descriptorSize = update.access.byteSize;
         ranges.push_back(range);
       }
 
@@ -3520,9 +3520,7 @@ void TextureViewer::on_zoomOption_currentIndexChanged(int index)
 
 void TextureViewer::zoomOption_returnPressed()
 {
-  ui->fitToWindow->setChecked(false);
-  float zoom = GetZoomLevel();
-  UI_SetScale(zoom);
+  UI_SetScale(GetZoomLevel());
 }
 
 void TextureViewer::on_overlay_currentIndexChanged(int index)
@@ -4145,7 +4143,7 @@ void TextureViewer::on_debugPixelContext_clicked()
   if(!trace)
   {
     if(m_Ctx.APIProps().pixelHistory)
-      ShowPixelHistory(true);
+      on_pixelHistory_clicked();
     else
       RDDialog::critical(this, tr("Debug Error"), tr("Error debugging pixel."));
     return;
@@ -4162,11 +4160,6 @@ void TextureViewer::on_debugPixelContext_clicked()
 }
 
 void TextureViewer::on_pixelHistory_clicked()
-{
-  ShowPixelHistory(false);
-}
-
-void TextureViewer::ShowPixelHistory(bool failedDebug)
 {
   TextureDescription *texptr = GetCurrentTexture();
 
@@ -4185,9 +4178,6 @@ void TextureViewer::ShowPixelHistory(bool failedDebug)
 
   uint32_t view = m_TexDisplay.subresource.slice - m_Following.GetFirstArraySlice(m_Ctx);
   IPixelHistoryView *hist = m_Ctx.ViewPixelHistory(texptr->resourceId, x, y, view, m_TexDisplay);
-
-  if(failedDebug)
-    hist->SetFailedDebug();
 
   m_Ctx.AddDockWindow(hist->Widget(), DockReference::TransientPopupArea, this, 0.3f);
 

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -61,12 +61,12 @@ static ShaderConstantType MakeShaderConstantType(bool cbufferPacking, DXBC::CBuf
      type.varClass == DXBC::CLASS_SCALAR)
     ret.flags |= ShaderVariableFlags::RowMajorMatrix;
 
-  uint32_t baseElemSize = VarTypeByteSize(ret.baseType);
+  uint32_t baseElemSize = (ret.baseType == VarType::Double) ? 8 : 4;
 
   // in D3D matrices in cbuffers always take up a float4 per row/column. Structured buffers in
   // SRVs/UAVs are tightly packed
   if(cbufferPacking)
-    ret.matrixByteStride = AlignUp16(uint8_t(baseElemSize * 4));
+    ret.matrixByteStride = uint8_t(baseElemSize * 4);
   else
     ret.matrixByteStride = uint8_t(baseElemSize * (ret.RowMajor() ? ret.columns : ret.rows));
 
@@ -404,7 +404,6 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, const ShaderEntryPoint &ent
   refl->inputSignature = dxbcRefl->InputSig;
   refl->outputSignature = dxbcRefl->OutputSig;
 
-  dxbc->CacheOutputTopology();
   switch(dxbc->GetOutputTopology())
   {
     case D3D_PRIMITIVE_TOPOLOGY_POINTLIST: refl->outputTopology = Topology::PointList; break;

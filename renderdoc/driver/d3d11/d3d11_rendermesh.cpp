@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2018-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -60,11 +60,7 @@ void D3D11Replay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secon
 
   D3D11RenderStateTracker tracker(m_pImmediateContext);
 
-  float nearPlane = cfg.cam ? ((Camera *)cfg.cam)->GetNear() : 0.1f;
-  float farPlane = cfg.cam ? ((Camera *)cfg.cam)->GetFar() : 100000.0f;
-
-  Matrix4f projMat =
-      Matrix4f::Perspective(90.0f, nearPlane, farPlane, m_OutputWidth / m_OutputHeight);
+  Matrix4f projMat = Matrix4f::Perspective(90.0f, 0.1f, 100000.0f, m_OutputWidth / m_OutputHeight);
 
   Matrix4f camMat = cfg.cam ? ((Camera *)cfg.cam)->GetMatrix() : Matrix4f::Identity();
 
@@ -286,7 +282,7 @@ void D3D11Replay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secon
     if(cfg.visualisationMode != Visualisation::NoSolid &&
        cfg.position.topology < Topology::PatchList_1CPs)
     {
-      m_pImmediateContext->RSSetState(m_General.RasterClipState);
+      m_pImmediateContext->RSSetState(m_General.RasterState);
 
       m_pImmediateContext->IASetPrimitiveTopology(topo);
 
@@ -330,7 +326,7 @@ void D3D11Replay::RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secon
 
       pixelData.MeshDisplayFormat = MESHDISPLAY_SOLID;
       pixelData.MeshColour =
-          Vec4f(cfg.position.meshColor.x, cfg.position.meshColor.y, cfg.position.meshColor.z, 0.0f);
+          Vec4f(cfg.position.meshColor.x, cfg.position.meshColor.y, cfg.position.meshColor.z);
       GetDebugManager()->FillCBuffer(psCBuf, &pixelData, sizeof(pixelData));
       m_pImmediateContext->PSSetConstantBuffers(0, 1, &psCBuf);
 

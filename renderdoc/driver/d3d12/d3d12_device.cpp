@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -192,37 +192,6 @@ HRESULT STDMETHODCALLTYPE WrappedDownlevelDevice::QueryVideoMemoryInfo(
   return m_pDevice.QueryVideoMemoryInfo(NodeIndex, MemorySegmentGroup, pVideoMemoryInfo);
 }
 
-HRESULT STDMETHODCALLTYPE WrappedDeviceTools::QueryInterface(REFIID riid, void **ppvObject)
-{
-  return m_pDevice.QueryInterface(riid, ppvObject);
-}
-
-ULONG STDMETHODCALLTYPE WrappedDeviceTools::AddRef()
-{
-  return m_pDevice.AddRef();
-}
-
-ULONG STDMETHODCALLTYPE WrappedDeviceTools::Release()
-{
-  return m_pDevice.Release();
-}
-
-void STDMETHODCALLTYPE WrappedDeviceTools::SetNextAllocationAddress(UINT64 pVirtualAddress)
-{
-  return m_pDevice.SetNextAllocationAddress(pVirtualAddress);
-}
-HRESULT STDMETHODCALLTYPE
-WrappedDeviceTools::GetApplicationSpecificDriverState(_COM_Outptr_ ID3DBlob **ppBlob)
-{
-  return m_pDevice.GetApplicationSpecificDriverState(ppBlob);
-}
-
-D3D12_APPLICATION_SPECIFIC_DRIVER_BLOB_STATUS STDMETHODCALLTYPE
-WrappedDeviceTools::GetApplicationSpecificDriverBlobStatus(void)
-{
-  return m_pDevice.GetApplicationSpecificDriverBlobStatus();
-}
-
 HRESULT STDMETHODCALLTYPE WrappedID3D12SharingContract::QueryInterface(REFIID riid, void **ppvObject)
 {
   return m_pDevice.QueryInterface(riid, ppvObject);
@@ -301,29 +270,25 @@ void STDMETHODCALLTYPE WrappedID3D12SharingContract::Present(_In_ ID3D12Resource
 
   m_pDevice.Present(NULL, this, 0, 0);
 
-  if(m_pReal != NULL)
-    m_pReal->Present(Unwrap(pResource), Subresource, window);
+  m_pReal->Present(Unwrap(pResource), Subresource, window);
 }
 
 void STDMETHODCALLTYPE WrappedID3D12SharingContract::SharedFenceSignal(_In_ ID3D12Fence *pFence,
                                                                        UINT64 FenceValue)
 {
-  if(m_pReal != NULL)
-    m_pReal->SharedFenceSignal(Unwrap(pFence), FenceValue);
+  m_pReal->SharedFenceSignal(Unwrap(pFence), FenceValue);
 }
 
 void STDMETHODCALLTYPE WrappedID3D12SharingContract::BeginCapturableWork(_In_ REFGUID guid)
 {
   // undocumented what this does
-  if(m_pReal != NULL)
-    m_pReal->BeginCapturableWork(guid);
+  m_pReal->BeginCapturableWork(guid);
 }
 
 void STDMETHODCALLTYPE WrappedID3D12SharingContract::EndCapturableWork(_In_ REFGUID guid)
 {
   // undocumented what this does
-  if(m_pReal != NULL)
-    m_pReal->EndCapturableWork(guid);
+  m_pReal->EndCapturableWork(guid);
 }
 
 HRESULT STDMETHODCALLTYPE WrappedDRED::QueryInterface(REFIID riid, void **ppvObject)
@@ -560,7 +525,6 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
       m_pDevice(realDevice),
       m_debugLayerEnabled(enabledDebugLayer),
       m_WrappedDownlevel(*this),
-      m_WrappedDeviceTools(*this),
       m_DRED(*this),
       m_DREDSettings(*this),
       m_SharingContract(*this),
@@ -629,8 +593,6 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
     m_pDevice->QueryInterface(__uuidof(ID3D12DeviceRemovedExtendedDataSettings2),
                               (void **)&m_DREDSettings.m_pReal2);
     m_pDevice->QueryInterface(__uuidof(ID3D12DeviceDownlevel), (void **)&m_pDownlevel);
-    m_pDevice->QueryInterface(__uuidof(ID3D12DeviceTools), (void **)&m_pDeviceTools);
-    m_pDevice->QueryInterface(__uuidof(ID3D12DeviceTools1), (void **)&m_pDeviceTools1);
     m_pDevice->QueryInterface(__uuidof(ID3D12CompatibilityDevice), (void **)&m_CompatDevice.m_pReal);
     m_pDevice->QueryInterface(__uuidof(ID3D12SharingContract), (void **)&m_SharingContract.m_pReal);
 
@@ -640,19 +602,14 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
 
     HRESULT hr = S_OK;
 
-    m_RootSigVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
-    for(D3D_ROOT_SIGNATURE_VERSION verToCheck :
-        {D3D_ROOT_SIGNATURE_VERSION_1_2, D3D_ROOT_SIGNATURE_VERSION_1_1,
-         D3D_ROOT_SIGNATURE_VERSION_1_0})
     {
-      D3D12_FEATURE_DATA_ROOT_SIGNATURE rootSigVer = {verToCheck};
+      D3D12_FEATURE_DATA_ROOT_SIGNATURE rootSigVer;
       hr = m_pDevice->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &rootSigVer,
                                           sizeof(rootSigVer));
-      if(hr == S_OK)
-      {
-        m_RootSigVersion = rootSigVer.HighestVersion;
-        break;
-      }
+      if(hr != S_OK)
+        rootSigVer.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+
+      m_RootSigVersion = rootSigVer.HighestVersion;
     }
 
     hr = m_pDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &m_D3D12Opts,
@@ -809,6 +766,7 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
 
   m_ResourceManager = new D3D12ResourceManager(m_State, this);
 
+  // create a temporary and grab its resource ID
   m_ResourceID = ResourceIDGen::GetNewUniqueID();
 
   m_DeviceRecord = NULL;
@@ -984,8 +942,6 @@ WrappedID3D12Device::~WrappedID3D12Device()
   SAFE_RELEASE(m_CompatDevice.m_pReal);
   SAFE_RELEASE(m_SharingContract.m_pReal);
   SAFE_RELEASE(m_pDownlevel);
-  SAFE_RELEASE(m_pDeviceTools);
-  SAFE_RELEASE(m_pDeviceTools1);
   SAFE_RELEASE(m_pDevice14);
   SAFE_RELEASE(m_pDevice13);
   SAFE_RELEASE(m_pDevice12);
@@ -1369,32 +1325,6 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
       return E_NOINTERFACE;
     }
   }
-  else if(riid == __uuidof(ID3D12DeviceTools))
-  {
-    if(m_pDeviceTools)
-    {
-      *ppvObject = &m_WrappedDeviceTools;
-      AddRef();
-      return S_OK;
-    }
-    else
-    {
-      return E_NOINTERFACE;
-    }
-  }
-  else if(riid == __uuidof(ID3D12DeviceTools1))
-  {
-    if(m_pDeviceTools1)
-    {
-      *ppvObject = &m_WrappedDeviceTools;
-      AddRef();
-      return S_OK;
-    }
-    else
-    {
-      return E_NOINTERFACE;
-    }
-  }
   else if(riid == __uuidof(ID3D12InfoQueue))
   {
     RDCWARN(
@@ -1691,33 +1621,6 @@ ID3D12Resource *WrappedID3D12Device::GetUploadBuffer(uint64_t chunkOffset, uint6
   return buf;
 }
 
-ID3D12RootSignature *WrappedID3D12Device::CreateImplicitRootSig(
-    D3D12_SERIALIZED_ROOT_SIGNATURE_DESC &RootSigBlob)
-{
-  rdcfixedarray<uint32_t, 4> hash;
-  DXBC::DXBCContainer::GetHash(hash, false, RootSigBlob.pSerializedBlob,
-                               RootSigBlob.SerializedBlobSizeInBytes);
-
-  ID3D12RootSignature *cacheEntry = m_ImplicitRootSigs[hash];
-
-  // if we've already cached this root sig, return it! check for collisions by not trusting th
-  if(cacheEntry)
-    return cacheEntry;
-
-  // otherwise create it
-  HRESULT hr =
-      CreateRootSignature(0, RootSigBlob.pSerializedBlob, RootSigBlob.SerializedBlobSizeInBytes,
-                          __uuidof(ID3D12RootSignature), (void **)&cacheEntry);
-  if(cacheEntry)
-    InternalRef();
-  if(FAILED(hr))
-    RDCERR("Failed to create implicit root signature from blob: %s", ToStr(hr).c_str());
-
-  m_ImplicitRootSigs[hash] = cacheEntry;
-
-  return NULL;
-}
-
 void WrappedID3D12Device::ApplyInitialContents()
 {
   RENDERDOC_PROFILEFUNCTION();
@@ -1798,9 +1701,6 @@ void WrappedID3D12Device::ReleaseSwapchainResources(IDXGISwapper *swapper, UINT 
                                                     IUnknown *const *ppPresentQueue,
                                                     IUnknown **unwrappedQueues)
 {
-  if(m_LastSwap == swapper)
-    m_LastSwap = NULL;
-
   if(ppPresentQueue)
   {
     for(UINT i = 0; i < QueueCount; i++)
@@ -1850,9 +1750,7 @@ bool WrappedID3D12Device::Serialise_WrapSwapchainBuffer(SerialiserType &ser, IDX
                                                         DXGI_FORMAT bufferFormat, UINT Buffer,
                                                         IUnknown *realSurface)
 {
-  WrappedID3D12Resource *pRes =
-      (WrappedID3D12Resource *)(WrappedDeviceChild12<ID3D12Resource, ID3D12Resource1, ID3D12Resource2> *)
-          realSurface;
+  WrappedID3D12Resource *pRes = (WrappedID3D12Resource *)realSurface;
 
   SERIALISE_ELEMENT(Buffer);
   SERIALISE_ELEMENT_LOCAL(SwapbufferID, GetResID(pRes)).TypedAs("ID3D12Resource *"_lit);
@@ -1893,10 +1791,12 @@ bool WrappedID3D12Device::Serialise_WrapSwapchainBuffer(SerialiserType &ser, IDX
     }
     else
     {
-      WrappedID3D12Resource *wrapped = new WrappedID3D12Resource(SwapbufferID, fakeBB, NULL, 0, this);
+      WrappedID3D12Resource *wrapped = new WrappedID3D12Resource(fakeBB, NULL, 0, this);
       fakeBB = wrapped;
 
       fakeBB->SetName(L"Swap Chain Buffer");
+
+      GetResourceManager()->AddLiveResource(SwapbufferID, fakeBB);
 
       m_BackbufferFormat[wrapped->GetResourceID()] = SwapbufferFormat;
 
@@ -1933,7 +1833,7 @@ IUnknown *WrappedID3D12Device::WrapSwapchainBuffer(IDXGISwapper *swapper, DXGI_F
   }
   else
   {
-    pRes = new WrappedID3D12Resource(ResourceId(), (ID3D12Resource *)realSurface, NULL, 0, this);
+    pRes = new WrappedID3D12Resource((ID3D12Resource *)realSurface, NULL, 0, this);
 
     ResourceId id = GetResID(pRes);
 
@@ -1967,6 +1867,12 @@ IUnknown *WrappedID3D12Device::WrapSwapchainBuffer(IDXGISwapper *swapper, DXGI_F
         states = {D3D12ResourceLayout::FromStates(D3D12_RESOURCE_STATE_PRESENT)};
       }
     }
+    else
+    {
+      WrappedID3D12Resource *wrapped = (WrappedID3D12Resource *)pRes;
+
+      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
+    }
   }
 
   if(IsCaptureMode(m_State))
@@ -1985,13 +1891,9 @@ IUnknown *WrappedID3D12Device::WrapSwapchainBuffer(IDXGISwapper *swapper, DXGI_F
     FreeRTV(m_SwapChains[swapper].rtvs[buffer]);
     m_SwapChains[swapper].rtvs[buffer] = rtv;
 
-    ID3DDevice *swapDev = swapper->GetD3DDevice();
-    if(WrappedID3D12CommandQueue::IsAlloc(swapDev))
-      m_SwapChains[swapper].queue = (WrappedID3D12CommandQueue *)swapDev;
-    else if(swapDev == this)
-      m_SwapChains[swapper].queue = m_Queue;
-    else
-      RDCERR("Unexpected swapper D3D device");
+    ID3DDevice *swapQ = swapper->GetD3DDevice();
+    RDCASSERT(WrappedID3D12CommandQueue::IsAlloc(swapQ));
+    m_SwapChains[swapper].queue = (WrappedID3D12CommandQueue *)swapQ;
   }
 
   return pRes;
@@ -2108,11 +2010,11 @@ bool WrappedID3D12Device::Serialise_MapDataWrite(SerialiserType &ser, ID3D12Reso
   // it.
   bool gpuUpload = false;
 
-  ResourceId id;
+  ResourceId origid;
   if(IsReplayingAndReading() && Resource)
   {
-    id = GetResID(Resource);
-    if(m_UploadResourceIds.find(id) != m_UploadResourceIds.end())
+    origid = GetResourceManager()->GetOriginalID(GetResID(Resource));
+    if(m_UploadResourceIds.find(origid) != m_UploadResourceIds.end())
       gpuUpload = true;
   }
 
@@ -2230,7 +2132,7 @@ bool WrappedID3D12Device::Serialise_MapDataWrite(SerialiserType &ser, ID3D12Reso
 
         SetObjName(uploadBuf,
                    StringFormat::Fmt("Map data write, %llu bytes for %s/%u @ %llu", rangeSize,
-                                     ToStr(id).c_str(), Subresource, cmd.m_CurChunkOffset));
+                                     ToStr(origid).c_str(), Subresource, cmd.m_CurChunkOffset));
 
         D3D12_RANGE maprange = {0, 0};
         void *dst = NULL;
@@ -2337,12 +2239,10 @@ bool WrappedID3D12Device::Serialise_WriteToSubresource(SerialiserType &ser, ID3D
     }
     else
     {
-      UINT width = RDCMAX(1U, UINT(desc.Width) >> Subresource);
-      UINT height = RDCMAX(1U, desc.Height >> Subresource);
+      UINT width = UINT(desc.Width);
+      UINT height = desc.Height;
       // only 3D textures have a depth, array slices are separate subresources.
-      UINT depth = (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
-                        ? RDCMAX(1U, UINT(desc.DepthOrArraySize) >> Subresource)
-                        : 1);
+      UINT depth = (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? desc.DepthOrArraySize : 1);
 
       // if we have a box, use its dimensions
       if(pDstBox)
@@ -2387,8 +2287,8 @@ bool WrappedID3D12Device::Serialise_WriteToSubresource(SerialiserType &ser, ID3D
     if(IsLoading(m_State))
       cmd.AddCPUUsage(GetResID(Resource), ResourceUsage::CPUWrite);
 
-    ResourceId id = GetResID(Resource);
-    if(m_UploadResourceIds.find(id) != m_UploadResourceIds.end())
+    ResourceId origid = GetResourceManager()->GetOriginalID(GetResID(Resource));
+    if(m_UploadResourceIds.find(origid) != m_UploadResourceIds.end())
     {
       ID3D12Resource *uploadBuf = GetUploadBuffer(cmd.m_CurChunkOffset, dataSize);
 
@@ -2938,18 +2838,12 @@ bool WrappedID3D12Device::EndFrameCapture(DeviceOwnedWindow devWnd)
 
   rdcarray<WrappedID3D12CommandQueue *> queues;
 
-  rdcarray<ID3D12Resource *> refBuffers;
-  rdcarray<WrappedID3D12CommandQueue *> refQueues;
-
   // transition back to IDLE and readback initial states atomically
   {
     SCOPED_WRITELOCK(m_CapTransitionLock);
     EndCaptureFrame();
 
     queues = m_Queues;
-
-    refBuffers.swap(m_RefBuffers);
-    refQueues.swap(m_RefQueues);
 
     bool ContainsExecuteIndirect = false;
 
@@ -3281,10 +3175,10 @@ bool WrappedID3D12Device::EndFrameCapture(DeviceOwnedWindow devWnd)
     (*it)->ClearAfterCapture();
 
   // remove the references held during capture, potentially releasing the queue/buffer.
-  for(WrappedID3D12CommandQueue *q : refQueues)
+  for(WrappedID3D12CommandQueue *q : m_RefQueues)
     q->Release();
 
-  for(ID3D12Resource *r : refBuffers)
+  for(ID3D12Resource *r : m_RefBuffers)
     r->Release();
 
   for(ID3D12Heap *h : m_InitialStateHeaps)
@@ -3324,13 +3218,6 @@ bool WrappedID3D12Device::DiscardFrameCapture(DeviceOwnedWindow devWnd)
     DeviceWaitForIdle();
 
     queues = m_Queues;
-
-    // remove the reference held during capture, potentially releasing the queue.
-    for(WrappedID3D12CommandQueue *q : m_RefQueues)
-      q->Release();
-
-    for(ID3D12Resource *r : m_RefBuffers)
-      r->Release();
   }
 
   rdcarray<MapState> maps = GetMaps();
@@ -3342,6 +3229,13 @@ bool WrappedID3D12Device::DiscardFrameCapture(DeviceOwnedWindow devWnd)
 
   for(auto it = queues.begin(); it != queues.end(); ++it)
     (*it)->ClearAfterCapture();
+
+  // remove the reference held during capture, potentially releasing the queue.
+  for(WrappedID3D12CommandQueue *q : m_RefQueues)
+    q->Release();
+
+  for(ID3D12Resource *r : m_RefBuffers)
+    r->Release();
 
   for(ID3D12Heap *h : m_InitialStateHeaps)
     h->Release();
@@ -3369,9 +3263,9 @@ void WrappedID3D12Device::UploadBLASBufferAddresses()
   for(GPUAddressRange addressRange : m_OrigGPUAddresses.GetAddresses())
   {
     ResourceId resId = addressRange.id;
-    if(resManager->HasResource(resId))
+    if(resManager->HasLiveResource(resId))
     {
-      WrappedID3D12Resource *wrappedRes = (WrappedID3D12Resource *)resManager->GetResource(resId);
+      WrappedID3D12Resource *wrappedRes = (WrappedID3D12Resource *)resManager->GetLiveResource(resId);
       {
         BlasAddressPair addressPair;
         addressPair.oldAddress.start = addressRange.start;
@@ -3508,6 +3402,15 @@ void WrappedID3D12Device::ReleaseResource(ID3D12DeviceChild *res)
 
   if(record)
     record->Delete(GetResourceManager());
+
+  // wrapped resources get released all the time, we don't want to
+  // try and slerp in a resource release. Just the explicit ones
+  if(IsReplayMode(m_State))
+  {
+    if(GetResourceManager()->HasLiveResource(id))
+      GetResourceManager()->EraseLiveResource(id);
+    return;
+  }
 }
 
 HRESULT WrappedID3D12Device::CreatePipeState(D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC &desc,
@@ -3523,7 +3426,7 @@ HRESULT WrappedID3D12Device::CreatePipeState(D3D12_EXPANDED_PIPELINE_STATE_STREA
   if(desc.CS.BytecodeLength > 0)
   {
     D3D12_COMPUTE_PIPELINE_STATE_DESC compDesc;
-    compDesc.pRootSignature = desc.GetOrCreateRootSig(this);
+    compDesc.pRootSignature = desc.pRootSignature;
     compDesc.CS = desc.CS;
     compDesc.NodeMask = desc.NodeMask;
     compDesc.CachedPSO = desc.CachedPSO;
@@ -3533,7 +3436,7 @@ HRESULT WrappedID3D12Device::CreatePipeState(D3D12_EXPANDED_PIPELINE_STATE_STREA
   else
   {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsDesc;
-    graphicsDesc.pRootSignature = desc.GetOrCreateRootSig(this);
+    graphicsDesc.pRootSignature = desc.pRootSignature;
     graphicsDesc.VS = desc.VS;
     graphicsDesc.PS = desc.PS;
     graphicsDesc.DS = desc.DS;
@@ -3822,7 +3725,7 @@ void WrappedID3D12Device::DumpDRED(D3D12_AUTO_BREADCRUMB_NODE *node,
     ID3D12CommandList *cmd =
         (ID3D12CommandList *)GetResourceManager()->GetWrapper(node->pCommandList);
     if(cmd)
-      cmdName = ToStr(GetResID(cmd));
+      cmdName = ToStr(GetResourceManager()->GetOriginalID(GetResID(cmd)));
   }
 
   if(node->pCommandQueueDebugNameA)
@@ -3835,7 +3738,7 @@ void WrappedID3D12Device::DumpDRED(D3D12_AUTO_BREADCRUMB_NODE *node,
     ID3D12CommandQueue *q =
         (ID3D12CommandQueue *)GetResourceManager()->GetWrapper(node->pCommandList);
     if(q)
-      qName = ToStr(GetResID(q));
+      qName = ToStr(GetResourceManager()->GetOriginalID(GetResID(q)));
   }
 
   uint32_t lastExecuted = *node->pLastBreadcrumbValue;
@@ -4000,9 +3903,9 @@ bool WrappedID3D12Device::Serialise_SetName(SerialiserType &ser, ID3D12DeviceChi
 
   if(IsReplayingAndReading() && pResource)
   {
-    ResourceId id = GetResID(pResource);
+    ResourceId origId = GetResourceManager()->GetOriginalID(GetResID(pResource));
 
-    ResourceDescription &descr = GetReplay()->GetResourceDesc(id);
+    ResourceDescription &descr = GetReplay()->GetResourceDesc(origId);
     if(Name && Name[0])
     {
       descr.SetCustomName(Name);
@@ -4079,14 +3982,18 @@ bool WrappedID3D12Device::Serialise_CreateAS(SerialiserType &ser, ID3D12Resource
   {
     WrappedID3D12Resource *asbWrappedResource = (WrappedID3D12Resource *)pResource;
     D3D12AccelerationStructure *accStructAtOffset = NULL;
-    if(asbWrappedResource->CreateAccStruct(asId, resourceOffset, type, byteSize, &accStructAtOffset))
+    if(asbWrappedResource->CreateAccStruct(resourceOffset, type, byteSize, ResourceId(),
+                                           &accStructAtOffset))
     {
+      GetResourceManager()->AddLiveResource(asId, accStructAtOffset);
+
       if(D3D12_Debug_RT_Auditing())
       {
         RDCLOG("Creating %s AS %s at %s + %llu (%llu bytes): %llx remapped to %llx",
                type == D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL ? "blas" : "tlas",
-               ToStr(asId).c_str(), ToStr(GetResID(pResource)).c_str(), resourceOffset, byteSize,
-               asbWrappedResource->GetOriginalVA() + resourceOffset,
+               ToStr(asId).c_str(),
+               ToStr(GetResourceManager()->GetOriginalID(GetResID(pResource))).c_str(),
+               resourceOffset, byteSize, asbWrappedResource->GetOriginalVA() + resourceOffset,
                accStructAtOffset->GetVirtualAddress());
 
         RDCASSERTEQUAL(accStructAtOffset->GetVirtualAddress(),
@@ -4461,10 +4368,10 @@ void QueueReadbackData::Resize(uint64_t size)
   if(readbackSize >= size && size != 0)
     return;
 
-  if(unwrappedReadbackBuf)
+  if(readbackBuf)
   {
-    unwrappedReadbackBuf->Unmap(0, NULL);
-    SAFE_RELEASE(unwrappedReadbackBuf);
+    Unwrap(readbackBuf)->Unmap(0, NULL);
+    SAFE_RELEASE(readbackBuf);
     readbackMapped = NULL;
   }
 
@@ -4495,12 +4402,11 @@ void QueueReadbackData::Resize(uint64_t size)
   heapProps.CreationNodeMask = 1;
   heapProps.VisibleNodeMask = 1;
 
-  // create this unwrapped to avoid intercepting the map during capture or having locking issues
-  // when creating this resource
-  device->GetReal()->CreateCommittedResource(
-      &heapProps, D3D12_HEAP_FLAG_NONE, &readbackDesc, D3D12_RESOURCE_STATE_COPY_DEST, NULL,
-      __uuidof(ID3D12Resource), (void **)&unwrappedReadbackBuf);
-  unwrappedReadbackBuf->Map(0, NULL, (void **)&readbackMapped);
+  device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+                                  D3D12_RESOURCE_STATE_COPY_DEST, NULL, __uuidof(ID3D12Resource),
+                                  (void **)&readbackBuf);
+  // don't intercept the map
+  Unwrap(readbackBuf)->Map(0, NULL, (void **)&readbackMapped);
 }
 
 void WrappedID3D12Device::CreateInternalResources()
@@ -4767,6 +4673,7 @@ ID3D12GraphicsCommandListX *WrappedID3D12Device::GetNewList()
 
     if(IsReplayMode(m_State))
     {
+      GetResourceManager()->AddLiveResource(GetResID(ret), ret);
       // add a reference here so that when we release our internal resources on destruction we don't
       // free this too soon before the resource manager can. We still want to have it tracked as a
       // resource in the manager though.
@@ -5169,7 +5076,7 @@ void WrappedID3D12Device::DerivedResource(ID3D12DeviceChild *parent, ResourceId 
   if(!parent)
     return;
 
-  ResourceId parentId = GetResID(parent);
+  ResourceId parentId = GetResourceManager()->GetOriginalID(GetResID(parent));
 
   DerivedResource(parentId, child);
 }
@@ -5340,7 +5247,7 @@ RDResult WrappedID3D12Device::ReadLogInitialisation(RDCFile *rdc, bool storeStru
 
       if(IsStructuredExporting(m_State))
       {
-        m_Queue = new WrappedID3D12CommandQueue(ResourceId(), NULL, this, m_State);
+        m_Queue = new WrappedID3D12CommandQueue(NULL, this, m_State);
         m_Queues.push_back(m_Queue);
       }
 
@@ -5685,7 +5592,6 @@ void WrappedID3D12Device::ReplayDraw(ID3D12GraphicsCommandListX *cmd, const Acti
     // TODO: support replay of draws not in callback
     D3D12CommandData *cmdData = m_Queue->GetCommandData();
     RDCASSERT(cmdData->m_IndirectData.commandSig != NULL);
-    RDCASSERT(cmdData->m_IndirectData.argsBuffer != NULL);
     cmd->ExecuteIndirect(cmdData->m_IndirectData.commandSig, 1, cmdData->m_IndirectData.argsBuffer,
                          cmdData->m_IndirectData.argsOffset, NULL, 0);
   }

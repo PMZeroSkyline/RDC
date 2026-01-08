@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2015-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -525,7 +525,7 @@ void GetFilesInDirectory(const rdcstr &path, rdcarray<PathEntry> &ret)
 
     PathProperty flags = PathProperty::ErrorUnknown;
 
-    if(err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+    if(err == ERROR_FILE_NOT_FOUND)
       flags = PathProperty::ErrorInvalidPath;
     else if(err == ERROR_ACCESS_DENIED)
       flags = PathProperty::ErrorAccessDenied;
@@ -999,96 +999,5 @@ uint64_t GetMachineIdent()
 #endif
 
   return ret;
-}
-
-bool loaded = false;
-HMODULE version = NULL;
-
-using PFN_GetFileVersionInfoSizeW = decltype(&GetFileVersionInfoSizeW);
-using PFN_GetFileVersionInfoW = decltype(&GetFileVersionInfoW);
-using PFN_VerQueryValueA = decltype(&VerQueryValueA);
-
-PFN_GetFileVersionInfoSizeW getSize = NULL;
-PFN_GetFileVersionInfoW getData = NULL;
-PFN_VerQueryValueA queryValue = NULL;
-
-void Load()
-{
-  if(loaded)
-    return;
-  loaded = true;
-
-  version = LoadLibraryA("version.dll");
-  if(version)
-  {
-    getSize = (PFN_GetFileVersionInfoSizeW)GetProcAddress(version, "GetFileVersionInfoSizeW");
-    getData = (PFN_GetFileVersionInfoW)GetProcAddress(version, "GetFileVersionInfoW");
-    queryValue = (PFN_VerQueryValueA)GetProcAddress(version, "VerQueryValueA");
-
-    if(!getSize || !getData || !queryValue)
-    {
-      RDCWARN("Couldn't get version API");
-    }
-  }
-  else
-  {
-    RDCWARN("Couldn't load version.dll");
-  }
-}
-
-DLLFileVersion GetDLLVersion(const rdcstr &path)
-{
-  DLLFileVersion ret = {};
-
-  Load();
-
-  if(!version)
-    return {};
-
-  rdcwstr wpath = StringFormat::UTF82Wide(path);
-  DWORD bytesNeeded = getSize(wpath.c_str(), NULL);
-
-  if(bytesNeeded > 0 && bytesNeeded < 1024 * 1024)
-  {
-    bytebuf blockData;
-    blockData.resize(bytesNeeded);
-
-    VS_FIXEDFILEINFO *verInfo = NULL;
-    UINT size = 0;
-    if(getData(wpath.c_str(), 0, bytesNeeded, blockData.data()) &&
-       queryValue(blockData.data(), "\\", (void **)&verInfo, &size))
-    {
-      if(size > 0 && verInfo && verInfo->dwSignature == 0xFEEF04BD)
-      {
-        ret = {verInfo->dwFileVersionMS >> 16, verInfo->dwFileVersionMS & 0xffff,
-               verInfo->dwFileVersionLS >> 16, verInfo->dwFileVersionLS & 0xffff};
-      }
-      else
-      {
-        RDCWARN("Version data for '%s' invalid: %u %p %u", path.c_str(), size, verInfo,
-                verInfo ? verInfo->dwSignature : 0);
-      }
-    }
-    else
-    {
-      RDCWARN("Couldn't get version data for '%s'", path.c_str());
-    }
-  }
-  else
-  {
-    RDCWARN("Bytes needed for '%s': %u", path.c_str(), bytesNeeded);
-  }
-
-  return ret;
-}
-
-DLLFileVersion GetDLLVersion(HMODULE mod)
-{
-  wchar_t curFile[512] = {0};
-  GetModuleFileNameW(mod, curFile, 511);
-
-  rdcstr path = StringFormat::Wide2UTF8(curFile);
-
-  return GetDLLVersion(path);
 }
 };

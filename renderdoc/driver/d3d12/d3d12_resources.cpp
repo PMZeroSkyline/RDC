@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2016-2026 Baldur Karlsson
+ * Copyright (c) 2019-2024 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -142,10 +142,10 @@ ID3D12DeviceChild *Unwrap(ID3D12DeviceChild *ptr)
 WRAPPED_POOL_INST(D3D12AccelerationStructure);
 
 D3D12AccelerationStructure::D3D12AccelerationStructure(
-    ResourceId id, WrappedID3D12Device *wrappedDevice, WrappedID3D12Resource *bufferRes,
+    WrappedID3D12Device *wrappedDevice, ResourceId id, WrappedID3D12Resource *bufferRes,
     D3D12BufferOffset bufferOffset, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE type,
     UINT64 byteSize)
-    : WrappedDeviceChild12(id, NULL, wrappedDevice),
+    : WrappedDeviceChild12(NULL, wrappedDevice, id),
       m_asbWrappedResource(bufferRes),
       m_asbWrappedResourceBufferOffset(bufferOffset),
       type(type),
@@ -159,40 +159,10 @@ D3D12AccelerationStructure::~D3D12AccelerationStructure()
   Shutdown();
 }
 
-WrappedID3D12Heap::WrappedID3D12Heap(ResourceId id, ID3D12Heap *real, WrappedID3D12Device *device)
-    : WrappedDeviceChild12(id, real, device)
-{
-  D3D12_HEAP_DESC desc = GetDesc();
-  if((desc.Flags & D3D12_HEAP_FLAG_DENY_BUFFERS) == 0)
-  {
-    D3D12_RESOURCE_DESC resDesc = {};
-    resDesc.Width = GetDesc().SizeInBytes;
-    resDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    resDesc.Height = 1;
-    resDesc.DepthOrArraySize = 1;
-    resDesc.MipLevels = 1;
-    resDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    resDesc.SampleDesc.Count = 1;
-
-    if(desc.Flags & D3D12_HEAP_FLAG_SHARED_CROSS_ADAPTER)
-      resDesc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER;
-
-    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
-    if(desc.Properties.Type == D3D12_HEAP_TYPE_UPLOAD)
-      state = D3D12_RESOURCE_STATE_GENERIC_READ;
-    else if(desc.Properties.Type == D3D12_HEAP_TYPE_READBACK)
-      state = D3D12_RESOURCE_STATE_COPY_DEST;
-
-    HRESULT hr = device->GetReal()->CreatePlacedResource(
-        real, 0, &resDesc, state, NULL, __uuidof(ID3D12Resource), (void **)&m_WholeMem);
-
-    RDCASSERT(SUCCEEDED(hr));
-  }
-}
-
-bool WrappedID3D12Resource::CreateAccStruct(ResourceId id, D3D12BufferOffset bufferOffset,
+bool WrappedID3D12Resource::CreateAccStruct(D3D12BufferOffset bufferOffset,
                                             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE type,
-                                            UINT64 byteSize, D3D12AccelerationStructure **accStruct)
+                                            UINT64 byteSize, ResourceId id,
+                                            D3D12AccelerationStructure **accStruct)
 {
   SCOPED_LOCK(m_accStructResourcesCS);
   auto existing = m_accelerationStructMap.find(bufferOffset);
@@ -204,7 +174,7 @@ bool WrappedID3D12Resource::CreateAccStruct(ResourceId id, D3D12BufferOffset buf
   }
 
   m_accelerationStructMap[bufferOffset] =
-      new D3D12AccelerationStructure(id, m_pDevice, this, bufferOffset, type, byteSize);
+      new D3D12AccelerationStructure(m_pDevice, id, this, bufferOffset, type, byteSize);
 
   *accStruct = m_accelerationStructMap[bufferOffset];
 
@@ -216,7 +186,6 @@ bool WrappedID3D12Resource::CreateAccStruct(ResourceId id, D3D12BufferOffset buf
 
 WrappedID3D12Resource::~WrappedID3D12Resource()
 {
-  SAFE_RELEASE(m_Pageable);
   SAFE_RELEASE(m_Heap);
 
   // perform an implicit unmap on release
@@ -245,8 +214,6 @@ WrappedID3D12Resource::~WrappedID3D12Resource()
     for(auto it = m_accelerationStructMap.begin(); it != m_accelerationStructMap.end(); ++it)
       SAFE_RELEASE(it->second);
   }
-
-  m_pDevice->GetResourceManager()->RemovePlacedResource(GetResourceID());
 
   if(IsReplayMode(m_pDevice->GetState()))
     m_pDevice->RemoveReplayResource(GetResourceID());
@@ -487,7 +454,7 @@ void WrappedID3D12Resource::GetMappableIDs(D3D12ResourceManager *rm,
   {
     if(refdIDs.find(id) != refdIDs.end())
     {
-      WrappedID3D12Resource *resource = (WrappedID3D12Resource *)rm->GetResource(id);
+      WrappedID3D12Resource *resource = (WrappedID3D12Resource *)rm->GetCurrentResource(id);
       mappableIDs.insert(resource->GetMappableID());
     }
   }
@@ -501,7 +468,7 @@ rdcarray<ID3D12Resource *> WrappedID3D12Resource::AddRefBuffersBeforeCapture(D3D
 
   for(size_t i = 0; i < addresses.size(); i++)
   {
-    ID3D12Resource *resource = (ID3D12Resource *)rm->GetResource(addresses[i].id);
+    ID3D12Resource *resource = (ID3D12Resource *)rm->GetCurrentResource(addresses[i].id);
     if(resource)
     {
       resource->AddRef();
@@ -570,11 +537,11 @@ void WrappedID3D12DescriptorHeap::SetToDescriptorCache(uint32_t index, const Des
   cachedDescriptors[index] = view;
 }
 
-WrappedID3D12DescriptorHeap::WrappedID3D12DescriptorHeap(ResourceId id, ID3D12DescriptorHeap *real,
+WrappedID3D12DescriptorHeap::WrappedID3D12DescriptorHeap(ID3D12DescriptorHeap *real,
                                                          WrappedID3D12Device *device,
                                                          const D3D12_DESCRIPTOR_HEAP_DESC &desc,
                                                          UINT UnpatchedNumDescriptors)
-    : WrappedDeviceChild12(id, real, device)
+    : WrappedDeviceChild12(real, device)
 {
   realCPUBase = real->GetCPUDescriptorHandleForHeapStart();
   if(desc.Flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE)
@@ -701,14 +668,9 @@ void WrappedID3D12PipelineState::FetchRootSig(D3D12ShaderCache *shaderCache)
 {
   if(compute)
   {
-    if(compute->GetRootSigBlob().SerializedBlobSizeInBytes > 0)
+    if(compute->pRootSignature)
     {
-      usedSig = DecodeRootSig(compute->GetRootSigBlob().pSerializedBlob,
-                              compute->GetRootSigBlob().SerializedBlobSizeInBytes);
-    }
-    else if(compute->GetRootSigIfPresent())
-    {
-      usedSig = ((WrappedID3D12RootSignature *)compute->GetRootSigIfPresent())->sig;
+      usedSig = ((WrappedID3D12RootSignature *)compute->pRootSignature)->sig;
     }
     else
     {
@@ -725,14 +687,9 @@ void WrappedID3D12PipelineState::FetchRootSig(D3D12ShaderCache *shaderCache)
   }
   else if(graphics)
   {
-    if(graphics->GetRootSigBlob().SerializedBlobSizeInBytes > 0)
+    if(graphics->pRootSignature)
     {
-      usedSig = DecodeRootSig(graphics->GetRootSigBlob().pSerializedBlob,
-                              graphics->GetRootSigBlob().SerializedBlobSizeInBytes);
-    }
-    else if(graphics->GetRootSigIfPresent())
-    {
-      usedSig = ((WrappedID3D12RootSignature *)graphics->GetRootSigIfPresent())->sig;
+      usedSig = ((WrappedID3D12RootSignature *)graphics->pRootSignature)->sig;
     }
     else
     {
@@ -871,7 +828,7 @@ void WrappedID3D12PipelineState::ProcessDescriptorAccess()
 }
 
 D3D12ShaderExportDatabase::D3D12ShaderExportDatabase(ResourceId id, D3D12RTManager *rayManager)
-    : RefCounter12(NULL), objectId(id), m_RayManager(rayManager)
+    : RefCounter12(NULL), objectOriginalId(id), m_RayManager(rayManager)
 {
   m_RayManager->RegisterExportDatabase(this);
 }
@@ -890,7 +847,7 @@ void D3D12ShaderExportDatabase::PopulateDatabase(size_t NumSubobjects,
                                                  const D3D12_STATE_SUBOBJECT *subobjects)
 {
   // store the default local root signature - if we only find one in the whole state object then it becomes default
-  uint32_t defaultRoot = ~0U;
+  ID3D12RootSignature *defaultRoot = NULL;
   bool unassocDefaultValid = false;
   bool explicitDefault = false;
   bool unassocDXILDefaultValid = false;
@@ -1060,25 +1017,8 @@ void D3D12ShaderExportDatabase::PopulateDatabase(size_t NumSubobjects,
       if(!explicitDefault)
       {
         // if multiple root signatures are defined, then there can't be an unspecified default
-        unassocDefaultValid = (defaultRoot == ~0U);
-        WrappedID3D12RootSignature *wrappedRoot =
-            (WrappedID3D12RootSignature *)((D3D12_LOCAL_ROOT_SIGNATURE *)subobjects[i].pDesc)
-                ->pLocalRootSignature;
-
-        defaultRoot = wrappedRoot->localRootSigIdx;
-      }
-    }
-    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_SERIALIZED_ROOT_SIGNATURE)
-    {
-      // ignore these if an explicit default association has been made
-      if(!explicitDefault)
-      {
-        // if multiple root signatures are defined, then there can't be an unspecified default
-        unassocDefaultValid = (defaultRoot == ~0U);
-        D3D12_SERIALIZED_ROOT_SIGNATURE_DESC &RootDesc =
-            ((D3D12_LOCAL_SERIALIZED_ROOT_SIGNATURE *)subobjects[i].pDesc)->Desc;
-        defaultRoot = m_RayManager->RegisterLocalRootSig(
-            DecodeRootSig(RootDesc.pSerializedBlob, RootDesc.SerializedBlobSizeInBytes));
+        unassocDefaultValid = defaultRoot == NULL;
+        defaultRoot = ((D3D12_LOCAL_ROOT_SIGNATURE *)subobjects[i].pDesc)->pLocalRootSignature;
       }
     }
     else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION)
@@ -1089,40 +1029,26 @@ void D3D12ShaderExportDatabase::PopulateDatabase(size_t NumSubobjects,
       const D3D12_STATE_SUBOBJECT *other = assoc->pSubobjectToAssociate;
 
       // only care about associating local root signatures
-      if(other->Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE ||
-         other->Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_SERIALIZED_ROOT_SIGNATURE)
+      if(other->Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE)
       {
-        uint32_t localRSIdx = ~0U;
+        ID3D12RootSignature *root = ((D3D12_LOCAL_ROOT_SIGNATURE *)other->pDesc)->pLocalRootSignature;
 
-        if(other->Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE)
-        {
-          ID3D12RootSignature *root =
-              ((D3D12_LOCAL_ROOT_SIGNATURE *)other->pDesc)->pLocalRootSignature;
-
-          WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)root;
-          localRSIdx = wrappedRoot->localRootSigIdx;
-        }
-        else if(other->Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_SERIALIZED_ROOT_SIGNATURE)
-        {
-          D3D12_SERIALIZED_ROOT_SIGNATURE_DESC &RootDesc =
-              ((D3D12_LOCAL_SERIALIZED_ROOT_SIGNATURE *)other->pDesc)->Desc;
-          localRSIdx = m_RayManager->RegisterLocalRootSig(
-              DecodeRootSig(RootDesc.pSerializedBlob, RootDesc.SerializedBlobSizeInBytes));
-        }
+        WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)root;
 
         // if there are no exports this is an explicit default association. We assume this
         // matches and doesn't conflict
         if(assoc->NumExports == NULL)
         {
           explicitDefault = true;
-          defaultRoot = localRSIdx;
+          defaultRoot = root;
         }
         else
         {
           // otherwise record the explicit associations - these may refer to exports that
           // haven't been seen yet so we record them locally
           for(UINT e = 0; e < assoc->NumExports; e++)
-            explicitRootSigAssocs.push_back({StringFormat::Wide2UTF8(assoc->pExports[e]), localRSIdx});
+            explicitRootSigAssocs.push_back(
+                {StringFormat::Wide2UTF8(assoc->pExports[e]), wrappedRoot->localRootSigIdx});
         }
       }
     }
@@ -1163,12 +1089,16 @@ void D3D12ShaderExportDatabase::PopulateDatabase(size_t NumSubobjects,
 
   if(explicitDefault)
   {
-    ApplyDefaultRoot(SubObjectPriority::CodeExplicitDefault, defaultRoot);
+    WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)defaultRoot;
+
+    ApplyDefaultRoot(SubObjectPriority::CodeExplicitDefault, wrappedRoot->localRootSigIdx);
   }
   // shouldn't be possible to have both explicit and implicit defaults?
   else if(unassocDefaultValid)
   {
-    ApplyDefaultRoot(SubObjectPriority::CodeImplicitDefault, defaultRoot);
+    WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)defaultRoot;
+
+    ApplyDefaultRoot(SubObjectPriority::CodeImplicitDefault, wrappedRoot->localRootSigIdx);
   }
 
   for(size_t i = 0; i < explicitDxilAssocs.size(); i++)
@@ -1257,7 +1187,7 @@ void D3D12ShaderExportDatabase::AddExport(const rdcstr &exportName)
   {
     // store the wrapped identifier here in this database, ready to return to the application in
     // this object or any child objects.
-    wrappedIdentifiers.push_back({objectId, (uint32_t)ownExports.size()});
+    wrappedIdentifiers.push_back({objectOriginalId, (uint32_t)ownExports.size()});
 
     // store the unwrapping information to go into the giant lookup table
     ownExports.push_back({});
@@ -1327,7 +1257,7 @@ void D3D12ShaderExportDatabase::InheritExport(const rdcstr &exportName,
     ownExports.push_back({});
 
     // we expect this identifier to have come from the object we're inheriting
-    RDCASSERTEQUAL(wrappedIdentifiers.back().id, existing->objectId);
+    RDCASSERTEQUAL(wrappedIdentifiers.back().id, existing->objectOriginalId);
     // which means we can copy any root signature it had associated even if it wasn't complete
     ownExports.back() = existing->ownExports[wrappedIdentifiers.back().index];
 
@@ -1336,7 +1266,7 @@ void D3D12ShaderExportDatabase::InheritExport(const rdcstr &exportName,
       memcpy(ownExports.back().real, identifier, sizeof(ShaderIdentifier));
 
     // and re-point this to point to ourselves when queried as we have the best data for it.
-    wrappedIdentifiers.back() = {objectId, (uint32_t)ownExports.size() - 1};
+    wrappedIdentifiers.back() = {objectOriginalId, (uint32_t)ownExports.size() - 1};
 
     // if this is an incomplete hitgroup, also grab the hitgroup component data
     if(exportLookups.back().hitgroup)
@@ -1369,7 +1299,7 @@ void D3D12ShaderExportDatabase::ApplyRoot(SubObjectPriority priority, const rdcs
 void D3D12ShaderExportDatabase::ApplyRoot(const ShaderIdentifier &identifier,
                                           SubObjectPriority priority, uint32_t localRootSigIndex)
 {
-  if(identifier.id == objectId)
+  if(identifier.id == objectOriginalId)
   {
     // set this anywhere we have a looser/lower priority association already (including the most
     // common case presumably where one isn't set at all)
@@ -1400,7 +1330,7 @@ void D3D12ShaderExportDatabase::UpdateHitGroupAssociations()
       {
         // if the export is our own (ie. not complete and finished in a parent), we might need to
         // update its root sig
-        if(wrappedIdentifiers[e].id == objectId)
+        if(wrappedIdentifiers[e].id == objectOriginalId)
         {
           // if the hit group got a code association already we assume it must match, but a DXIL
           // association or a default association could be overridden since it's unclear if a
@@ -1415,7 +1345,7 @@ void D3D12ShaderExportDatabase::UpdateHitGroupAssociations()
               {
                 if(shaderExport == exportLookups[e2].name || shaderExport == exportLookups[e2].altName)
                 {
-                  RDCASSERTEQUAL(wrappedIdentifiers[e2].id, objectId);
+                  RDCASSERTEQUAL(wrappedIdentifiers[e2].id, objectOriginalId);
                   uint32_t idx = wrappedIdentifiers[e2].index;
                   ApplyRoot(wrappedIdentifiers[e], ownExports[idx].rootSigPrio,
                             ownExports[idx].localRootSigIndex);
