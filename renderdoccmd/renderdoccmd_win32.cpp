@@ -712,7 +712,7 @@ public:
     wchar_t rdocpath[1024];
 
     // fetch path to our matching renderdoc.dll
-    HMODULE rdoc = GetModuleHandleA("renderdoc.dll");
+    HMODULE rdoc = GetModuleHandleA("rdd.dll");
 
     if(rdoc == NULL)
     {
@@ -804,7 +804,7 @@ int main(int, char *)
     argv[i] = conv(std::wstring(wargv[i]));
 
   if(argv.empty())
-    argv.push_back("renderdoccmd");
+    argv.push_back("rddcmd");
 
   LocalFree(wargv);
 
@@ -821,7 +821,7 @@ int main(int, char *)
   wc.hCursor = LoadCursor(NULL, IDC_ARROW);
   wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
   wc.lpszMenuName = NULL;
-  wc.lpszClassName = L"renderdoccmd";
+  wc.lpszClassName = L"rddcmd";
   wc.hIconSm = LoadIcon(NULL, MAKEINTRESOURCE(IDI_ICON));
 
   if(!RegisterClassEx(&wc))

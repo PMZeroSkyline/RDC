@@ -1487,7 +1487,7 @@ RDResult Process::StartGlobalHook(const rdcstr &pathmatch, const rdcstr &capture
   renderdocPath = get_dirname(renderdocPath);
 
   // the native renderdoccmd.exe is always next to the dll. Wow32 will be somewhere else
-  rdcstr cmdpathNative = renderdocPath + "\\renderdoccmd.exe";
+  rdcstr cmdpathNative = renderdocPath + "\\rddcmd.exe";
   rdcstr cmdpathWow32;
 
   rdcstr shimpathNative = renderdocPath;
@@ -1496,7 +1496,7 @@ RDResult Process::StartGlobalHook(const rdcstr &pathmatch, const rdcstr &capture
 #if ENABLED(RDOC_X64)
 
   // native shim is just renderdocshim64.dll
-  shimpathNative = renderdocPath + "\\renderdocshim64.dll";
+  shimpathNative = renderdocPath + "\\rddsm64.dll";
 
   // if it looks like we're in the development environment, look for the alternate bitness in the
   // corresponding folder
@@ -1505,8 +1505,8 @@ RDResult Process::StartGlobalHook(const rdcstr &pathmatch, const rdcstr &capture
   {
     renderdocPath.erase(devLocation, ~0U);
 
-    shimpathWow32 = renderdocPath + "\\Win32\\Development\\renderdocshim32.dll";
-    cmdpathWow32 = renderdocPath + "\\Win32\\Development\\renderdoccmd.exe";
+    shimpathWow32 = renderdocPath + "\\Win32\\Development\\rddsm32.dll";
+    cmdpathWow32 = renderdocPath + "\\Win32\\Development\\rddcmd.exe";
   }
   else
   {
@@ -1516,22 +1516,22 @@ RDResult Process::StartGlobalHook(const rdcstr &pathmatch, const rdcstr &capture
     {
       renderdocPath.erase(devLocation, ~0U);
 
-      shimpathWow32 = renderdocPath + "\\Win32\\Release\\renderdocshim32.dll";
-      cmdpathWow32 = renderdocPath + "\\Win32\\Release\\renderdoccmd.exe";
+      shimpathWow32 = renderdocPath + "\\Win32\\Release\\rddsm32.dll";
+      cmdpathWow32 = renderdocPath + "\\Win32\\Release\\rddcmd.exe";
     }
   }
 
   // if we're not in the dev environment, assume it's under a x86\ subfolder
   if(devLocation < 0)
   {
-    shimpathWow32 = renderdocPath + "\\x86\\renderdocshim32.dll";
-    cmdpathWow32 = renderdocPath + "\\x86\\renderdoccmd.exe";
+    shimpathWow32 = renderdocPath + "\\x86\\rddsm32.dll";
+    cmdpathWow32 = renderdocPath + "\\x86\\rddcmd.exe";
   }
 
 #else
 
   // nothing fancy to do here for 32-bit, just point the shim next to our dll.
-  shimpathNative = renderdocPath + "\\renderdocshim32.dll";
+  shimpathNative = renderdocPath + "\\rddsm32.dll";
 
 #endif
 
